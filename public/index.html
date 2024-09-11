@@ -141,6 +141,50 @@
                 alert('请粘贴或输入一条有效的消息');
             }
         }
+        function addUser() {
+            const newUserName = document.getElementById('newUserName').value.trim();
+            if (newUserName && !users[newUserName]) {
+                users[newUserName] = { data: generateData(), originalData: [], totalCount: 0 }; // 创建新用户的初始数据
+                currentUser = newUserName;
+                renderUserList();
+                switchUser(newUserName); // 切换到新用户
+                saveUserData(); // 保存数据
+                document.getElementById('newUserName').value = ''; // 清空输入框
+            } else if (users[newUserName]) {
+                alert('该用户名已存在');
+            } else {
+                alert('请输入有效的用户名');
+            }
+        }
+        function handleSummary() {
+            const summaryData = generateData(); // 初始化汇总数据
+            let allOriginalData = []; // 存储所有用户的原始输入数据
+            let totalSummaryValue = 0; // 汇总的总值
+            isSummaryMode = true;
+
+            // 遍历所有用户并累计每个号码的值，同时收集原始输入数据
+            Object.entries(users).forEach(([userName, user]) => {
+                user.data.forEach((item, index) => {
+                    summaryData[index].value += item.value;
+                });
+                totalSummaryValue += user.totalCount || 0;  // 汇总所有用户的总值
+
+                // 收集所有用户的原始输入数据
+                user.originalData.forEach((data, idx) => {
+                    allOriginalData.push(`${userName} 的原始数据 ${idx + 1}: ${data}`);
+                });
+            });
+
+            // 更新汇总标题，显示总汇总值
+            document.getElementById('sortedResultsTitle').textContent = `所有用户累计值排序 (总值: ${totalSummaryValue})：`;
+
+            renderSummary(summaryData);  // 渲染汇总区域
+            renderSortedSummary(summaryData);  // 渲染汇总排序结果
+            renderAllOriginalData(allOriginalData);  // 显示所有用户的原始输入数据
+            saveUserData();  // 保存汇总状态
+        }
+
+
 
         function renderUserList() {
             const userListElement = document.getElementById('userList');
@@ -179,6 +223,22 @@
             updateTitles();
         }
 
+        function updateTitles() {
+            const sortedResultsTitle = document.getElementById('sortedResultsTitle');
+            const originalDataTitle = document.getElementById('originalDataTitle');
+
+            if (isSummaryMode) {
+                sortedResultsTitle.textContent = '所有用户累计值排序：';
+                originalDataTitle.textContent = '所有用户原始输入数据：';
+            } else if (currentUser) {
+                sortedResultsTitle.textContent = `${currentUser} 累计值排序 (总值: ${users[currentUser].totalCount || 0})：`;
+                originalDataTitle.textContent = `${currentUser} 原始输入数据：`;
+            } else {
+                sortedResultsTitle.textContent = '没有选择用户';
+                originalDataTitle.textContent = '没有原始输入数据';
+            }
+        }
+
         function previewMessage() {
             const message = document.getElementById('message').value.trim(); // 获取输入的消息内容
             if (!message) {
@@ -186,28 +246,20 @@
                 return;
             }
 
-            // 正则表达式：匹配数字和 '各' 后的数值，同时匹配多种分隔符（空格、逗号、句号、顿号、破折号等）
-            const regex = /(\d+)[\s,.\-、]*?(各)?\s*(\d+)?/g;
+            // 更新正则表达式，支持 "各" 或 "各号" 的情况
+            const regex = /([\d\s\-—,，.。、]+)各(号)?(\d+)[米]?/g;
+            let resultText = '';
             let match;
-            const result = [];
-            let currentCount = 1; // 默认每个数字计数为1，若有 "各" 后面数值，则更新
 
             while ((match = regex.exec(message)) !== null) {
-                const number = match[1]; // 提取到的数字
-                const hasGe = match[2]; // 是否有 "各"
-                const geValue = match[3]; // 提取到 "各" 后的值
-
-                if (hasGe && geValue) {
-                    currentCount = parseInt(geValue, 10); // 更新 "各" 后的数值
-                }
-
-                result.push({ number, count: currentCount });
+                const numbers = match[1].trim().split(/[\s\-—,，.。、]+/).filter(Boolean); // 提取所有数字并去掉空值
+                const value = match[3]; // 提取 "各" 或 "号" 后面的值
+                resultText += `${numbers.join(' ')} 值：${value}\n`; // 将数字和值按格式拼接
             }
 
-            // 显示识别结果
-            let resultText = result.map(item => `${item.number} 各 ${item.count}`).join('\n');
-            document.getElementById('result').textContent = resultText;
+            document.getElementById('result').textContent = resultText || '无法解析消息，请检查输入格式';
         }
+
 
         function confirmMessage() {
             const message = document.getElementById('message').value.trim();
@@ -216,27 +268,21 @@
                 return;
             }
 
-            // 正则表达式：匹配数字和 '各' 后的数值
-            const regex = /(\d+)[\s,.\-、]*?(各)?\s*(\d+)?/g;
+            // 更新正则表达式，支持 "各" 或 "各号" 的情况
+            const regex = /([\d\s\-—,，.。、]+)各(号)?(\d+)[米]?/g;
             let match;
-            const result = [];
-            let currentCount = 1; // 默认每个数字计数为1
 
             while ((match = regex.exec(message)) !== null) {
-                const number = match[1]; // 提取到的数字
-                const hasGe = match[2]; // 是否有 "各"
-                const geValue = match[3]; // 提取到 "各" 后的值
+                const numbers = match[1].trim().split(/[\s\-—,，.。、]+/).filter(Boolean); // 提取所有数字并去掉空值
+                const value = parseInt(match[3], 10); // 提取 "各" 或 "号" 后面的值
 
-                if (hasGe && geValue) {
-                    currentCount = parseInt(geValue, 10); // 更新 "各" 后的数值
-                }
-
-                // 更新用户的对应数据
                 if (currentUser && users[currentUser]) {
-                    const item = users[currentUser].data.find(i => i.number === number.padStart(2, '0'));
-                    if (item) {
-                        item.value += currentCount; // 累加数值
-                    }
+                    numbers.forEach(number => {
+                        const item = users[currentUser].data.find(i => i.number === number.padStart(2, '0'));
+                        if (item) {
+                            item.value += value; // 累加数值
+                        }
+                    });
                 }
             }
 
@@ -245,6 +291,8 @@
             renderOriginalData();
             saveUserData();
             closeModal();
+            updateTitles(); // 添加这一行
+
         }
 
 
@@ -309,7 +357,6 @@
                 saveUserData(); // 保存删除操作
             }
         }
-
         function openModal(modalType) {
             const modal = document.getElementById("myModal");
             const modalTitle = document.getElementById('modalTitle');
@@ -318,12 +365,72 @@
             if (modalType === 'recognize') {
                 modalTitle.textContent = "粘贴消息进行识别";
                 modalContent.innerHTML = `
-                    <textarea id="message" rows="4" cols="50" placeholder="输入消息，例如: 14.21.13.39.38.30.26.18.33～各20"></textarea>
-                    <button onclick="confirmMessage()">确认</button>
-                `;
+            <textarea id="message" rows="4" cols="50" placeholder="输入消息，例如: 14.21.13.39.38.30.26.18.33～各20"></textarea>
+            <button onclick="previewMessage()">识别</button>
+            <pre id="result"></pre> <!-- 确保此元素存在 -->
+        `;
             }
             modal.style.display = "block";
         }
+
+        function confirmEdit() {
+            const resultText = document.getElementById('result').textContent.trim();
+
+            if (currentUser && resultText) {
+                // 将识别出的数字与对应的值更新到当前用户的数据中
+                const resultLines = resultText.split('\n');
+                // 保存识别到的原始消息
+                users[currentUser].originalData.push(resultText);
+
+                resultLines.forEach(line => {
+                    // 先匹配所有的数字和对应的值
+                    const match = line.match(/((\d+)[\s.,\-]*)+值[:：]\s*(\d+)/);
+
+                    if (match) {
+                        const allNumbers = match[0].match(/\d+/g);  // 提取出所有的数字
+                        const value = parseInt(match[match.length - 1], 10);  // 获取 "值: " 后的数值
+
+                        if (!isNaN(value)) {
+                            allNumbers.forEach(number => {
+                                // 查找当前用户的数据并更新
+                                const item = users[currentUser].data.find(i => i.number === number.padStart(2, '0'));
+                                if (item) {
+                                    // 累加相应数字的值
+                                    item.value += value;
+                                } else {
+                                    console.warn(`未找到匹配的号码: ${number}`);
+                                }
+                            });
+                        }
+                    }
+                });
+
+                // 重新计算当前用户的总值 (totalCount)
+                let totalCount = 0;
+                users[currentUser].data.forEach(item => {
+                    totalCount += item.value;
+                });
+                users[currentUser].totalCount = totalCount; // 更新用户总值
+
+                // 更新用户显示
+                renderSortedResults();
+                renderOriginalData();
+                updateTitles();
+                saveUserData();
+
+
+                // 确保保存了正确的用户数据
+                console.log("更新后的用户总值:", users[currentUser].totalCount);
+                console.log("保存后的用户数据:", users[currentUser]);
+
+                // 关闭模态框
+                closeModal();
+            } else {
+                alert('无法更新数据，请确保当前有选中的用户或识别结果有效');
+            }
+        }
+
+
 
         function closeModal() {
             document.getElementById("myModal").style.display = "none";
