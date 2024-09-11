@@ -1,0 +1,253 @@
+body {
+    font-family: 'Roboto', 'Noto Sans', sans-serif;
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    background-color: #e2edef;
+    color: #333333;
+}
+
+/* 顶部菜单栏 */
+.top-menu {
+    display: flex;
+    justify-content: space-between;
+    background-color: #2C3E50;
+    padding: 10px;
+}
+
+.top-menu button {
+    padding: 10px 20px;
+    font-size: 16px;
+    cursor: pointer;
+    border: 1px solid #ddd;
+    background-color: #2C3E50;
+    color: white;
+    border-radius: 8px;
+    transition: background-color 0.3s;
+}
+
+.top-menu button:hover {
+    background-color: #3498DB;
+}
+
+.top-menu button.selected {
+    background-color: #3498DB;
+    color: white;
+}
+
+/* 主内容区域布局，确保三个区域水平铺满屏幕 */
+.main-content {
+    display: flex;
+    height: calc(100vh - 60px);
+    width: 100%;
+    padding: 0;
+    margin: 0;
+    overflow-x: hidden;
+}
+
+/* 左侧用户列表 */
+.left-side {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 10px;
+    background-color: #E8F1F6;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+/* 用户列表输入框和按钮样式 */
+.user-list input {
+    padding: 10px 12px;
+    font-size: 14px;
+    border: 1px solid #3498DB;
+    border-radius: 8px;
+    margin-right: 10px;
+    margin-left: 10px;
+    transition: border-color 0.3s;
+    width: 60%; /* 宽度调整 */
+    box-sizing: border-box;
+}
+
+.user-list input:focus {
+    outline: none;
+    border-color: #2980B9;
+}
+
+.user-list button {
+    padding: 10px 14px;
+    font-size: 14px;
+    background-color: #3498DB;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background-color 0.3s, box-shadow 0.3s;
+    width: 30%; /* 宽度调整 */
+}
+
+.user-list button:hover {
+    background-color: #2980B9;
+    box-shadow: 0 4px 8px rgba(52, 152, 219, 0.3);
+}
+
+/* 用户列表和右侧排序中的cell使用相同的浅蓝色渐变背景 */
+.user-list ul li, .right-side li {
+    cursor: pointer;
+    padding: 10px;
+    margin-bottom: 8px;
+    background-image: linear-gradient(to right, rgba(52, 152, 219, 0.5), rgba(255, 255, 255, 0));
+    border: 1px solid #ddd;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-radius: 8px;
+    transition: background-color 0.3s, border-color 0.3s;
+    margin-left: 0px; /* 添加左边距 */
+    margin-right: 10px; /* 添加右边距 */
+}
+
+.user-list ul li:hover, .right-side li:hover {
+    background-color: #3498DB;
+    color: white;
+}
+
+.user-list ul li.selected {
+    border: 2px solid #3498DB;
+    color: #3498DB;
+}
+
+/* 删除按钮样式 */
+.user-list ul li button {
+    padding: 5px 10px;
+    font-size: 14px;
+    background-color: #e74c3c;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background-color 0.3s, box-shadow 0.3s;
+    margin-left: 10px; /* 删除按钮与用户名称保持一定间距 */
+}
+
+.user-list ul li button:hover {
+    background-color: #c0392b;
+    box-shadow: 0 4px 8px rgba(231, 76, 60, 0.3);
+}
+
+.original-data {
+    margin-top: 20px;
+}
+
+.original-data ul {
+    list-style-type: none;
+    padding: 0;
+}
+
+.original-data li {
+    padding: 10px;
+    border-bottom: 1px solid #ddd;
+    background-color: #fff;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    transition: background-color 0.3s;
+}
+
+.original-data li:hover {
+    background-color: #3498DB;
+    color: white;
+}
+
+/* 中间数据汇总展示区域 */
+.section {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 5px;
+    padding: 5px;
+    background-color: #E9F5E9;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 2px;
+    height: 12px;
+    background-color: #FFFFFF;
+    border-radius: 4px;
+    font-size: 10px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.item.highlight {
+    background-color: #A9D6A5;
+    color: white;
+}
+
+/* 右侧排序展示区域 */
+.right-side {
+    flex: 1;
+    background-color: #F5F5F5;
+    padding: 20px;
+    overflow-y: auto;
+    overflow-x: auto;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+/* 渐变背景色，所有cell使用浅蓝色渐变 */
+.right-side li {
+    list-style: none;
+    margin: 5px 0;
+    padding: 10px;
+    border-radius: 8px;
+    background-image: linear-gradient(to right, rgba(52, 152, 219, 0.5), rgba(255, 255, 255, 0));
+    text-align: center;
+    transition: background-color 0.3s ease;
+}
+
+.title {
+    font-weight: bold;
+    margin-bottom: 10px;
+    text-align: center;
+    font-size: 20px;
+}
+
+/* 模态框 */
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 1;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+}
+
+.modal-content {
+    background-color: #fff;
+    margin: 15% auto;
+    padding: 20px;
+    border-radius: 8px;
+    width: 50%;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.close {
+    color: #aaa;
+    float: right;
+    font-size: 28px;
+    font-weight: bold;
+}
+
+.close:hover,
+.close:focus {
+    color: black;
+    text-decoration: none;
+    cursor: pointer;
+}

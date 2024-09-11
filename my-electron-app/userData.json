@@ -1,0 +1,990 @@
+{
+  "是": [
+    {
+      "number": "01",
+      "text": "虎",
+      "value": 0
+    },
+    {
+      "number": "02",
+      "text": "兔",
+      "value": 0
+    },
+    {
+      "number": "03",
+      "text": "鼠",
+      "value": 0
+    },
+    {
+      "number": "04",
+      "text": "蛇",
+      "value": 0
+    },
+    {
+      "number": "05",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "06",
+      "text": "马",
+      "value": 0
+    },
+    {
+      "number": "07",
+      "text": "羊",
+      "value": 0
+    },
+    {
+      "number": "08",
+      "text": "猴",
+      "value": 0
+    },
+    {
+      "number": "09",
+      "text": "鸡",
+      "value": 0
+    },
+    {
+      "number": "10",
+      "text": "狗",
+      "value": 0
+    },
+    {
+      "number": "11",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "12",
+      "text": "龙",
+      "value": 0
+    },
+    {
+      "number": "13",
+      "text": "虎",
+      "value": 0
+    },
+    {
+      "number": "14",
+      "text": "兔",
+      "value": 0
+    },
+    {
+      "number": "15",
+      "text": "鼠",
+      "value": 0
+    },
+    {
+      "number": "16",
+      "text": "蛇",
+      "value": 0
+    },
+    {
+      "number": "17",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "18",
+      "text": "马",
+      "value": 0
+    },
+    {
+      "number": "19",
+      "text": "羊",
+      "value": 0
+    },
+    {
+      "number": "20",
+      "text": "猴",
+      "value": 0
+    },
+    {
+      "number": "21",
+      "text": "鸡",
+      "value": 0
+    },
+    {
+      "number": "22",
+      "text": "狗",
+      "value": 0
+    },
+    {
+      "number": "23",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "24",
+      "text": "龙",
+      "value": 0
+    },
+    {
+      "number": "25",
+      "text": "虎",
+      "value": 0
+    },
+    {
+      "number": "26",
+      "text": "兔",
+      "value": 0
+    },
+    {
+      "number": "27",
+      "text": "鼠",
+      "value": 0
+    },
+    {
+      "number": "28",
+      "text": "蛇",
+      "value": 0
+    },
+    {
+      "number": "29",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "30",
+      "text": "马",
+      "value": 0
+    },
+    {
+      "number": "31",
+      "text": "羊",
+      "value": 0
+    },
+    {
+      "number": "32",
+      "text": "猴",
+      "value": 0
+    },
+    {
+      "number": "33",
+      "text": "鸡",
+      "value": 0
+    },
+    {
+      "number": "34",
+      "text": "狗",
+      "value": 0
+    },
+    {
+      "number": "35",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "36",
+      "text": "龙",
+      "value": 0
+    },
+    {
+      "number": "37",
+      "text": "虎",
+      "value": 0
+    },
+    {
+      "number": "38",
+      "text": "兔",
+      "value": 0
+    },
+    {
+      "number": "39",
+      "text": "鼠",
+      "value": 0
+    },
+    {
+      "number": "40",
+      "text": "蛇",
+      "value": 0
+    },
+    {
+      "number": "41",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "42",
+      "text": "马",
+      "value": 0
+    },
+    {
+      "number": "43",
+      "text": "羊",
+      "value": 0
+    },
+    {
+      "number": "44",
+      "text": "猴",
+      "value": 0
+    },
+    {
+      "number": "45",
+      "text": "鸡",
+      "value": 0
+    },
+    {
+      "number": "46",
+      "text": "狗",
+      "value": 0
+    },
+    {
+      "number": "47",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "48",
+      "text": "龙",
+      "value": 0
+    },
+    {
+      "number": "49",
+      "text": "虎",
+      "value": 0
+    }
+  ],
+  "张三": [
+    {
+      "number": "01",
+      "text": "虎",
+      "value": 0
+    },
+    {
+      "number": "02",
+      "text": "兔",
+      "value": 0
+    },
+    {
+      "number": "03",
+      "text": "鼠",
+      "value": 0
+    },
+    {
+      "number": "04",
+      "text": "蛇",
+      "value": 0
+    },
+    {
+      "number": "05",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "06",
+      "text": "马",
+      "value": 0
+    },
+    {
+      "number": "07",
+      "text": "羊",
+      "value": 0
+    },
+    {
+      "number": "08",
+      "text": "猴",
+      "value": 0
+    },
+    {
+      "number": "09",
+      "text": "鸡",
+      "value": 0
+    },
+    {
+      "number": "10",
+      "text": "狗",
+      "value": 0
+    },
+    {
+      "number": "11",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "12",
+      "text": "龙",
+      "value": 0
+    },
+    {
+      "number": "13",
+      "text": "虎",
+      "value": 0
+    },
+    {
+      "number": "14",
+      "text": "兔",
+      "value": 0
+    },
+    {
+      "number": "15",
+      "text": "鼠",
+      "value": 0
+    },
+    {
+      "number": "16",
+      "text": "蛇",
+      "value": 0
+    },
+    {
+      "number": "17",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "18",
+      "text": "马",
+      "value": 0
+    },
+    {
+      "number": "19",
+      "text": "羊",
+      "value": 0
+    },
+    {
+      "number": "20",
+      "text": "猴",
+      "value": 0
+    },
+    {
+      "number": "21",
+      "text": "鸡",
+      "value": 0
+    },
+    {
+      "number": "22",
+      "text": "狗",
+      "value": 0
+    },
+    {
+      "number": "23",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "24",
+      "text": "龙",
+      "value": 0
+    },
+    {
+      "number": "25",
+      "text": "虎",
+      "value": 0
+    },
+    {
+      "number": "26",
+      "text": "兔",
+      "value": 0
+    },
+    {
+      "number": "27",
+      "text": "鼠",
+      "value": 0
+    },
+    {
+      "number": "28",
+      "text": "蛇",
+      "value": 0
+    },
+    {
+      "number": "29",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "30",
+      "text": "马",
+      "value": 0
+    },
+    {
+      "number": "31",
+      "text": "羊",
+      "value": 0
+    },
+    {
+      "number": "32",
+      "text": "猴",
+      "value": 0
+    },
+    {
+      "number": "33",
+      "text": "鸡",
+      "value": 0
+    },
+    {
+      "number": "34",
+      "text": "狗",
+      "value": 0
+    },
+    {
+      "number": "35",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "36",
+      "text": "龙",
+      "value": 0
+    },
+    {
+      "number": "37",
+      "text": "虎",
+      "value": 0
+    },
+    {
+      "number": "38",
+      "text": "兔",
+      "value": 0
+    },
+    {
+      "number": "39",
+      "text": "鼠",
+      "value": 0
+    },
+    {
+      "number": "40",
+      "text": "蛇",
+      "value": 0
+    },
+    {
+      "number": "41",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "42",
+      "text": "马",
+      "value": 0
+    },
+    {
+      "number": "43",
+      "text": "羊",
+      "value": 0
+    },
+    {
+      "number": "44",
+      "text": "猴",
+      "value": 0
+    },
+    {
+      "number": "45",
+      "text": "鸡",
+      "value": 0
+    },
+    {
+      "number": "46",
+      "text": "狗",
+      "value": 0
+    },
+    {
+      "number": "47",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "48",
+      "text": "龙",
+      "value": 0
+    },
+    {
+      "number": "49",
+      "text": "虎",
+      "value": 0
+    }
+  ],
+  "李四": [
+    {
+      "number": "01",
+      "text": "虎",
+      "value": 0
+    },
+    {
+      "number": "02",
+      "text": "兔",
+      "value": 0
+    },
+    {
+      "number": "03",
+      "text": "鼠",
+      "value": 0
+    },
+    {
+      "number": "04",
+      "text": "蛇",
+      "value": 0
+    },
+    {
+      "number": "05",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "06",
+      "text": "马",
+      "value": 0
+    },
+    {
+      "number": "07",
+      "text": "羊",
+      "value": 0
+    },
+    {
+      "number": "08",
+      "text": "猴",
+      "value": 0
+    },
+    {
+      "number": "09",
+      "text": "鸡",
+      "value": 0
+    },
+    {
+      "number": "10",
+      "text": "狗",
+      "value": 0
+    },
+    {
+      "number": "11",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "12",
+      "text": "龙",
+      "value": 0
+    },
+    {
+      "number": "13",
+      "text": "虎",
+      "value": 0
+    },
+    {
+      "number": "14",
+      "text": "兔",
+      "value": 0
+    },
+    {
+      "number": "15",
+      "text": "鼠",
+      "value": 0
+    },
+    {
+      "number": "16",
+      "text": "蛇",
+      "value": 0
+    },
+    {
+      "number": "17",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "18",
+      "text": "马",
+      "value": 0
+    },
+    {
+      "number": "19",
+      "text": "羊",
+      "value": 0
+    },
+    {
+      "number": "20",
+      "text": "猴",
+      "value": 0
+    },
+    {
+      "number": "21",
+      "text": "鸡",
+      "value": 0
+    },
+    {
+      "number": "22",
+      "text": "狗",
+      "value": 0
+    },
+    {
+      "number": "23",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "24",
+      "text": "龙",
+      "value": 0
+    },
+    {
+      "number": "25",
+      "text": "虎",
+      "value": 0
+    },
+    {
+      "number": "26",
+      "text": "兔",
+      "value": 0
+    },
+    {
+      "number": "27",
+      "text": "鼠",
+      "value": 0
+    },
+    {
+      "number": "28",
+      "text": "蛇",
+      "value": 0
+    },
+    {
+      "number": "29",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "30",
+      "text": "马",
+      "value": 0
+    },
+    {
+      "number": "31",
+      "text": "羊",
+      "value": 0
+    },
+    {
+      "number": "32",
+      "text": "猴",
+      "value": 0
+    },
+    {
+      "number": "33",
+      "text": "鸡",
+      "value": 0
+    },
+    {
+      "number": "34",
+      "text": "狗",
+      "value": 0
+    },
+    {
+      "number": "35",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "36",
+      "text": "龙",
+      "value": 0
+    },
+    {
+      "number": "37",
+      "text": "虎",
+      "value": 0
+    },
+    {
+      "number": "38",
+      "text": "兔",
+      "value": 0
+    },
+    {
+      "number": "39",
+      "text": "鼠",
+      "value": 0
+    },
+    {
+      "number": "40",
+      "text": "蛇",
+      "value": 0
+    },
+    {
+      "number": "41",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "42",
+      "text": "马",
+      "value": 0
+    },
+    {
+      "number": "43",
+      "text": "羊",
+      "value": 0
+    },
+    {
+      "number": "44",
+      "text": "猴",
+      "value": 0
+    },
+    {
+      "number": "45",
+      "text": "鸡",
+      "value": 0
+    },
+    {
+      "number": "46",
+      "text": "狗",
+      "value": 0
+    },
+    {
+      "number": "47",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "48",
+      "text": "龙",
+      "value": 0
+    },
+    {
+      "number": "49",
+      "text": "虎",
+      "value": 0
+    }
+  ],
+  "老王": [
+    {
+      "number": "01",
+      "text": "虎",
+      "value": 210
+    },
+    {
+      "number": "02",
+      "text": "兔",
+      "value": 80
+    },
+    {
+      "number": "03",
+      "text": "鼠",
+      "value": 130
+    },
+    {
+      "number": "04",
+      "text": "蛇",
+      "value": 150
+    },
+    {
+      "number": "05",
+      "text": "猪",
+      "value": 25
+    },
+    {
+      "number": "06",
+      "text": "马",
+      "value": 150
+    },
+    {
+      "number": "07",
+      "text": "羊",
+      "value": 75
+    },
+    {
+      "number": "08",
+      "text": "猴",
+      "value": 115
+    },
+    {
+      "number": "09",
+      "text": "鸡",
+      "value": 215
+    },
+    {
+      "number": "10",
+      "text": "狗",
+      "value": 140
+    },
+    {
+      "number": "11",
+      "text": "猪",
+      "value": 40
+    },
+    {
+      "number": "12",
+      "text": "龙",
+      "value": 360
+    },
+    {
+      "number": "13",
+      "text": "虎",
+      "value": 105
+    },
+    {
+      "number": "14",
+      "text": "兔",
+      "value": 335
+    },
+    {
+      "number": "15",
+      "text": "鼠",
+      "value": 315
+    },
+    {
+      "number": "16",
+      "text": "蛇",
+      "value": 445
+    },
+    {
+      "number": "17",
+      "text": "猪",
+      "value": 150
+    },
+    {
+      "number": "18",
+      "text": "马",
+      "value": 415
+    },
+    {
+      "number": "19",
+      "text": "羊",
+      "value": 35
+    },
+    {
+      "number": "20",
+      "text": "猴",
+      "value": 145
+    },
+    {
+      "number": "21",
+      "text": "鸡",
+      "value": 70
+    },
+    {
+      "number": "22",
+      "text": "狗",
+      "value": 205
+    },
+    {
+      "number": "23",
+      "text": "猪",
+      "value": 35
+    },
+    {
+      "number": "24",
+      "text": "龙",
+      "value": 290
+    },
+    {
+      "number": "25",
+      "text": "虎",
+      "value": 220
+    },
+    {
+      "number": "26",
+      "text": "兔",
+      "value": 175
+    },
+    {
+      "number": "27",
+      "text": "鼠",
+      "value": 370
+    },
+    {
+      "number": "28",
+      "text": "蛇",
+      "value": 210
+    },
+    {
+      "number": "29",
+      "text": "猪",
+      "value": 370
+    },
+    {
+      "number": "30",
+      "text": "马",
+      "value": 150
+    },
+    {
+      "number": "31",
+      "text": "羊",
+      "value": 105
+    },
+    {
+      "number": "32",
+      "text": "猴",
+      "value": 255
+    },
+    {
+      "number": "33",
+      "text": "鸡",
+      "value": 365
+    },
+    {
+      "number": "34",
+      "text": "狗",
+      "value": 155
+    },
+    {
+      "number": "35",
+      "text": "猪",
+      "value": 140
+    },
+    {
+      "number": "36",
+      "text": "龙",
+      "value": 120
+    },
+    {
+      "number": "37",
+      "text": "虎",
+      "value": 0
+    },
+    {
+      "number": "38",
+      "text": "兔",
+      "value": 135
+    },
+    {
+      "number": "39",
+      "text": "鼠",
+      "value": 445
+    },
+    {
+      "number": "40",
+      "text": "蛇",
+      "value": 315
+    },
+    {
+      "number": "41",
+      "text": "猪",
+      "value": 0
+    },
+    {
+      "number": "42",
+      "text": "马",
+      "value": 75
+    },
+    {
+      "number": "43",
+      "text": "羊",
+      "value": 115
+    },
+    {
+      "number": "44",
+      "text": "猴",
+      "value": 95
+    },
+    {
+      "number": "45",
+      "text": "鸡",
+      "value": 70
+    },
+    {
+      "number": "46",
+      "text": "狗",
+      "value": 140
+    },
+    {
+      "number": "47",
+      "text": "猪",
+      "value": 115
+    },
+    {
+      "number": "48",
+      "text": "龙",
+      "value": 155
+    },
+    {
+      "number": "49",
+      "text": "虎",
+      "value": 0
+    }
+  ]
+}
