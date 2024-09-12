@@ -38,62 +38,43 @@ body {
 /* 主内容区域布局，确保三个区域水平铺满屏幕 */
 .main-content {
     display: flex;
-    height: calc(100vh - 60px);
+    height: calc(100vh - 60px); /* 减去顶部菜单栏的高度 */
     width: 100%;
     padding: 0;
     margin: 0;
     overflow-x: hidden;
 }
 
-/* 左侧用户列表 */
+/* 左侧用户列表容器，固定宽度20% */
 .left-side {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    padding: 10px;
+    flex-basis: 40%;  /* 设置左侧为 20% 固定宽度 */
+    flex-shrink: 0;   /* 不允许缩小 */
+    flex-grow: 0;     /* 不允许增大 */
     background-color: #E8F1F6;
-    border-radius: 8px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    padding: 10px;
+    box-sizing: border-box;  /* 确保 padding 不会影响宽度 */
+    overflow-y: auto;  /* 启用滚动条 */
+    height: calc(100vh - 60px); /* 确保左侧用户列表部分占据剩余空间 */
 }
 
-/* 用户列表输入框和按钮样式 */
-.user-list input {
-    padding: 10px 12px;
-    font-size: 14px;
-    border: 1px solid #3498DB;
-    border-radius: 8px;
-    margin-right: 10px;
+/* 用户列表部分 */
+.user-list {
+    flex-grow: 1; /* 允许用户列表填充剩余空间 */
+    overflow-y: auto; /* 当内容超过可用高度时，启用滚动条 */
+    margin-right: 20px; /* 预留空间避免滚动条遮挡内容 */
+    margin-bottom: 10; /* 与底部对齐 */
     margin-left: 10px;
-    transition: border-color 0.3s;
-    width: 60%; /* 宽度调整 */
-    box-sizing: border-box;
+    margin-top: 0px;
 }
 
-.user-list input:focus {
-    outline: none;
-    border-color: #2980B9;
+/* 去掉列表的默认padding和margin */
+.user-list ul {
+    padding: 0;
+    margin: 0;
 }
 
-.user-list button {
-    padding: 10px 14px;
-    font-size: 14px;
-    background-color: #3498DB;
-    color: white;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    transition: background-color 0.3s, box-shadow 0.3s;
-    width: 30%; /* 宽度调整 */
-}
-
-.user-list button:hover {
-    background-color: #2980B9;
-    box-shadow: 0 4px 8px rgba(52, 152, 219, 0.3);
-}
-
-/* 用户列表和右侧排序中的cell使用相同的浅蓝色渐变背景 */
-.user-list ul li, .right-side li {
+/* 用户列表的cell左对齐输入框，右对齐添加用户按钮 */
+.user-list ul li {
     cursor: pointer;
     padding: 10px;
     margin-bottom: 8px;
@@ -103,14 +84,59 @@ body {
     justify-content: space-between;
     align-items: center;
     border-radius: 8px;
-    transition: background-color 0.3s, border-color 0.3s;
-    margin-left: 0px; /* 添加左边距 */
-    margin-right: 10px; /* 添加右边距 */
+    width: 100%; /* 调整宽度，确保cell两侧对齐 */
+    box-sizing: border-box; /* 确保padding不会影响宽度 */
+    margin-top: 10px;
 }
 
-.user-list ul li:hover, .right-side li:hover {
+/* 鼠标悬停效果 */
+.user-list ul li:hover {
     background-color: #3498DB;
     color: white;
+}
+
+/* 用户列表标题的样式，确保距离左边10px，上边10px */
+.user-list h3 {
+    margin-left: 10px; /* 距离左边10px */
+    margin-top: 20px;  /* 距离上边10px */
+    margin-bottom: 10px; /* 与下面输入框的距离 */
+}
+
+/* 用户列表输入框和按钮样式，确保输入框与标题左对齐，按钮与输入框对齐 */
+.user-list input {
+    padding: 10px 12px;
+    font-size: 14px;
+    border: 1px solid #3498DB;
+    border-radius: 8px;
+    margin-left: 10px; /* 与用户列表标题左对齐 */
+    transition: border-color 0.3s;
+    width: calc(100% - 130px); /* 确保输入框与按钮在同一行，宽度减去按钮宽度及其间距 */
+    box-sizing: border-box;
+}
+
+.user-list input:focus {
+    outline: none;
+    border-color: #2980B9;
+}
+
+/* 添加用户按钮水平与输入框对齐，右边距离10px */
+.user-list button {
+    padding: 10px 14px;
+    font-size: 14px;
+    background-color: #3498DB;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background-color 0.3s, box-shadow 0.3s;
+    width: 100px; /* 按钮宽度 */
+    margin-right: 10px; /* 右边距离10px */
+    vertical-align: top; /* 确保按钮与输入框在同一行 */
+}
+
+.user-list button:hover {
+    background-color: #2980B9;
+    box-shadow: 0 4px 8px rgba(52, 152, 219, 0.3);
 }
 
 .user-list ul li.selected {
@@ -128,7 +154,8 @@ body {
     border-radius: 8px;
     cursor: pointer;
     transition: background-color 0.3s, box-shadow 0.3s;
-    margin-left: 10px; /* 删除按钮与用户名称保持一定间距 */
+    margin-left: 50px; /* 删除按钮与用户名称保持一定间距 */
+    width: 60px;
 }
 
 .user-list ul li button:hover {
@@ -159,9 +186,11 @@ body {
     color: white;
 }
 
-/* 中间数据汇总展示区域 */
+/* 中间数据汇总展示区域，宽度40% */
 .section {
-    flex: 1;
+    flex-basis: 30%;  /* 设置中间为 40% 固定宽度 */
+    flex-shrink: 0;   /* 不允许缩小 */
+    flex-grow: 0;     /* 不允许增大 */
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     gap: 5px;
@@ -169,6 +198,11 @@ body {
     background-color: #E9F5E9;
     border-radius: 8px;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    overflow-y: auto;  /* 启用滚动条，避免溢出 */
+}
+.currentUser{
+    margin-top: 7;
+    margin-left: 10;
 }
 
 .item {
@@ -188,13 +222,19 @@ body {
     color: white;
 }
 
-/* 右侧排序展示区域 */
+.sortedResultsTitle{
+    margin-top: 7;
+    margin-left: 10;
+}
+/* 右侧排序展示区域，宽度40% */
 .right-side {
-    flex: 1;
+    flex-basis: 30%;  /* 设置右侧为 40% 固定宽度 */
+    flex-shrink: 0;   /* 不允许缩小 */
+    flex-grow: 0;     /* 不允许增大 */
     background-color: #F5F5F5;
     padding: 20px;
-    overflow-y: auto;
-    overflow-x: auto;
+    overflow-y: auto;  /* 启用滚动条 */
+    overflow-x: auto;  /* 启用滚动条 */
     border-radius: 8px;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
@@ -231,11 +271,14 @@ body {
 
 .modal-content {
     background-color: #fff;
-    margin: 15% auto;
+    margin: 5% auto;
     padding: 20px;
     border-radius: 8px;
-    width: 50%;
+    width: 90%; /* 默认宽度为90% */
+    max-width: 600px; /* 最大宽度600px */
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    position: relative;
+    z-index: 1000;
 }
 
 .close {

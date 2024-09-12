@@ -1,49 +1,34 @@
-// models/userModel.js
+// src/models/UserModel.js
+const fs = require('fs');
+const path = require('path');
 
-const users = {}; // 用于存储所有用户及其数据
+class UserModel {
+  constructor(app) {
+    // 定义存储用户数据的文件路径
+    this.userDataPath = path.join(app.getPath('userData'), 'userData.json');
+  }
 
-// 初始化用户数据
-function createUser(name) {
-    if (!users[name]) {
-        users[name] = {
-            data: generateData(),
-            originalData: [],
-            totalCount: 0
-        };
+  // 加载用户数据
+  loadUserData() {
+    try {
+      if (fs.existsSync(this.userDataPath)) {
+        const data = fs.readFileSync(this.userDataPath, 'utf-8');
+        return JSON.parse(data);
+      }
+    } catch (error) {
+      console.error('Error loading user data:', error);
     }
-}
+    return {};
+  }
 
-// 删除用户
-function deleteUser(name) {
-    delete users[name];
-}
-
-// 获取用户数据
-function getUser(name) {
-    return users[name];
-}
-
-// 更新用户数据
-function updateUser(name, newData) {
-    users[name] = newData;
-}
-
-// 生成初始数据
-function generateData() {
-    const animals = ['龙', '虎', '兔', '鼠', '蛇', '猪', '马', '羊', '猴', '鸡', '狗', '猪'];
-    const data = [];
-    for (let i = 1; i <= 49; i++) {
-        const number = i < 10 ? `0${i}` : `${i}`;
-        const text = animals[i % animals.length];
-        data.push({ number, text, value: 0 });
+  // 保存用户数据
+  saveUserData(data) {
+    try {
+      fs.writeFileSync(this.userDataPath, JSON.stringify(data, null, 2));
+    } catch (error) {
+      console.error('Error saving user data:', error);
     }
-    return data;
+  }
 }
 
-module.exports = {
-    users,
-    createUser,
-    deleteUser,
-    getUser,
-    updateUser
-};
+module.exports = UserModel;

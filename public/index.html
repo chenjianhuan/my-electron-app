@@ -1,15 +1,12 @@
 <!DOCTYPE html>
 <html lang="zh">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>消息统计</title>
-    <link rel="stylesheet" href="styles.css"> <!-- 引入外部样式文件 -->
+    <link rel="stylesheet" href="styles.css">
 </head>
-
 <body>
-
     <div class="top-menu">
         <button class="selected" onclick="handleButtonClick(this)">接单I</button>
         <button onclick="handleButtonClick(this)">吃码上报C</button>
@@ -32,7 +29,7 @@
         </div>
 
         <div class="left-side">
-            <h3 id="currentUser">当前用户: 无</h3> <!-- 当前用户显示 -->
+            <h3 id="currentUser">当前用户: 无</h3>
             <div class="title">散码汇总</div>
             <div class="section" id="section1"></div>
 
@@ -42,11 +39,11 @@
 
         <div class="right-side">
             <h2 id="sortedResultsTitle">所有用户累计值排序：</h2>
-            <ul id="sortedResults"></ul> <!-- 用于显示排序结果 -->
+            <ul id="sortedResults"></ul>
 
             <div class="original-data">
                 <h3 id="originalDataTitle">原始输入数据：</h3>
-                <ul id="originalDataList"></ul> <!-- 用于显示原始数据 -->
+                <ul id="originalDataList"></ul>
             </div>
         </div>
     </div>
@@ -55,403 +52,12 @@
         <div class="modal-content">
             <span class="close" onclick="closeModal()">&times;</span>
             <h3 id="modalTitle">编辑数值</h3>
-            <div id="modalContent"></div> <!-- 用于显示数据 -->
+            <div id="modalContent"></div>
             <button onclick="confirmEdit()">确认</button>
             <button onclick="closeModal()">取消</button>
         </div>
     </div>
 
-    <script>
-        const { ipcRenderer } = require('electron'); // 用于与主进程通信
-
-        let users = {}; // 存储每个用户的数据
-        let currentUser = null; // 当前选中的用户
-        let isSummaryMode = false; // 是否处于汇总模式
-        let currentEditingItem = null; // 当前编辑的item
-        let isSingleUserMode = true; // 区分单用户和汇总模式
-
-        // 当页面加载时，从主进程请求加载用户数据
-        ipcRenderer.send('load-user-data');
-
-        ipcRenderer.on('user-data-loaded', (event, userData) => {
-            users = userData || {};
-            renderUserList();
-            // 如果有用户数据，默认显示第一个用户的数据
-            const sortedUsers = Object.keys(users).sort((a, b) => (users[b].totalCount || 0) - (users[a].totalCount || 0));
-            if (sortedUsers.length > 0) {
-                switchUser(sortedUsers[0]); // 默认显示排名第一的用户
-            }
-        });
-
-        // 每当数据改变时保存用户数据
-        function saveUserData() {
-            ipcRenderer.send('save-user-data', users);
-        }
-
-        function handleButtonClick(button, action) {
-            if (action === 'copy') {
-                copyClientData();
-            }
-        }
-
-        // 生成1到49的编号和文字数据
-        function generateData() {
-            const animals = ['龙', '虎', '兔', '鼠', '蛇', '猪', '马', '羊', '猴', '鸡', '狗', '猪'];
-            const data = [];
-            for (let i = 1; i <= 49; i++) {
-                const number = i < 10 ? `0${i}` : `${i}`;
-                const text = animals[i % animals.length];
-                data.push({ number, text, value: 0 }); // 初始值为0
-            }
-            return data;
-        }
-
-        // 确认消息识别并更新数据
-        function confirmMessage() {
-            const message = document.getElementById('message').value.trim(); // 获取消息内容
-            if (message) {
-                // 将消息以 "." 分割，解析为数字数组
-                const parsedMessage = message.split('.').map(num => parseInt(num, 10));
-
-                if (currentUser && users[currentUser]) {
-                    // 将原始消息添加到当前用户的 originalData 中
-                    users[currentUser].originalData.push(message);
-
-                    // 遍历解析后的消息并累加相应号码的值
-                    parsedMessage.forEach(num => {
-                        const item = users[currentUser].data.find(i => i.number === num.toString().padStart(2, '0'));
-                        if (item) {
-                            item.value += 1; // 对相应的号码进行累加
-                        }
-                    });
-
-                    // 更新显示：渲染排序结果和原始数据
-                    renderSortedResults();
-                    renderOriginalData();
-
-                    // 保存数据
-                    saveUserData();
-
-                    // 关闭模态框
-                    closeModal();
-                } else {
-                    alert('当前没有选中的用户，请选择一个用户。');
-                }
-            } else {
-                alert('请粘贴或输入一条有效的消息');
-            }
-        }
-        function addUser() {
-            const newUserName = document.getElementById('newUserName').value.trim();
-            if (newUserName && !users[newUserName]) {
-                users[newUserName] = { data: generateData(), originalData: [], totalCount: 0 }; // 创建新用户的初始数据
-                currentUser = newUserName;
-                renderUserList();
-                switchUser(newUserName); // 切换到新用户
-                saveUserData(); // 保存数据
-                document.getElementById('newUserName').value = ''; // 清空输入框
-            } else if (users[newUserName]) {
-                alert('该用户名已存在');
-            } else {
-                alert('请输入有效的用户名');
-            }
-        }
-        function handleSummary() {
-            const summaryData = generateData(); // 初始化汇总数据
-            let allOriginalData = []; // 存储所有用户的原始输入数据
-            let totalSummaryValue = 0; // 汇总的总值
-            isSummaryMode = true;
-
-            // 遍历所有用户并累计每个号码的值，同时收集原始输入数据
-            Object.entries(users).forEach(([userName, user]) => {
-                user.data.forEach((item, index) => {
-                    summaryData[index].value += item.value;
-                });
-                totalSummaryValue += user.totalCount || 0;  // 汇总所有用户的总值
-
-                // 收集所有用户的原始输入数据
-                user.originalData.forEach((data, idx) => {
-                    allOriginalData.push(`${userName} 的原始数据 ${idx + 1}: ${data}`);
-                });
-            });
-
-            // 更新汇总标题，显示总汇总值
-            document.getElementById('sortedResultsTitle').textContent = `所有用户累计值排序 (总值: ${totalSummaryValue})：`;
-
-            renderSummary(summaryData);  // 渲染汇总区域
-            renderSortedSummary(summaryData);  // 渲染汇总排序结果
-            renderAllOriginalData(allOriginalData);  // 显示所有用户的原始输入数据
-            saveUserData();  // 保存汇总状态
-        }
-
-
-
-        function renderUserList() {
-            const userListElement = document.getElementById('userList');
-            userListElement.innerHTML = '';
-
-            // 按总值从大到小排序
-            const sortedUsers = Object.keys(users).sort((a, b) => (users[b].totalCount || 0) - (users[a].totalCount || 0));
-
-            sortedUsers.forEach(user => {
-                const li = document.createElement('li');
-                li.textContent = `${user} (总值: ${users[user].totalCount || 0})`; // 如果totalCount为undefined则显示0
-                li.classList.toggle('selected', currentUser === user); // 高亮当前选中的用户
-                li.onclick = () => switchUser(user);  // 绑定用户切换事件
-
-                const deleteButton = document.createElement('button');
-                deleteButton.textContent = '删除';
-                deleteButton.onclick = (event) => {
-                    event.stopPropagation(); // 防止点击删除时触发用户切换
-                    deleteUser(user);
-                };
-
-                li.appendChild(deleteButton);
-                userListElement.appendChild(li);
-            });
-        }
-
-        function switchUser(userName) {
-            isSummaryMode = false; // 切换用户时退出汇总模式
-            currentUser = userName;
-            document.getElementById('currentUser').textContent = `当前用户: ${currentUser}`; // 显示当前用户
-            renderSection('section1');
-            renderSection('section2');
-            renderSortedResults(); // 切换用户后，重新显示排序结果
-            renderOriginalData();  // 显示用户的原始输入数据
-            renderUserList(); // 更新用户列表的选中状态
-            updateTitles();
-        }
-
-        function updateTitles() {
-            const sortedResultsTitle = document.getElementById('sortedResultsTitle');
-            const originalDataTitle = document.getElementById('originalDataTitle');
-
-            if (isSummaryMode) {
-                sortedResultsTitle.textContent = '所有用户累计值排序：';
-                originalDataTitle.textContent = '所有用户原始输入数据：';
-            } else if (currentUser) {
-                sortedResultsTitle.textContent = `${currentUser} 累计值排序 (总值: ${users[currentUser].totalCount || 0})：`;
-                originalDataTitle.textContent = `${currentUser} 原始输入数据：`;
-            } else {
-                sortedResultsTitle.textContent = '没有选择用户';
-                originalDataTitle.textContent = '没有原始输入数据';
-            }
-        }
-
-        function previewMessage() {
-            const message = document.getElementById('message').value.trim(); // 获取输入的消息内容
-            if (!message) {
-                alert('请输入消息');
-                return;
-            }
-
-            // 更新正则表达式，支持 "各" 或 "各号" 的情况
-            const regex = /([\d\s\-—,，.。、]+)各(号)?(\d+)[米]?/g;
-            let resultText = '';
-            let match;
-
-            while ((match = regex.exec(message)) !== null) {
-                const numbers = match[1].trim().split(/[\s\-—,，.。、]+/).filter(Boolean); // 提取所有数字并去掉空值
-                const value = match[3]; // 提取 "各" 或 "号" 后面的值
-                resultText += `${numbers.join(' ')} 值：${value}\n`; // 将数字和值按格式拼接
-            }
-
-            document.getElementById('result').textContent = resultText || '无法解析消息，请检查输入格式';
-        }
-
-
-        function confirmMessage() {
-            const message = document.getElementById('message').value.trim();
-            if (!message) {
-                alert('请输入消息');
-                return;
-            }
-
-            // 更新正则表达式，支持 "各" 或 "各号" 的情况
-            const regex = /([\d\s\-—,，.。、]+)各(号)?(\d+)[米]?/g;
-            let match;
-
-            while ((match = regex.exec(message)) !== null) {
-                const numbers = match[1].trim().split(/[\s\-—,，.。、]+/).filter(Boolean); // 提取所有数字并去掉空值
-                const value = parseInt(match[3], 10); // 提取 "各" 或 "号" 后面的值
-
-                if (currentUser && users[currentUser]) {
-                    numbers.forEach(number => {
-                        const item = users[currentUser].data.find(i => i.number === number.padStart(2, '0'));
-                        if (item) {
-                            item.value += value; // 累加数值
-                        }
-                    });
-                }
-            }
-
-            // 更新UI和保存数据
-            renderSortedResults();
-            renderOriginalData();
-            saveUserData();
-            closeModal();
-            updateTitles(); // 添加这一行
-
-        }
-
-
-
-
-        function renderSection(sectionId) {
-            const section = document.getElementById(sectionId);
-            section.innerHTML = ''; // 清空内容
-
-            if (currentUser && users[currentUser]) {
-                users[currentUser].data.forEach(item => {
-                    const div = document.createElement('div');
-                    div.classList.add('item');
-                    div.innerHTML = `<span>${item.number} ${item.text}</span> <span>${item.value}</span>`;
-                    section.appendChild(div);
-                });
-            }
-        }
-
-        function renderSortedResults() {
-            const sortedResultsElement = document.getElementById('sortedResults');
-            sortedResultsElement.innerHTML = ''; // 清空内容
-
-            if (currentUser && users[currentUser]) {
-                const sortedData = users[currentUser].data.slice().sort((a, b) => b.value - a.value);
-
-                sortedData.forEach(item => {
-                    if (item.value > 0) { // 只显示累计值大于0的数据
-                        const li = document.createElement('li');
-                        li.textContent = `${item.number} ${item.text} - ${item.value}`;
-                        sortedResultsElement.appendChild(li);
-                    }
-                });
-            }
-        }
-
-        function renderOriginalData() {
-            const originalDataElement = document.getElementById('originalDataList');
-            originalDataElement.innerHTML = ''; // 清空内容
-
-            if (currentUser && users[currentUser]) {
-                users[currentUser].originalData.forEach(data => {
-                    const li = document.createElement('li');
-                    li.textContent = data;
-                    originalDataElement.appendChild(li);
-                });
-            }
-        }
-
-        function deleteUser(userName) {
-            if (confirm(`确定要删除用户 ${userName} 及其所有数据吗？`)) {
-                delete users[userName];  // 删除用户数据
-                if (currentUser === userName) {
-                    currentUser = null;
-                    document.getElementById('currentUser').textContent = "当前用户: 无"; // 重置当前用户显示
-                    document.getElementById('section1').innerHTML = ''; // 清空表格显示
-                    document.getElementById('section2').innerHTML = '';
-                    document.getElementById('sortedResults').innerHTML = ''; // 清空排序结果
-                    document.getElementById('originalDataList').innerHTML = ''; // 清空原始数据
-                }
-                renderUserList();  // 更新用户列表
-                saveUserData(); // 保存删除操作
-            }
-        }
-        function openModal(modalType) {
-            const modal = document.getElementById("myModal");
-            const modalTitle = document.getElementById('modalTitle');
-            const modalContent = document.getElementById('modalContent');
-
-            if (modalType === 'recognize') {
-                modalTitle.textContent = "粘贴消息进行识别";
-                modalContent.innerHTML = `
-            <textarea id="message" rows="4" cols="50" placeholder="输入消息，例如: 14.21.13.39.38.30.26.18.33～各20"></textarea>
-            <button onclick="previewMessage()">识别</button>
-            <pre id="result"></pre> <!-- 确保此元素存在 -->
-        `;
-            }
-            modal.style.display = "block";
-        }
-
-        function confirmEdit() {
-            const resultText = document.getElementById('result').textContent.trim();
-
-            if (currentUser && resultText) {
-                // 将识别出的数字与对应的值更新到当前用户的数据中
-                const resultLines = resultText.split('\n');
-                // 保存识别到的原始消息
-                users[currentUser].originalData.push(resultText);
-
-                resultLines.forEach(line => {
-                    // 先匹配所有的数字和对应的值
-                    const match = line.match(/((\d+)[\s.,\-]*)+值[:：]\s*(\d+)/);
-
-                    if (match) {
-                        const allNumbers = match[0].match(/\d+/g);  // 提取出所有的数字
-                        const value = parseInt(match[match.length - 1], 10);  // 获取 "值: " 后的数值
-
-                        if (!isNaN(value)) {
-                            allNumbers.forEach(number => {
-                                // 查找当前用户的数据并更新
-                                const item = users[currentUser].data.find(i => i.number === number.padStart(2, '0'));
-                                if (item) {
-                                    // 累加相应数字的值
-                                    item.value += value;
-                                } else {
-                                    console.warn(`未找到匹配的号码: ${number}`);
-                                }
-                            });
-                        }
-                    }
-                });
-
-                // 重新计算当前用户的总值 (totalCount)
-                let totalCount = 0;
-                users[currentUser].data.forEach(item => {
-                    totalCount += item.value;
-                });
-                users[currentUser].totalCount = totalCount; // 更新用户总值
-
-                // 更新用户显示
-                renderSortedResults();
-                renderOriginalData();
-                updateTitles();
-                saveUserData();
-
-
-                // 确保保存了正确的用户数据
-                console.log("更新后的用户总值:", users[currentUser].totalCount);
-                console.log("保存后的用户数据:", users[currentUser]);
-
-                // 关闭模态框
-                closeModal();
-            } else {
-                alert('无法更新数据，请确保当前有选中的用户或识别结果有效');
-            }
-        }
-
-
-
-        function closeModal() {
-            document.getElementById("myModal").style.display = "none";
-        }
-
-        function clearUserData() {
-            if (confirm('确定要清空所有用户的账号和数据吗？')) {
-                users = {};  // 清空整个 users 对象，删除所有用户及其数据
-                currentUser = null;  // 清空当前用户
-                document.getElementById('currentUser').textContent = "当前用户: 无"; // 重置当前用户显示
-                renderUserList();  // 重新渲染空的用户列表
-                document.getElementById('section1').innerHTML = ''; // 清空表格显示
-                document.getElementById('section2').innerHTML = '';
-                document.getElementById('sortedResults').innerHTML = ''; // 清空排序结果
-                document.getElementById('originalDataList').innerHTML = ''; // 清空原始数据
-                saveUserData(); // 保存清空操作
-            }
-        }
-
-    </script>
-
+    <script src="./renderer.js"></script>
 </body>
-
 </html>
