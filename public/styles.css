@@ -1,296 +1,460 @@
 body {
+    /* 使用 'Roboto' 和 'Noto Sans' 字体，并设置基础的布局和背景颜色 */
     font-family: 'Roboto', 'Noto Sans', sans-serif;
     margin: 0;
     padding: 0;
     box-sizing: border-box;
-    background-color: #e2edef;
-    color: #333333;
+    background-color: #e2edef; /* 背景颜色 */
+    color: #333333; /* 文字颜色 */
+    overflow: hidden;  /* 禁止整个页面滑动 */
+
 }
 
-/* 顶部菜单栏 */
+/* 顶部菜单栏样式 */
 .top-menu {
-    display: flex;
-    justify-content: space-between;
-    background-color: #2C3E50;
-    padding: 10px;
+    display: flex; /* 设置为水平布局 */
+    justify-content: space-between; /* 子元素之间均匀分布 */
+    background-color: #2C3E50; /* 深色背景 */
+    padding: 10px; /* 内边距 */
 }
 
 .top-menu button {
-    padding: 10px 20px;
-    font-size: 16px;
-    cursor: pointer;
-    border: 1px solid #ddd;
-    background-color: #2C3E50;
-    color: white;
-    border-radius: 8px;
-    transition: background-color 0.3s;
+    /* 按钮的基础样式 */
+    padding: 10px 20px; /* 内边距 */
+    font-size: 16px; /* 字体大小 */
+    cursor: pointer; /* 鼠标悬停时显示为可点击状态 */
+    border: 1px solid #ddd; /* 边框颜色 */
+    background-color: #2C3E50; /* 按钮背景颜色 */
+    color: white; /* 文字颜色 */
+    border-radius: 8px; /* 按钮圆角 */
+    transition: background-color 0.3s; /* 背景颜色渐变效果 */
 }
 
 .top-menu button:hover {
-    background-color: #3498DB;
+    background-color: #3498DB; /* 鼠标悬停时的背景颜色 */
 }
 
 .top-menu button.selected {
-    background-color: #3498DB;
-    color: white;
+    background-color: #3498DB; /* 当前选中的按钮背景颜色 */
+    color: white; /* 当前选中按钮的文字颜色 */
 }
 
-/* 主内容区域布局，确保三个区域水平铺满屏幕 */
+/* 主内容区域布局 */
 .main-content {
-    display: flex;
-    height: calc(100vh - 60px); /* 减去顶部菜单栏的高度 */
-    width: 100%;
+    display: flex; /* 水平排列 */
+    height: calc(100vh - 60px); /* 内容区高度减去顶部菜单栏 */
+    width: 100%; /* 设置宽度为 100% */
     padding: 0;
     margin: 0;
-    overflow-x: hidden;
+    overflow-x: hidden; /* 隐藏水平溢出的内容 */
 }
 
-/* 左侧用户列表容器，固定宽度20% */
+/* 左侧用户列表容器 */
 .left-side {
-    flex-basis: 40%;  /* 设置左侧为 20% 固定宽度 */
-    flex-shrink: 0;   /* 不允许缩小 */
-    flex-grow: 0;     /* 不允许增大 */
-    background-color: #E8F1F6;
+    flex-basis: 40%; /* 左侧区域固定宽度占屏幕 40% */
+    flex-shrink: 0; /* 防止容器被缩小 */
+    flex-grow: 0; /* 不允许容器增大 */
+    background-color: #E8F1F6; /* 左侧区域背景颜色 */
     padding: 10px;
-    box-sizing: border-box;  /* 确保 padding 不会影响宽度 */
-    overflow-y: auto;  /* 启用滚动条 */
-    height: calc(100vh - 60px); /* 确保左侧用户列表部分占据剩余空间 */
+    box-sizing: border-box; /* 确保内边距不会影响宽度 */
+    overflow-y: auto; /* 启用垂直滚动条 */
+    height: calc(100vh - 60px); /* 高度减去顶部菜单栏 */
 }
 
-/* 用户列表部分 */
+/* 用户列表样式 */
 .user-list {
-    flex-grow: 1; /* 允许用户列表填充剩余空间 */
-    overflow-y: auto; /* 当内容超过可用高度时，启用滚动条 */
-    margin-right: 20px; /* 预留空间避免滚动条遮挡内容 */
-    margin-bottom: 10; /* 与底部对齐 */
-    margin-left: 10px;
-    margin-top: 0px;
+    flex-grow: 1; /* 允许用户列表区域填充剩余空间 */
+    overflow-y: auto; /* 超出内容时启用垂直滚动条 */
+    margin-right: 20px; /* 右侧边距 */
+    margin-bottom: 10px; /* 底部边距 */
+    margin-left: 10px; /* 左侧边距 */
+    margin-top: 0px; /* 顶部边距 */
 }
 
-/* 去掉列表的默认padding和margin */
+/* 用户列表内去掉默认的 padding 和 margin */
 .user-list ul {
     padding: 0;
     margin: 0;
 }
 
-/* 用户列表的cell左对齐输入框，右对齐添加用户按钮 */
+/* 单个用户项样式 */
 .user-list ul li {
-    cursor: pointer;
+    cursor: pointer; /* 鼠标悬停时显示为可点击状态 */
     padding: 10px;
-    margin-bottom: 8px;
-    background-image: linear-gradient(to right, rgba(52, 152, 219, 0.5), rgba(255, 255, 255, 0));
-    border: 1px solid #ddd;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-radius: 8px;
-    width: 100%; /* 调整宽度，确保cell两侧对齐 */
-    box-sizing: border-box; /* 确保padding不会影响宽度 */
-    margin-top: 10px;
+    margin-bottom: 8px; /* 每个用户项之间的间距 */
+    background-image: linear-gradient(to right, rgba(52, 152, 219, 0.5), rgba(255, 255, 255, 0)); /* 背景颜色渐变 */
+    border: 1px solid #ddd; /* 边框颜色 */
+    display: flex; /* 内部内容为水平排列 */
+    justify-content: space-between; /* 内容两端对齐 */
+    align-items: center; /* 垂直居中 */
+    border-radius: 8px; /* 圆角设计 */
+    width: 100%; /* 宽度占满父容器 */
+    box-sizing: border-box; /* 内边距不会影响宽度 */
+    margin-top: 10px; /* 顶部边距 */
 }
 
-/* 鼠标悬停效果 */
+/* 鼠标悬停时的用户列表项效果 */
 .user-list ul li:hover {
-    background-color: #3498DB;
-    color: white;
+    background-color: #3498DB; /* 鼠标悬停时的背景颜色 */
+    color: white; /* 文字颜色 */
 }
 
-/* 用户列表标题的样式，确保距离左边10px，上边10px */
+/* 用户列表标题样式 */
 .user-list h3 {
-    margin-left: 10px; /* 距离左边10px */
-    margin-top: 20px;  /* 距离上边10px */
-    margin-bottom: 10px; /* 与下面输入框的距离 */
+    margin-left: 10px; /* 距离左边 10px */
+    margin-top: 20px;  /* 距离上方 20px */
+    margin-bottom: 10px; /* 与下面的输入框距离 */
 }
 
-/* 用户列表输入框和按钮样式，确保输入框与标题左对齐，按钮与输入框对齐 */
+/* 输入框样式 */
 .user-list input {
     padding: 10px 12px;
-    font-size: 14px;
-    border: 1px solid #3498DB;
-    border-radius: 8px;
-    margin-left: 10px; /* 与用户列表标题左对齐 */
-    transition: border-color 0.3s;
-    width: calc(100% - 130px); /* 确保输入框与按钮在同一行，宽度减去按钮宽度及其间距 */
+    font-size: 14px; /* 字体大小 */
+    border: 1px solid #3498DB; /* 边框颜色 */
+    border-radius: 8px; /* 圆角设计 */
+    margin-left: 10px; /* 左侧边距 */
+    transition: border-color 0.3s; /* 边框颜色的渐变效果 */
+    width: calc(100% - 130px); /* 输入框宽度减去按钮宽度 */
     box-sizing: border-box;
 }
 
 .user-list input:focus {
-    outline: none;
-    border-color: #2980B9;
+    outline: none; /* 去掉输入框的默认外边框 */
+    border-color: #2980B9; /* 焦点时边框颜色 */
 }
 
-/* 添加用户按钮水平与输入框对齐，右边距离10px */
+/* 按钮样式 */
 .user-list button {
-    padding: 10px 14px;
-    font-size: 14px;
-    background-color: #3498DB;
-    color: white;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    transition: background-color 0.3s, box-shadow 0.3s;
+    padding: 10px 14px; /* 内边距 */
+    font-size: 14px; /* 字体大小 */
+    background-color: #3498DB; /* 按钮背景颜色 */
+    color: white; /* 文字颜色 */
+    border: none; /* 无边框 */
+    border-radius: 8px; /* 圆角 */
+    cursor: pointer; /* 鼠标悬停时显示为可点击状态 */
+    transition: background-color 0.3s, box-shadow 0.3s; /* 背景颜色与阴影的渐变效果 */
     width: 100px; /* 按钮宽度 */
-    margin-right: 10px; /* 右边距离10px */
-    vertical-align: top; /* 确保按钮与输入框在同一行 */
+    margin-right: 10px; /* 右边距 */
+    vertical-align: top; /* 垂直对齐 */
 }
 
 .user-list button:hover {
-    background-color: #2980B9;
-    box-shadow: 0 4px 8px rgba(52, 152, 219, 0.3);
-}
-
-.user-list ul li.selected {
-    border: 2px solid #3498DB;
-    color: #3498DB;
+    background-color: #2980B9; /* 悬停时的背景颜色 */
+    box-shadow: 0 4px 8px rgba(52, 152, 219, 0.3); /* 阴影效果 */
 }
 
 /* 删除按钮样式 */
 .user-list ul li button {
     padding: 5px 10px;
     font-size: 14px;
-    background-color: #e74c3c;
-    color: white;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    transition: background-color 0.3s, box-shadow 0.3s;
-    margin-left: 50px; /* 删除按钮与用户名称保持一定间距 */
-    width: 60px;
+    background-color: #e74c3c; /* 红色背景 */
+    color: white; /* 文字颜色 */
+    border: none; /* 无边框 */
+    border-radius: 8px; /* 圆角设计 */
+    cursor: pointer; /* 鼠标悬停时显示为可点击状态 */
+    transition: background-color 0.3s, box-shadow 0.3s; /* 渐变效果 */
+    margin-left: 50px; /* 删除按钮与名称的间距 */
+    width: 60px; /* 按钮宽度 */
 }
 
+/* 删除按钮悬停效果 */
 .user-list ul li button:hover {
-    background-color: #c0392b;
-    box-shadow: 0 4px 8px rgba(231, 76, 60, 0.3);
+    background-color: #c0392b; /* 悬停时背景颜色 */
+    box-shadow: 0 4px 8px rgba(231, 76, 60, 0.3); /* 阴影效果 */
 }
 
+/* 原始输入数据部分 */
 .original-data {
     margin-top: 20px;
 }
 
 .original-data ul {
-    list-style-type: none;
+    list-style-type: none; /* 去掉默认列表样式 */
     padding: 0;
 }
 
 .original-data li {
     padding: 10px;
-    border-bottom: 1px solid #ddd;
-    background-color: #fff;
-    border-radius: 8px;
-    margin-bottom: 10px;
-    transition: background-color 0.3s;
+    border-bottom: 1px solid #ddd; /* 列表项的下边框 */
+    background-color: #fff; /* 背景颜色 */
+    border-radius: 8px; /* 圆角设计 */
+    margin-bottom: 10px; /* 底部边距 */
+    transition: background-color 0.3s; /* 背景颜色渐变 */
 }
 
+/* 悬停时的效果 */
 .original-data li:hover {
-    background-color: #3498DB;
-    color: white;
+    background-color: #3498DB; /* 悬停时的背景颜色 */
+    color: white; /* 文字颜色 */
 }
 
-/* 中间数据汇总展示区域，宽度40% */
+/* 中间数据汇总区域 */
 .section {
-    flex-basis: 30%;  /* 设置中间为 40% 固定宽度 */
-    flex-shrink: 0;   /* 不允许缩小 */
-    flex-grow: 0;     /* 不允许增大 */
+    flex-basis: 30%;  /* 宽度固定为 30% */
+    flex-shrink: 0;   /* 防止缩小 */
+    flex-grow: 0;     /* 防止增大 */
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 5px;
-    padding: 5px;
-    background-color: #E9F5E9;
-    border-radius: 8px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    overflow-y: auto;  /* 启用滚动条，避免溢出 */
-}
-.currentUser{
-    margin-top: 7;
-    margin-left: 10;
+    grid-template-columns: repeat(4, 1fr); /* 四列布局 */
+    gap: 5px; /* 每列之间的间距 */
+    padding: 5px; /* 内边距 */
+    background-color: #E9F5E9; /* 背景颜色 */
+    border-radius: 8px; /* 圆角设计 */
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); /* 阴影效果 */
+    overflow-y: auto; /* 启用垂直滚动条 */
 }
 
+/* 当前用户部分的样式 */
+.currentUser {
+    margin-top: 7px;
+    margin-left: 10px;
+}
+
+/* 每个数据项的样式 */
 .item {
     display: flex;
-    justify-content: space-between;
+    justify-content: space-between; /* 项目两端对齐 */
     align-items: center;
     padding: 2px;
     height: 12px;
-    background-color: #FFFFFF;
-    border-radius: 4px;
-    font-size: 10px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    background-color: #FFFFFF; /* 背景颜色 */
+    border-radius: 4px; /* 圆角 */
+    font-size: 10px; /* 字体大小 */
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); /* 阴影效果 */
 }
 
 .item.highlight {
-    background-color: #A9D6A5;
-    color: white;
+    background-color: #A9D6A5; /* 高亮项目的背景颜色 */
+    color: white; /* 高亮项目的文字颜色 */
 }
 
-.sortedResultsTitle{
-    margin-top: 7;
-    margin-left: 10;
+/* 排序结果标题样式 */
+.sortedResultsTitle {
+    margin-top: 7px;
+    margin-left: 10px;
 }
-/* 右侧排序展示区域，宽度40% */
+
+/* 右侧排序展示区域 */
 .right-side {
-    flex-basis: 30%;  /* 设置右侧为 40% 固定宽度 */
-    flex-shrink: 0;   /* 不允许缩小 */
-    flex-grow: 0;     /* 不允许增大 */
-    background-color: #F5F5F5;
-    padding: 20px;
-    overflow-y: auto;  /* 启用滚动条 */
-    overflow-x: auto;  /* 启用滚动条 */
-    border-radius: 8px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    flex-basis: 30%;  /* 宽度固定为 30% */
+    flex-shrink: 0;   /* 防止缩小 */
+    flex-grow: 0;     /* 防止增大 */
+    background-color: #F5F5F5; /* 背景颜色 */
+    padding: 20px; /* 内边距 */
+    overflow-y: auto; /* 启用垂直滚动条 */
+    overflow-x: auto; /* 启用水平滚动条 */
+    border-radius: 8px; /* 圆角设计 */
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); /* 阴影效果 */
 }
 
-/* 渐变背景色，所有cell使用浅蓝色渐变 */
+/* 右侧列表项的样式 */
 .right-side li {
-    list-style: none;
-    margin: 5px 0;
-    padding: 10px;
-    border-radius: 8px;
-    background-image: linear-gradient(to right, rgba(52, 152, 219, 0.5), rgba(255, 255, 255, 0));
-    text-align: center;
-    transition: background-color 0.3s ease;
+    list-style: none; /* 去掉默认的列表样式 */
+    margin: 5px 0; /* 上下边距 */
+    padding: 10px; /* 内边距 */
+    border-radius: 8px; /* 圆角设计 */
+    background-image: linear-gradient(to right, rgba(52, 152, 219, 0.5), rgba(255, 255, 255, 0)); /* 背景渐变 */
+    text-align: center; /* 文字居中 */
+    transition: background-color 0.3s ease; /* 背景颜色渐变 */
 }
 
+/* 标题的样式 */
 .title {
-    font-weight: bold;
-    margin-bottom: 10px;
-    text-align: center;
-    font-size: 20px;
+    font-weight: bold; /* 粗体 */
+    margin-bottom: 10px; /* 底部边距 */
+    text-align: center; /* 居中对齐 */
+    font-size: 20px; /* 字体大小 */
 }
 
-/* 模态框 */
+/* 模态框的整体样式 */
 .modal {
-    display: none;
-    position: fixed;
-    z-index: 1;
+    display: none; /* 默认隐藏 */
+    position: fixed; /* 固定定位 */
+    z-index: 1; /* 置于顶层 */
     left: 0;
     top: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(0, 0, 0, 0.5);
+    width: 100%; /* 占满屏幕宽度 */
+    height: 100%; /* 占满屏幕高度 */
+    background-color: rgba(0, 0, 0, 0.5); /* 半透明背景 */
 }
 
+/* 模态框内容样式 */
 .modal-content {
-    background-color: #fff;
-    margin: 5% auto;
+    background: linear-gradient(135deg, #8abced, #bae5f0); /* 背景渐变 */
+    border-radius: 10px; /* 圆角 */
+    box-shadow: 0 0 20px rgba(30, 144, 255, 0.7); /* 边缘发光效果 */
     padding: 20px;
-    border-radius: 8px;
-    width: 90%; /* 默认宽度为90% */
-    max-width: 600px; /* 最大宽度600px */
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
     position: relative;
-    z-index: 1000;
+    max-width: 600px; /* 最大宽度 */
+    margin: 5% auto; /* 居中显示 */
+    color: #fff; /* 字体颜色 */
+    margin-top: 150px;
 }
 
-.close {
-    color: #aaa;
-    float: right;
-    font-size: 28px;
-    font-weight: bold;
+/* 模态框标题样式 */
+#modalTitle {
+    font-family: 'Poppins', sans-serif; /* 标题字体 */
+    font-size: 22px; /* 标题字体大小 */
+    color: #FFFFFF; /* 字体颜色 */
+    font-weight: bold; /* 粗体 */
+    text-align: center; /* 居中对齐 */
+    margin-bottom: 20px; /* 底部边距 */
+    position: relative;
 }
 
-.close:hover,
-.close:focus {
-    color: black;
-    text-decoration: none;
+/* 模态框标题的动态效果 */
+#modalTitle::after {
+    content: '';
+    width: 100%;
+    height: 2px;
+    background-color: #1E90FF; /* 标题下划线颜色 */
+    position: absolute;
+    bottom: -5px;
+    left: 0;
+    opacity: 0; /* 默认隐藏 */
+    transition: opacity 0.3s ease; /* 透明度渐变 */
+}
+
+#modalTitle:hover::after {
+    opacity: 1; /* 鼠标悬停时显示下划线 */
+}
+
+p {
+    font-size: 26px;
+    color: #ffffff; /* 文字颜色 */
+}
+
+p span {
+    color: #1E90FF; /* 关键字颜色 */
+    font-weight: bold; /* 粗体 */
+}
+
+/* 输入框样式 */
+textarea {
+    width: 100%;
+    padding: 12px;
+    border-radius: 8px; /* 圆角 */
+    border: none; /* 无边框 */
+    background-color: #34495E; /* 背景颜色 */
+    color: #ECF0F1; /* 字体颜色 */
+    box-shadow: inset 0 0 10px rgba(243, 156, 18, 0.5); /* 内发光效果 */
+    transition: box-shadow 0.3s ease; /* 阴影渐变效果 */
+}
+
+/* 按钮基础样式 */
+button {
+    padding: 10px 20px;
+    border-radius: 8px; /* 圆角 */
+    background: linear-gradient(135deg, #3498DB, #2C3E50); /* 按钮渐变背景 */
+    color: #FFFFFF; /* 字体颜色 */
+    font-size: 16px; /* 字体大小 */
+    border: none; /* 无边框 */
+    cursor: pointer; /* 鼠标悬停时显示为可点击状态 */
+    transition: all 0.3s ease; /* 动画效果 */
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2); /* 阴影效果 */
+    display: inline-flex;
+    align-items: center; /* 垂直居中 */
+    
+}
+
+/* 按钮悬停与点击效果 */
+button:hover {
+    background: #1E90FF;
+    box-shadow: 0 0 10px rgba(30, 144, 255, 0.8); /* 悬停时发光效果 */
+    transform: scale(1.05); /* 悬停时轻微放大 */
+}
+
+button:active {
+    transform: scale(0.98); /* 点击时轻微缩小 */
+}
+
+button i {
+    margin-right: 8px;
+}
+
+/* 识别按钮样式 */
+.recognize-button {
+    background: linear-gradient(135deg, #3498DB, #2980B9); /* 蓝色渐变背景 */
+    color: white;
+    border: none;
+    border-radius: 5px; /* 保持圆角 */
+    padding: 10px 20px;
     cursor: pointer;
+    margin-left: 10px; /* 与输入框的间距 */
+    height: 40px;
+    vertical-align: top; /* 保持与输入框对齐 */
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2); /* 阴影效果 */
+    transition: transform 0.2s, background-color 0.2s;
+}
+
+.recognize-button:hover {
+    background-color: #2980B9;
+    transform: scale(1.35); /* 鼠标悬停时轻微放大 */
+}
+
+/* 确认与取消按钮的样式 */
+.confirm-button,
+.cancel-button {
+    background: linear-gradient(135deg, #3498DB, #2980B9); /* 蓝色渐变背景 */
+    color: white;
+    border: none;
+    border-radius: 5px;
+    padding: 10px 20px;
+    width: 100px; /* 按钮宽度 */
+    height: 40px; /* 按钮高度 */
+    margin: 5px; /* 保持按钮间距 */
+    cursor: pointer;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    transition: transform 0.2s, background-color 0.2s;
+}
+
+.confirm-button:hover,
+.cancel-button:hover {
+    background-color: #2980B9;
+    transform: scale(1.05); /* 悬停时轻微放大 */
+}
+
+/* 模态框关闭按钮样式 */
+.close {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: #34495E; /* 关闭按钮背景颜色 */
+    border-radius: 50%; /* 圆形按钮 */
+    width: 30px;
+    height: 30px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: #FFFFFF; /* 文字颜色 */
+    font-size: 18px; /* 字体大小 */
+    cursor: pointer; /* 鼠标悬停时显示为可点击状态 */
+    transition: all 0.3s ease; /* 动画效果 */
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2); /* 阴影效果 */
+}
+
+/* 关闭按钮悬停效果 */
+.close:hover {
+    background: #E74C3C; /* 鼠标悬停时的背景颜色 */
+    box-shadow: 0 0 10px rgba(231, 76, 60, 0.8); /* 发光效果 */
+}
+
+.close:active {
+    transform: scale(0.95); /* 点击时轻微缩小 */
+}
+
+/* 输入框的背景颜色与字体颜色 */
+textarea#message {
+    background-color: #FFF9C4; /* 输入框背景颜色为淡黄色 */
+    color: #333333; /* 深灰色字体 */
+    border: 2px solid #890303; /* 浅灰色边框 */
+    border-radius: 5px; /* 圆角 */
+    padding: 10px;
+    width: calc(100% - 120px); /* 保持输入框和按钮同一行 */
+    box-sizing: border-box;
+    resize: none; /* 禁用手动调整输入框大小 */
+    height: 100px;
+}
+
+textarea#message::placeholder {
+    color: #A0A0A0; /* 占位符颜色 */
 }

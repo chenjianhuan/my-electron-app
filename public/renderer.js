@@ -48,7 +48,7 @@ function renderUserList() {
   const sortedUsers = Object.keys(users).sort((a, b) => (users[b].totalCount || 0) - (users[a].totalCount || 0));
   sortedUsers.forEach(user => {
     const li = document.createElement('li');
-    li.textContent = `${user} (总值: ${users[user].totalCount || 0})`;
+    li.textContent = `${user} (总: ${users[user].totalCount || 0})`;
     li.onclick = () => switchUser(user);
 
     const deleteButton = document.createElement('button');
@@ -113,11 +113,11 @@ function updateTitles(isSummaryMode = false, count = 0) {
 
   if (isSummaryMode) {
     // 汇总模式时显示所有用户的汇总数据
-    sortedResultsTitle.textContent = `所有用户累计值排序 (总值: ${count})：`; // 显示汇总的总值
+    sortedResultsTitle.textContent = `所有用户累计值排序 (总: ${count})：`; // 显示汇总的总值
     originalDataTitle.textContent = `所有用户的原始输入数据：`;
   } else if (currentUser) {
     // 正常模式时显示当前用户数据
-    sortedResultsTitle.textContent = `${currentUser} 累计值排序 (总值: ${users[currentUser].totalCount || 0})：`;
+    sortedResultsTitle.textContent = `${currentUser} 累计值排序 (总: ${users[currentUser].totalCount || 0})`;
     originalDataTitle.textContent = `${currentUser} 原始输入数据：`;
   } else {
     // 没有选择用户时的默认标题
@@ -189,37 +189,26 @@ function clearUserData() {
   }
 }
 function openModal(modalType) {
-  // 如果处于汇总模式，阻止操作
-  if(isSummaryMode) {
+  if (isSummaryMode) {
     alert('请先退出汇总模式并选择用户');
-    return;
-  }
-
-  // 如果没有选中用户，提示创建新用户
-  if (!currentUser) {
-    alert('请先选择或创建一个用户');
     return;
   }
 
   const modal = document.getElementById("myModal");
   const modalTitle = document.getElementById('modalTitle');
-  const modalContent = document.getElementById('modalContent');
+  const messageTextarea = document.getElementById('message'); // 获取 textarea
 
-  // 显示当前用户的提示信息
-  let currentUserInfo = currentUser ? `当前用户是：${currentUser}` : '请先选择或创建用户';
-
+  // 设置模态框的内容
   if (modalType === 'recognize') {
     modalTitle.textContent = "粘贴消息进行识别";
-    modalContent.innerHTML = `
-      <p style="font-weight: bold; color: #333;">${currentUserInfo}</p> <!-- 动态提示当前用户 -->
-      <textarea id="message" rows="4" cols="50" placeholder="输入消息，例如: 14.21.13.39.38.30.26.18.33～各20"></textarea>
-      <button onclick="previewMessage()">识别</button>
-      <pre id="result"></pre> <!-- 确保此元素存在 -->
-    `;
+    messageTextarea.placeholder = "输入消息，例如: 14.21.13.39.38.30.26.18.33～各20";
+    modal.style.display = "block";
+
   }
 
-  modal.style.display = "block";
 }
+
+
 
 
 function previewMessage() {
@@ -257,9 +246,12 @@ function previewMessage() {
 
 
 function confirmEdit() {
+  const messageTextarea = document.getElementById('message');
+  const resultArea = document.getElementById('result');
+
   const resultText = document.getElementById('result').textContent.trim();
 
-  console.log('isSummaryMode',isSummaryMode);
+  console.log('isSummaryMode', isSummaryMode);
   // 如果处于汇总模式，阻止确认操作
   if (isSummaryMode) {
     alert('请先退出汇总模式并选择用户');
@@ -321,6 +313,12 @@ function confirmEdit() {
     renderUserList();
     saveUserData();
 
+    // 清空输入框和识别结果
+    messageTextarea.value = '';
+    resultArea.textContent = '';
+
+    closeModal(); // 关闭模态框
+
     // 关闭模态框
     closeModal();
   } else {
@@ -342,7 +340,7 @@ function renderUserList() {
   const sortedUsers = Object.keys(users).sort((a, b) => (users[b].totalCount || 0) - (users[a].totalCount || 0));
   sortedUsers.forEach(user => {
     const li = document.createElement('li');
-    li.textContent = `${user} (总值: ${users[user].totalCount || 0})`;
+    li.textContent = `${user} (总: ${users[user].totalCount || 0})`;
     li.onclick = () => switchUser(user);
 
     const deleteButton = document.createElement('button');
@@ -377,7 +375,7 @@ function handleSummary() {
   });
 
   // 更新汇总标题为所有用户累计值
-  updateTitles(true,totalSummaryValue); // 传递 true 表示汇总模式
+  updateTitles(true, totalSummaryValue); // 传递 true 表示汇总模式
   renderSummary(summaryData);  // 渲染汇总区域
   renderSortedSummary(summaryData);  // 渲染汇总排序结果
   renderAllOriginalData(allOriginalData);  // 显示所有用户的原始输入数据

@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="zh">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>消息统计</title>
     <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
     <div class="top-menu">
         <button class="selected" onclick="handleButtonClick(this)">订单详情</button>
@@ -51,13 +53,38 @@
     <div id="myModal" class="modal">
         <div class="modal-content">
             <span class="close" onclick="closeModal()">&times;</span>
-            <h3 id="modalTitle">编辑数值</h3>
-            <div id="modalContent"></div>
-            <button onclick="confirmEdit()">确认</button>
-            <button onclick="closeModal()">取消</button>
+            <h2 id="modalTitle">粘贴消息进行识别</h2>
+            <!-- <p><span>当前用户：</span> </p> -->
+            <textarea id="message" rows="4" cols="50" placeholder="输入消息，例如: 14.21.13.39.38.30.26.18.33～各20"></textarea>
+            <button class="recognize-button" onclick="previewMessage()">识别</button>
+            <pre id="result"></pre>
+            <button class="confirm-button" onclick="confirmEdit()">确认</button>
+            <button class="cancel-button" onclick="closeModal()">取消</button>
         </div>
     </div>
 
+    <div class="modal-content">
+        <span class="close" onclick="closeModal()">&times;</span>
+        <h2 id="modalTitle">粘贴消息进行识别</h2>
+        <p><span>当前用户：</span> </p>
+
+        <!-- 输入框和识别按钮并列 -->
+        <div style="display: flex; align-items: flex-start;">
+            <textarea id="message" rows="4" cols="50" placeholder="输入消息，例如: 14.21.13.39.38.30.26.18.33～各20"></textarea>
+            <button class="recognize-button" onclick="previewMessage()">识别</button>
+        </div>
+
+        <pre id="result"></pre>
+
+        <!-- 确认和取消按钮并列，居中对齐 -->
+        <div style="text-align: center; margin-top: 10px;">
+            <button class="confirm-button" onclick="confirmEdit()">确认</button>
+            <button class="cancel-button" onclick="closeModal()">取消</button>
+        </div>
+    </div>
+
+
     <script src="./renderer.js"></script>
 </body>
+
 </html>
