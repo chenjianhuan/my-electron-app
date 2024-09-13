@@ -423,3 +423,71 @@ function renderAllOriginalData(allOriginalData) {
     originalDataElement.appendChild(li);
   });
 }
+
+function handleButtonClick(button, action) {
+  if (action === 'copy') {
+      copyClientData();
+  }
+}
+
+function copyClientData() {
+  const sortedResultsElement = document.getElementById('sortedResults');
+  const sortedResultsTitleElement = document.getElementById('sortedResultsTitle');
+  let copyText = '';
+
+  // 获取当前用户的累计值标题，包含用户名称和总值
+  if (sortedResultsTitleElement) {
+      copyText += `${sortedResultsTitleElement.textContent}\n\n`; // 添加标题和换行
+  }
+
+  // 用于收集所有值相同的号码列表
+  let currentValue = null;
+  let currentNumbers = [];
+
+  // 获取当前显示的累计排序数据
+  if (sortedResultsElement) {
+      const items = sortedResultsElement.querySelectorAll('li');
+      items.forEach(item => {
+          // 提取号码和值，假设格式为 "号码 生肖 - 值"
+          const parts = item.textContent.split(' - ');
+          const numberWithAnimal = parts[0].trim();  // 提取包含号码和生肖的部分
+          const value = parts[1].trim();   // 提取值
+
+          // 仅提取号码部分，去掉生肖部分（假设生肖在号码后面）
+          const number = numberWithAnimal.split(' ')[0];
+
+          // 如果当前号码的值与之前的号码值不同，则拼接现有号码并开始新一行
+          if (currentValue !== null && currentValue !== value) {
+              // 拼接所有号码，并添加 "各" + 对应的值
+              copyText += `${currentNumbers.join('-')}各${currentValue}，\n`;
+              currentNumbers = [];  // 重置号码列表
+          }
+
+          // 更新当前的值
+          currentValue = value;
+          currentNumbers.push(number);  // 将当前号码加入列表
+      });
+
+      // 拼接最后一组号码
+      if (currentNumbers.length > 0) {
+          copyText += `${currentNumbers.join('-')}各${currentValue}\n`;
+      }
+  }
+
+  // 将结果复制到剪贴板
+  if (copyText) {
+      navigator.clipboard.writeText(copyText)
+          .then(() => {
+              alert('数据已复制到剪贴板');
+          })
+          .catch(err => {
+              console.error('无法复制文本', err);
+              alert('复制失败，请稍后重试');
+          });
+  } else {
+      alert('没有可复制的数据');
+  }
+}
+
+
+
