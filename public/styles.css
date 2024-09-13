@@ -13,31 +13,28 @@ body {
 /* 顶部菜单栏样式 */
 .top-menu {
     display: flex; /* 设置为水平布局 */
-    justify-content: space-between; /* 子元素之间均匀分布 */
-    background-color: #2C3E50; /* 深色背景 */
+    justify-content: flex-start; /* 子元素靠左排列 */
+    background-color: #3f5870; /* 深色背景 */
     padding: 10px; /* 内边距 */
 }
 
+/* 顶部菜单栏按钮样式 */
 .top-menu button {
-    /* 按钮的基础样式 */
-    padding: 10px 20px; /* 内边距 */
-    font-size: 16px; /* 字体大小 */
-    cursor: pointer; /* 鼠标悬停时显示为可点击状态 */
-    border: 1px solid #ddd; /* 边框颜色 */
-    background-color: #2C3E50; /* 按钮背景颜色 */
-    color: white; /* 文字颜色 */
-    border-radius: 8px; /* 按钮圆角 */
-    transition: background-color 0.3s; /* 背景颜色渐变效果 */
+    padding: 10px 20px;
+    font-size: 16px;
+    cursor: pointer;
+    border: 1px solid #ddd;
+    background-color: #f0f0f0;
+    color: #e3dcdc;
+    border-radius: 8px;
+    transition: background-color 0.3s;
+    margin-left: 10px;
 }
 
 .top-menu button:hover {
-    background-color: #3498DB; /* 鼠标悬停时的背景颜色 */
+    background-color: #d4abab;
 }
 
-.top-menu button.selected {
-    background-color: #3498DB; /* 当前选中的按钮背景颜色 */
-    color: white; /* 当前选中按钮的文字颜色 */
-}
 
 /* 主内容区域布局 */
 .main-content {
@@ -244,6 +241,10 @@ body {
     overflow-x: auto; /* 启用水平滚动条 */
     border-radius: 8px; /* 圆角设计 */
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); /* 阴影效果 */
+}
+.right-side li:hover {
+    background-color: #2980B9; /* 悬停时的背景颜色 */
+    box-shadow: 0 4px 8px rgba(52, 152, 219, 0.3); /* 阴影效果 */
 }
 
 /* 右侧列表项的样式 */
