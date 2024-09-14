@@ -38,6 +38,9 @@ function switchUser(userName) {
   renderUserList();
   updateTitles();
   isSummaryMode = false;
+  console.log('退出汇总模式:', isSummaryMode);
+
+
 }
 
 // 更新用户列表
@@ -107,7 +110,7 @@ function generateData() {
 
 // 更新页面标题
 // 更新页面标题
-function updateTitles(isSummaryMode = false, count = 0) {
+function updateTitles(count = 0) {
   const sortedResultsTitle = document.getElementById('sortedResultsTitle');
   const originalDataTitle = document.getElementById('originalDataTitle');
 
@@ -156,6 +159,7 @@ function renderSortedResults() {
       if (item.value > 0) {  // 只显示累计值大于0的数据
         const li = document.createElement('li');
         li.textContent = `${item.number} ${item.text} - ${item.value}`;
+        li.onclick = () => handleCellClick(item.number);
         sortedResultsElement.appendChild(li);
       }
     });
@@ -368,6 +372,8 @@ function handleSummary() {
   let allOriginalData = []; // 存储所有用户的原始输入数据
   let totalSummaryValue = 0; // 汇总的总值
   isSummaryMode = true; // 标记为汇总模式
+  console.log('进入汇总模式:', isSummaryMode);
+
 
   // 遍历所有用户并累计每个号码的值，同时收集原始输入数据
   Object.entries(users).forEach(([userName, user]) => {
@@ -383,7 +389,7 @@ function handleSummary() {
   });
 
   // 更新汇总标题为所有用户累计值
-  updateTitles(true, totalSummaryValue); // 传递 true 表示汇总模式
+  updateTitles(totalSummaryValue); // 传递 true 表示汇总模式
   renderSummary(summaryData);  // 渲染汇总区域
   renderSortedSummary(summaryData);  // 渲染汇总排序结果
   renderAllOriginalData(allOriginalData);  // 显示所有用户的原始输入数据
@@ -415,6 +421,7 @@ function renderSortedSummary(summaryData) {
     if (item.value > 0) { // 只显示累计值大于0的数据
       const li = document.createElement('li');
       li.textContent = `${item.number} ${item.text} - ${item.value}`;
+      li.onclick = () => handleCellClick(item.number); // 添加点击事件
       sortedResultsElement.appendChild(li);
     }
   });
@@ -491,5 +498,170 @@ function copyClientData() {
   }
 }
 
+// 打开editModal，显示汇总模式下所有用户的号码数据
+function openEditModalWithUserData(number) {
+  const modal = document.getElementById("editModal");
+  const modalTitle = document.getElementById('editModalTitle');
+  const modalContent = document.getElementById('editModalContent');
+
+  modalTitle.textContent = `号码 ${number} 的汇总数据`;
+
+  let content = '<div style="text-align:left;">';
+  Object.entries(users).forEach(([userName, user]) => {
+    const item = user.data.find(i => i.number === number.padStart(2, '0'));
+    if (item && item.value > 0) {
+      content += `
+        <div style="margin-bottom:10px;">
+          <span>${userName} 的值：</span>
+          <input type="number" id="editValue_${userName}" value="${item.value}" style="width:60px;" />
+          <span>吃</span>
+        </div>
+      `;
+    }
+  });
+
+  content += '</div>';
+  modalContent.innerHTML = content;
+
+  // 添加保存按钮
+  modalContent.innerHTML += `<button onclick="saveEditedValues('${number}')">保存</button>`;
+
+  modal.style.display = "block";
+}
+// 单用户模式下打开模态框并编辑号码
+function openModalForSingleUser(number) {
+  const modal = document.getElementById("editModal");
+  const modalTitle = document.getElementById('editModalTitle');
+  const modalContent = document.getElementById('editModalContent');
+
+  const item = users[currentUser].data.find(i => i.number === number.padStart(2, '0'));
+
+  if (item) {
+    const animal = item.text;  // 获取生肖
+    const currentValue = item.value - (item.eaten || 0);  // 当前值 = 总值 - 已吃的数量
+
+    modalTitle.textContent = `编辑号码 ${number} ${animal}`;  // 显示号码和生肖
+
+    modalContent.innerHTML = `
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+        <span>当前值：</span>
+        <span id="currentValueLabel">${currentValue}</span>  <!-- 只展示当前值，不是输入框 -->
+      </div>
+      <div style="display: flex; align-items: center; justify-content: space-between;">
+        <label for="editEaten_${number}" style="margin-right: 10px;">吃的数量：</label>
+        <input type="number" id="editEaten_${number}" value="${item.eaten || 0}" style="width:60px;" 
+               oninput="updateCurrentValue(${number})" />
+      </div>
+      <div style="text-align: center; margin-top: 15px;">
+        <button onclick="saveSingleUserEditedValue('${number}')">保存</button>
+        <button onclick="closeEditModal()">取消</button>
+      </div>
+    `;
+  }
+
+  modal.style.display = "block";
+}
+function updateCurrentValue(number) {
+  const input = document.getElementById(`editEaten_${number}`).value;  // 获取用户输入的吃的数量
+  const item = users[currentUser].data.find(i => i.number === number.toString().padStart(2, '0')); // 转换为字符串再进行查找
+
+  if (item) {
+    const currentValueLabel = document.getElementById('currentValueLabel');
+    const totalValue = item.value;  // 总值
+    const eatenValue = parseInt(input, 10) || 0;  // 如果用户输入无效的值（如空值），则默认吃的数量为0
+
+    // 实时更新当前值的展示（总值 - 吃的数量）
+    const updatedValue = totalValue - eatenValue;
+    currentValueLabel.textContent = updatedValue >= 0 ? updatedValue : 0;  // 确保值不为负数
+  }
+}
+
+function saveSingleUserEditedValue(number) {
+  const input = document.getElementById(`editEaten_${number}`);
+  
+  if (!input) {
+    console.error(`元素 editEaten_${number} 未找到`);
+    return;
+  }
+
+  const eatenValue = parseInt(input.value, 10);  // 获取用户输入的吃的数量并转为数字
+
+  // 找到当前号码对应的对象
+  const item = users[currentUser].data.find(i => i.number === number.padStart(2, '0'));
+
+  if (!item) {
+    console.error(`未找到号码 ${number} 的数据`);
+    return;
+  }
+
+  // 检查吃的数量是否大于当前的值
+  if (eatenValue > item.value) {
+    alert(`吃的数量不能大于当前的值！当前值为 ${item.value}`);
+    return;
+  }
+
+  if (!isNaN(eatenValue)) {
+    item.eaten = eatenValue;  // 更新吃的数量
+    item.value = item.value - eatenValue;  // 更新用户数据中的值
+    console.log(`更新号码 ${number} 的值为 ${item.value}，吃了 ${eatenValue}`);
+    
+    // 重新计算当前用户的 totalCount，只累加 value
+    let totalCount = 0;
+    users[currentUser].data.forEach(dataItem => {
+      totalCount += dataItem.value;
+    });
+    users[currentUser].totalCount = totalCount;  // 更新 totalCount
+    console.log(`新的 totalCount 为 ${totalCount}`);
+
+    // 更新 UI 和保存数据
+    renderSortedResults();  // 重新渲染排序结果
+    saveUserData();  // 保存数据
+    closeEditModal();  // 关闭模态框
+    updateTitles();  // 更新页面标题
+  } else {
+    alert('请输入有效的数字');
+  }
+}
+
+
+
+// 保存编辑后的值 (editModal)
+function saveEditedValues(number) {
+  Object.entries(users).forEach(([userName, user]) => {
+    const input = document.getElementById(`editValue_${userName}`);
+    if (input) {
+      const newValue = parseInt(input.value, 10);
+      const item = user.data.find(i => i.number === number.padStart(2, '0'));
+      if (item && !isNaN(newValue)) {
+        item.value = newValue;  // 更新用户的号码数据
+        console.log(`更新 ${userName} 的号码 ${number} 为 ${newValue}`);
+      }
+    }
+  });
+
+  // 保存数据和更新UI
+  saveUserData();
+  renderSortedResults();  // 重新渲染排序结果
+  closeEditModal();
+}
+
+function closeEditModal() {
+  const modal = document.getElementById("editModal");
+  const modalContent = document.getElementById('editModalContent'); // 这里定义 modalContent
+  modal.style.display = "none";
+  if (modalContent) {
+    modalContent.innerHTML = '';  // 确保 modalContent 存在，并且清空内容
+  }
+}
+
+// 当点击号码单元格时处理
+function handleCellClick(number) {
+  console.log('点击事件触发, 当前是否为汇总模式:', isSummaryMode);
+  if (isSummaryMode) {
+    openEditModalWithUserData(number);
+  } else {
+    openModalForSingleUser(number);
+  }
+}
 
 
