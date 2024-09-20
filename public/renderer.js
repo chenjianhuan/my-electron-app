@@ -6,6 +6,8 @@ let currentUser = null;  // 当前选中的用户
 let isSummaryMode = false; // 确保在文件开头定义
 // 定义赔率变量
 const ODDS = 47;
+
+let isNewinput = true;
 // 以下是其他逻辑代码
 
 
@@ -719,163 +721,153 @@ function saveEditedValues(number, userList) {
 }
 
 // 监听识别输入框的输入
-function setupInputListener(bool) {
+// 定义状态对象和 handleInput 函数，在 setupInputListener 之外
+const inputState = {
+  afterGe: false,
+  currentInput: '',
+  displayContent: '',
+  isSpeaking: false,
+};
 
-  const messageTextarea = document.getElementById('message'); // 获取输入框
-  let afterGe = false; // 标记是否已经输入了“各”
-  let currentInput = ''; // 用于存储当前输入的数字
-  let displayContent = ''; // 用于存储显示的内容
-  let isSpeaking = false; // 标记是否正在进行语音播报
+// handleInput 函数现在使用 inputState 中的状态
+function handleInput(event) {
+  const messageTextarea = document.getElementById('message');
+  let inputValue = messageTextarea.value.replace(/[^0-9=]/g, '');
+  console.log('inputValue', inputValue);
 
-  // 如果传入的参数是 true，则清空所有元素
-  if (bool === true) {
-    messageTextarea.value = ''; // 清空输入框
-    afterGe = false;
-    currentInput = '';
-    displayContent = '';
-    console.log('已清空所有元素 displayContent', displayContent);
+  if (event.inputType === 'deleteContentBackward') {
+    inputState.displayContent = inputState.displayContent.slice(0, -1);
     updateTextarea();
-    messageTextarea.removeEventListener('input');
-
-
-    return; // 直接返回，不再继续监听输入
+    return;
   }
 
-  messageTextarea.addEventListener('input', (event) => {
-    let inputValue = messageTextarea.value.replace(/[^0-9=]/g, ''); // 获取输入框的当前值，并移除非数字和 "="
-    console.log('inputValue', inputValue);
+  let newChar = inputValue.slice(-1);
+  console.log('newChar', newChar);
+  console.log('newChar====displayContent', inputState.displayContent);
 
-    // 检查是否按下了删除键
-    if (event.inputType === 'deleteContentBackward') {
-      displayContent = displayContent.slice(0, -1); // 删除当前输入的最后一个字符
-      updateTextarea(); // 更新输入框显示
+  if (!/^\d$/.test(newChar) && newChar !== '=') {
+    showTemporaryAlert('请输入数字');
+    messageTextarea.value = inputValue.slice(0, -1);
+    console.log('messageTextarea.value====displayContent', inputState.displayContent);
+    return;
+  }
+
+  if (!inputState.afterGe && !inputState.displayContent.includes('各')) {
+    console.log('在输入各之前====displayContent', inputState.displayContent);
+    if (newChar === '=') {
+      inputState.afterGe = true;
+      inputState.displayContent += '各';
+      updateTextarea();
+      if (!inputState.isSpeaking) {
+        speakText('各');
+      }
+      inputState.currentInput = '';
       return;
     }
 
-    // 只获取新输入的部分（添加到 `currentInput`）
-    let newChar = inputValue.slice(-1); // 取出输入的最后一个字符
+    inputState.currentInput += newChar;
+    if (inputState.currentInput.length >= 2) {
+      let num = inputState.currentInput.slice(0, 2);
+      let numValue = parseInt(num, 10);
+
+      if (numValue >= 1 && numValue <= 49) {
+        inputState.displayContent += num + '-';
+        updateTextarea();
+        if (!inputState.isSpeaking) {
+          speakText(num);
+        }
+        inputState.currentInput = '';
+      } else {
+        inputState.currentInput = '';
+        showTemporaryAlert('请输入 01-49 范围内的数字');
+        messageTextarea.value = inputState.displayContent;
+      }
+    }
+  } else {
+    console.log('在输入各之后====displayContent', inputState.displayContent);
+    inputState.currentInput = newChar;
     console.log('newChar', newChar);
-    console.log('newChar====displayContent', displayContent);
 
-    // 检查输入的字符是否是数字或 "="
-    if (!/^\d$/.test(newChar) && newChar !== '=') {
-      // 非数字字符，弹出提示并移除非法字符
-      showTemporaryAlert('请输入数字');
-      messageTextarea.value = inputValue.slice(0, -1); // 更新输入框的值，移除最后一个字符
-      console.log('messageTextarea.value====displayContent', displayContent);
+    let remainingInput = inputState.currentInput.replace(/\D/g, '');
+    console.log('remainingInput', remainingInput);
 
-      return; // 退出当前函数
-    }
+    if (/^[1-9]\d*$/.test(remainingInput)) {
+      inputState.displayContent += remainingInput;
+      console.log('displayContent', inputState.displayContent);
 
-    // 在输入“各”之前
-    if (!afterGe && !displayContent.includes('各')) {
-      console.log('在输入各之前====displayContent', displayContent);
-      // 检查是否输入了 '=' 符号
-      if (newChar === '=') {
-        afterGe = true;
-        // 移除 '=' 符号并更新显示内容
-        displayContent += '各';
-        updateTextarea();
-        if (!isSpeaking) {
-          speakText('各');
-        }
-        currentInput = ''; // 重置当前输入
-        return; // 结束当前函数，避免进一步执行
+      updateTextarea();
+      if (!inputState.isSpeaking) {
+        speakText('下注' + remainingInput);
       }
-
-      // 添加到 currentInput 并检查是否有两位数
-      currentInput += newChar;
-      if (currentInput.length >= 2) {
-        let num = currentInput.slice(0, 2); // 提取前两位数字
-        let numValue = parseInt(num, 10); // 将字符串转换为数字
-
-        // 检查数字是否在 01-49 范围内
-        if (numValue >= 1 && numValue <= 49) {
-          displayContent += num + '-'; // 在数字后面添加 '-'
-          updateTextarea();
-          if (!isSpeaking) {
-            speakText(num);
-          }
-          currentInput = ''; // 重置 currentInput
-          newChar = '';
-        } else {
-          // 非法输入，移除最后一个字符并弹出提示
-          currentInput = ''; // 清空当前输入
-          newChar = '';
-          showTemporaryAlert('请输入 01-49 范围内的数字');
-          messageTextarea.value = displayContent; // 恢复显示内容
-        }
-      }
-    } else {
-      console.log('在输入各之后====displayContent', displayContent);
-      // 在输入“各”之后，只能输入正整数
-      currentInput = newChar; // 重置为新输入的数字，只关注 "各" 后面的数字
-      console.log('newChar', newChar);
-
-      let remainingInput = currentInput.replace(/\D/g, ''); // 移除非数字字符
-      console.log('remainingInput', remainingInput);
-
-      if (/^[1-9]\d*$/.test(remainingInput)) {
-        // 输入的是正整数
-        displayContent += remainingInput; // 追加输入的数字到显示内容
-        console.log('displayContent', displayContent);
-
-        updateTextarea();
-        if (!isSpeaking) {
-          speakText('下注' + remainingInput);
-        }
-
-      } else if (currentInput.length > 0) {
-        // 非法输入，清空当前输入
-        currentInput = '';
-        messageTextarea.value = displayContent; // 恢复显示内容
-        showTemporaryAlert('请输入有效的正整数');
-      }
+    } else if (inputState.currentInput.length > 0) {
+      inputState.currentInput = '';
+      messageTextarea.value = inputState.displayContent;
+      showTemporaryAlert('请输入有效的正整数');
     }
-  });
-
-  // 更新输入框内容的函数
-  function updateTextarea() {
-    messageTextarea.value = displayContent;
-    console.log('updateTextarea======displayContent', displayContent);
-
-  }
-
-  // 语音播报的函数
-  function speakText(text) {
-    if ('speechSynthesis' in window) {
-      isSpeaking = true; // 标记为正在播报
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'zh-CN'; // 设置语言为中文
-      utterance.onend = () => {
-        isSpeaking = false; // 播报结束后，重置状态
-      };
-      window.speechSynthesis.speak(utterance);
-    } else {
-      console.warn('当前浏览器不支持语音合成功能');
-    }
-  }
-
-  // 显示临时提示框
-  function showTemporaryAlert(message) {
-    const alertBox = document.createElement('div');
-    alertBox.textContent = message;
-    alertBox.style.position = 'fixed';
-    alertBox.style.top = '20px';
-    alertBox.style.left = '50%';
-    alertBox.style.transform = 'translateX(-50%)';
-    alertBox.style.backgroundColor = 'red';
-    alertBox.style.color = 'white';
-    alertBox.style.padding = '10px';
-    alertBox.style.borderRadius = '5px';
-    document.body.appendChild(alertBox);
-
-    setTimeout(() => {
-      document.body.removeChild(alertBox);
-    }, 1000);
   }
 }
 
+// setupInputListener 现在负责添加和移除监听器
+function setupInputListener(bool) {
+  const messageTextarea = document.getElementById('message');
+
+  // 使用相同的函数引用移除事件监听器
+  messageTextarea.removeEventListener('input', handleInput);
+
+  if (bool === true) {
+    messageTextarea.value = '';
+    inputState.afterGe = false;
+    inputState.currentInput = '';
+    inputState.displayContent = '';
+    console.log('已清空所有元素 displayContent', inputState.displayContent);
+    updateTextarea();
+    return;
+  }
+
+  // 添加事件监听器，使用相同的函数引用
+  messageTextarea.addEventListener('input', handleInput);
+}
+
+// 更新输入框内容的函数
+function updateTextarea() {
+  const messageTextarea = document.getElementById('message');
+  messageTextarea.value = inputState.displayContent;
+  console.log('updateTextarea======displayContent', inputState.displayContent);
+}
+
+// 语音播报的函数
+function speakText(text) {
+  if ('speechSynthesis' in window) {
+    inputState.isSpeaking = true;
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'zh-CN';
+    utterance.onend = () => {
+      inputState.isSpeaking = false;
+    };
+    window.speechSynthesis.speak(utterance);
+  } else {
+    console.warn('当前浏览器不支持语音合成功能');
+  }
+}
+
+// 显示临时提示框
+function showTemporaryAlert(message) {
+  const alertBox = document.createElement('div');
+  alertBox.textContent = message;
+  alertBox.style.position = 'fixed';
+  alertBox.style.top = '20px';
+  alertBox.style.left = '50%';
+  alertBox.style.transform = 'translateX(-50%)';
+  alertBox.style.backgroundColor = 'red';
+  alertBox.style.color = 'white';
+  alertBox.style.padding = '10px';
+  alertBox.style.borderRadius = '5px';
+  document.body.appendChild(alertBox);
+
+  setTimeout(() => {
+    document.body.removeChild(alertBox);
+  }, 1000);
+}
 
 
 
