@@ -4,7 +4,8 @@ const { ipcRenderer } = require('electron');
 let users = {};  // 用户数据
 let currentUser = null;  // 当前选中的用户
 let isSummaryMode = false; // 确保在文件开头定义
-
+// 定义赔率变量
+const ODDS = 47;
 // 以下是其他逻辑代码
 
 
@@ -30,16 +31,16 @@ function saveUserData() {
 // 切换用户
 function switchUser(userName) {
   currentUser = userName;
+  isSummaryMode = false;
   document.getElementById('currentUser').textContent = `当前用户: ${currentUser}`;
+  updateTitles();
+
   renderSection('section1');
   renderSection('section2');
   renderSortedResults();
   renderOriginalData();
   renderUserList();
-  updateTitles();
-  isSummaryMode = false;
   console.log('退出汇总模式:', isSummaryMode);
-
 
 }
 
@@ -109,7 +110,6 @@ function generateData() {
 }
 
 // 更新页面标题
-// 更新页面标题
 function updateTitles(count = 0) {
   const sortedResultsTitle = document.getElementById('sortedResultsTitle');
   const originalDataTitle = document.getElementById('originalDataTitle');
@@ -145,26 +145,63 @@ function renderSection(sectionId) {
 }
 
 
-
-
-// 渲染排序结果
+// 渲染排序结果（单用户模式和汇总模式通用）
 function renderSortedResults() {
   const sortedResultsElement = document.getElementById('sortedResults');
-  sortedResultsElement.innerHTML = '';  // 清空内容
+  sortedResultsElement.innerHTML = ''; // 清空内容
 
-  if (currentUser && users[currentUser]) {
-    const sortedData = users[currentUser].data.slice().sort((a, b) => b.value - a.value);
+  // 计算 totalCount，根据模式不同选择合适的 totalCount
+  let totalCountSum = 0;
+  let dataToRender = [];
 
-    sortedData.forEach(item => {
-      if (item.value > 0) {  // 只显示累计值大于0的数据
-        const li = document.createElement('li');
-        li.textContent = `${item.number} ${item.text} - ${item.value}`;
-        li.onclick = () => handleCellClick(item.number);
-        sortedResultsElement.appendChild(li);
-      }
+  if (isSummaryMode) {
+    // 汇总模式下，计算所有用户的 totalCount 累加，并使用 summaryData 渲染
+    totalCountSum = Object.values(users).reduce((sum, user) => sum + user.totalCount, 0);
+    dataToRender = generateData().map((item, index) => {
+      // 汇总每个号码的值
+      item.value = Object.values(users).reduce((sum, user) => sum + user.data[index].value, 0);
+      return item;
     });
+  } else if (currentUser && users[currentUser]) {
+    // 单用户模式下，计算当前用户的 totalCount 并使用用户数据渲染
+    totalCountSum = users[currentUser].totalCount;
+    dataToRender = users[currentUser].data.slice();
   }
+
+  // 排序数据并渲染
+  const sortedData = dataToRender.slice().sort((a, b) => b.value - a.value);
+  sortedData.forEach(item => {
+    if (item.value > 0) { // 只显示累计值大于0的数据
+      // 计算盈亏
+      const profitOrLoss = totalCountSum - (item.value * ODDS);
+
+      // 创建列表项
+      const li = document.createElement('li');
+
+      // 创建盈亏数字部分的 span 标签
+      const profitOrLossSpan = document.createElement('span');
+      profitOrLossSpan.textContent = `${profitOrLoss}`;
+
+      // 设置盈亏数字的颜色
+      if (profitOrLoss < 0) {
+        profitOrLossSpan.style.color = 'red'; // 负数为红色
+      } else {
+        profitOrLossSpan.style.color = 'green'; // 正数为绿色
+      }
+
+      // 设置列表项的文本内容
+      li.textContent = `${item.number} ${item.text} - 金额：${item.value} 盈亏：`;
+      li.appendChild(profitOrLossSpan); // 将盈亏数字部分添加到列表项中
+
+      // 添加点击事件
+      li.onclick = () => handleCellClick(item.number);
+      sortedResultsElement.appendChild(li);
+    }
+  });
 }
+
+
+
 
 // 渲染原始数据
 function renderOriginalData() {
@@ -215,8 +252,11 @@ function openModal(modalType) {
     modalTitle.textContent = "粘贴消息进行识别";
     messageTextarea.placeholder = "输入消息，例如: 14.21.13.39.38.30.26.18.33～各20";
     modal.style.display = "block";
+    setupInputListener(); // 在这里调用 setupInputListener
 
   }
+
+
 
 }
 
@@ -258,6 +298,7 @@ function previewMessage() {
 
 
 function confirmEdit() {
+  setupInputListener(true);
   const messageTextarea = document.getElementById('message');
   const resultArea = document.getElementById('result');
 
@@ -291,7 +332,8 @@ function confirmEdit() {
       const match = line.match(/((\d+)[\s.,\-]*)+值[:：]\s*(\d+)/);
 
       if (match) {
-        const allNumbers = match[0].match(/\d+/g);  // 提取出所有的数字
+        // 只提取 "值" 前面的数字部分
+        const allNumbers = match[0].split('值')[0].match(/\d+/g);  // 提取所有号码并去掉空值
         const value = parseInt(match[match.length - 1], 10);  // 获取 "值: " 后的数值
 
         if (!isNaN(value)) {
@@ -330,13 +372,11 @@ function confirmEdit() {
     resultArea.textContent = '';
 
     closeModal(); // 关闭模态框
-
-    // 关闭模态框
-    closeModal();
   } else {
     alert('无法更新数据，请确保当前有选中的用户或识别结果有效');
   }
 }
+
 
 
 // 关闭模态框函数
@@ -391,9 +431,9 @@ function handleSummary() {
   // 更新汇总标题为所有用户累计值
   updateTitles(totalSummaryValue); // 传递 true 表示汇总模式
   renderSummary(summaryData);  // 渲染汇总区域
-  renderSortedSummary(summaryData);  // 渲染汇总排序结果
   renderAllOriginalData(allOriginalData);  // 显示所有用户的原始输入数据
   saveUserData();  // 保存汇总状态
+  renderSortedResults();
 }
 
 
@@ -410,22 +450,6 @@ function renderSummary(summaryData) {
   });
 }
 
-// 渲染汇总排序结果
-function renderSortedSummary(summaryData) {
-  const sortedResultsElement = document.getElementById('sortedResults');
-  sortedResultsElement.innerHTML = ''; // 清空排序结果
-
-  const sortedData = summaryData.slice().sort((a, b) => b.value - a.value);
-
-  sortedData.forEach(item => {
-    if (item.value > 0) { // 只显示累计值大于0的数据
-      const li = document.createElement('li');
-      li.textContent = `${item.number} ${item.text} - ${item.value}`;
-      li.onclick = () => handleCellClick(item.number); // 添加点击事件
-      sortedResultsElement.appendChild(li);
-    }
-  });
-}
 
 // 显示所有用户的原始输入数据
 function renderAllOriginalData(allOriginalData) {
@@ -498,69 +522,7 @@ function copyClientData() {
   }
 }
 
-// 打开editModal，显示汇总模式下所有用户的号码数据
-function openEditModalWithUserData(number) {
-  const modal = document.getElementById("editModal");
-  const modalTitle = document.getElementById('editModalTitle');
-  const modalContent = document.getElementById('editModalContent');
 
-  modalTitle.textContent = `号码 ${number} 的汇总数据`;
-
-  let content = '<div style="text-align:left;">';
-  Object.entries(users).forEach(([userName, user]) => {
-    const item = user.data.find(i => i.number === number.padStart(2, '0'));
-    if (item && item.value > 0) {
-      content += `
-        <div style="margin-bottom:10px;">
-          <span>${userName} 的值：</span>
-          <input type="number" id="editValue_${userName}" value="${item.value}" style="width:60px;" />
-          <span>吃</span>
-        </div>
-      `;
-    }
-  });
-
-  content += '</div>';
-  modalContent.innerHTML = content;
-
-  // 添加保存按钮
-  modalContent.innerHTML += `<button onclick="saveEditedValues('${number}')">保存</button>`;
-
-  modal.style.display = "block";
-}
-// 单用户模式下打开模态框并编辑号码
-function openModalForSingleUser(number) {
-  const modal = document.getElementById("editModal");
-  const modalTitle = document.getElementById('editModalTitle');
-  const modalContent = document.getElementById('editModalContent');
-
-  const item = users[currentUser].data.find(i => i.number === number.padStart(2, '0'));
-
-  if (item) {
-    const animal = item.text;  // 获取生肖
-    const currentValue = item.value - (item.eaten || 0);  // 当前值 = 总值 - 已吃的数量
-
-    modalTitle.textContent = `编辑号码 ${number} ${animal}`;  // 显示号码和生肖
-
-    modalContent.innerHTML = `
-      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
-        <span>当前值：</span>
-        <span id="currentValueLabel">${currentValue}</span>  <!-- 只展示当前值，不是输入框 -->
-      </div>
-      <div style="display: flex; align-items: center; justify-content: space-between;">
-        <label for="editEaten_${number}" style="margin-right: 10px;">吃的数量：</label>
-        <input type="number" id="editEaten_${number}" value="${item.eaten || 0}" style="width:60px;" 
-               oninput="updateCurrentValue(${number})" />
-      </div>
-      <div style="text-align: center; margin-top: 15px;">
-        <button onclick="saveSingleUserEditedValue('${number}')">保存</button>
-        <button onclick="closeEditModal()">取消</button>
-      </div>
-    `;
-  }
-
-  modal.style.display = "block";
-}
 function updateCurrentValue(number) {
   const input = document.getElementById(`editEaten_${number}`).value;  // 获取用户输入的吃的数量
   const item = users[currentUser].data.find(i => i.number === number.toString().padStart(2, '0')); // 转换为字符串再进行查找
@@ -578,7 +540,7 @@ function updateCurrentValue(number) {
 
 function saveSingleUserEditedValue(number) {
   const input = document.getElementById(`editEaten_${number}`);
-  
+
   if (!input) {
     console.error(`元素 editEaten_${number} 未找到`);
     return;
@@ -604,7 +566,7 @@ function saveSingleUserEditedValue(number) {
     item.eaten = eatenValue;  // 更新吃的数量
     item.value = item.value - eatenValue;  // 更新用户数据中的值
     console.log(`更新号码 ${number} 的值为 ${item.value}，吃了 ${eatenValue}`);
-    
+
     // 重新计算当前用户的 totalCount，只累加 value
     let totalCount = 0;
     users[currentUser].data.forEach(dataItem => {
@@ -618,6 +580,7 @@ function saveSingleUserEditedValue(number) {
     saveUserData();  // 保存数据
     closeEditModal();  // 关闭模态框
     updateTitles();  // 更新页面标题
+    renderUserList();
   } else {
     alert('请输入有效的数字');
   }
@@ -654,14 +617,281 @@ function closeEditModal() {
   }
 }
 
-// 当点击号码单元格时处理
+// 处理单元格点击，调用通用模态框函数
 function handleCellClick(number) {
+  return;
   console.log('点击事件触发, 当前是否为汇总模式:', isSummaryMode);
   if (isSummaryMode) {
-    openEditModalWithUserData(number);
+    // 汇总模式，传入所有用户
+    const userList = Object.keys(users);
+    openEditModal(number, userList);
   } else {
-    openModalForSingleUser(number);
+    // 单用户模式，只传入当前用户
+    openEditModal(number, [currentUser]);
   }
 }
+
+// 通用的模态框函数，接受号码和用户列表
+function openEditModal(number, userList) {
+  const modal = document.getElementById("editModal");
+  const modalTitle = document.getElementById('editModalTitle');
+  const modalContent = document.getElementById('editModalContent');
+
+  modalTitle.textContent = `号码 ${number} 的数据详情`;
+
+  // 清空之前的内容
+  let content = '<div style="text-align:left;">';
+
+  userList.forEach(user => {
+    const item = users[user].data.find(i => i.number === number.padStart(2, '0'));
+    if (item) {
+      const animal = item.text; // 获取生肖
+      const currentValue = item.value - (item.eaten || 0); // 当前值 = 总值 - 已吃的数量
+
+      // 为每个用户添加当前值和输入框
+      content += `
+        <div style="margin-bottom: 10px;">
+          <span>${user} 的值：</span>
+          <span id="currentValueLabel_${user}">${currentValue}</span> <!-- 显示当前值 -->
+        </div>
+        <div style="display: flex; align-items: center; margin-bottom: 10px;">
+          <label for="editEaten_${user}" style="margin-right: 10px;">吃的数量：</label>
+          <input type="number" id="editEaten_${user}" value="${item.eaten || 0}" style="width:60px; margin-left: 10px;" 
+                 oninput="updateCurrentValue('${user}', ${number})" />
+        </div>
+      `;
+    }
+  });
+
+  content += '</div>';
+  modalContent.innerHTML = content;
+
+  // 添加保存按钮
+  modalContent.innerHTML += `<button onclick="saveEditedValues('${number}', ${JSON.stringify(userList)})">保存</button>`;
+
+  modal.style.display = "block";
+}
+
+// 更新当前值的函数，适用于通用模态框
+function updateCurrentValue(user, number) {
+  const input = document.getElementById(`editEaten_${user}`).value; // 获取用户输入的吃的数量
+  const item = users[user].data.find(i => i.number === number.toString().padStart(2, '0')); // 查找用户的号码数据
+
+  if (item) {
+    const currentValueLabel = document.getElementById(`currentValueLabel_${user}`);
+    const totalValue = item.value; // 总值
+    const eatenValue = parseInt(input, 10) || 0; // 如果用户输入无效的值（如空值），则默认吃的数量为0
+
+    // 实时更新当前值的展示（总值 - 吃的数量）
+    const updatedValue = totalValue - eatenValue;
+    currentValueLabel.textContent = updatedValue >= 0 ? updatedValue : 0; // 确保值不为负数
+  }
+}
+
+
+// 保存编辑后的值 (editModal)
+function saveEditedValues(number, userList) {
+  userList.forEach(user => {
+    const input = document.getElementById(`editEaten_${user}`);
+    if (input) {
+      const eatenValue = parseInt(input.value, 10); // 获取用户输入的吃的数量
+      const item = users[user].data.find(i => i.number === number.padStart(2, '0'));
+
+      if (item && !isNaN(eatenValue)) {
+        // 检查吃的数量是否大于当前的值
+        if (eatenValue > item.value) {
+          alert(`${user} 的吃的数量不能大于当前的值！当前值为 ${item.value}`);
+          return;
+        }
+
+        // 更新用户的数据
+        item.eaten = eatenValue;
+        item.value = item.value - eatenValue; // 更新用户数据中的值
+        console.log(`更新 ${user} 的号码 ${number} 的值为 ${item.value}，吃了 ${eatenValue}`);
+      }
+    }
+  });
+
+  // 保存数据和更新UI
+  saveUserData();
+  renderSortedResults(); // 重新渲染排序结果
+  closeEditModal();
+}
+
+// 监听识别输入框的输入
+function setupInputListener(bool) {
+
+  const messageTextarea = document.getElementById('message'); // 获取输入框
+  let afterGe = false; // 标记是否已经输入了“各”
+  let currentInput = ''; // 用于存储当前输入的数字
+  let displayContent = ''; // 用于存储显示的内容
+  let isSpeaking = false; // 标记是否正在进行语音播报
+
+  // 如果传入的参数是 true，则清空所有元素
+  if (bool === true) {
+    messageTextarea.value = ''; // 清空输入框
+    afterGe = false;
+    currentInput = '';
+    displayContent = '';
+    console.log('已清空所有元素 displayContent', displayContent);
+    updateTextarea();
+    messageTextarea.removeEventListener('input');
+
+
+    return; // 直接返回，不再继续监听输入
+  }
+
+  messageTextarea.addEventListener('input', (event) => {
+    let inputValue = messageTextarea.value.replace(/[^0-9=]/g, ''); // 获取输入框的当前值，并移除非数字和 "="
+    console.log('inputValue', inputValue);
+
+    // 检查是否按下了删除键
+    if (event.inputType === 'deleteContentBackward') {
+      displayContent = displayContent.slice(0, -1); // 删除当前输入的最后一个字符
+      updateTextarea(); // 更新输入框显示
+      return;
+    }
+
+    // 只获取新输入的部分（添加到 `currentInput`）
+    let newChar = inputValue.slice(-1); // 取出输入的最后一个字符
+    console.log('newChar', newChar);
+    console.log('newChar====displayContent', displayContent);
+
+    // 检查输入的字符是否是数字或 "="
+    if (!/^\d$/.test(newChar) && newChar !== '=') {
+      // 非数字字符，弹出提示并移除非法字符
+      showTemporaryAlert('请输入数字');
+      messageTextarea.value = inputValue.slice(0, -1); // 更新输入框的值，移除最后一个字符
+      console.log('messageTextarea.value====displayContent', displayContent);
+
+      return; // 退出当前函数
+    }
+
+    // 在输入“各”之前
+    if (!afterGe && !displayContent.includes('各')) {
+      console.log('在输入各之前====displayContent', displayContent);
+      // 检查是否输入了 '=' 符号
+      if (newChar === '=') {
+        afterGe = true;
+        // 移除 '=' 符号并更新显示内容
+        displayContent += '各';
+        updateTextarea();
+        if (!isSpeaking) {
+          speakText('各');
+        }
+        currentInput = ''; // 重置当前输入
+        return; // 结束当前函数，避免进一步执行
+      }
+
+      // 添加到 currentInput 并检查是否有两位数
+      currentInput += newChar;
+      if (currentInput.length >= 2) {
+        let num = currentInput.slice(0, 2); // 提取前两位数字
+        let numValue = parseInt(num, 10); // 将字符串转换为数字
+
+        // 检查数字是否在 01-49 范围内
+        if (numValue >= 1 && numValue <= 49) {
+          displayContent += num + '-'; // 在数字后面添加 '-'
+          updateTextarea();
+          if (!isSpeaking) {
+            speakText(num);
+          }
+          currentInput = ''; // 重置 currentInput
+          newChar = '';
+        } else {
+          // 非法输入，移除最后一个字符并弹出提示
+          currentInput = ''; // 清空当前输入
+          newChar = '';
+          showTemporaryAlert('请输入 01-49 范围内的数字');
+          messageTextarea.value = displayContent; // 恢复显示内容
+        }
+      }
+    } else {
+      console.log('在输入各之后====displayContent', displayContent);
+      // 在输入“各”之后，只能输入正整数
+      currentInput = newChar; // 重置为新输入的数字，只关注 "各" 后面的数字
+      console.log('newChar', newChar);
+
+      let remainingInput = currentInput.replace(/\D/g, ''); // 移除非数字字符
+      console.log('remainingInput', remainingInput);
+
+      if (/^[1-9]\d*$/.test(remainingInput)) {
+        // 输入的是正整数
+        displayContent += remainingInput; // 追加输入的数字到显示内容
+        console.log('displayContent', displayContent);
+
+        updateTextarea();
+        if (!isSpeaking) {
+          speakText('下注' + remainingInput);
+        }
+
+      } else if (currentInput.length > 0) {
+        // 非法输入，清空当前输入
+        currentInput = '';
+        messageTextarea.value = displayContent; // 恢复显示内容
+        showTemporaryAlert('请输入有效的正整数');
+      }
+    }
+  });
+
+  // 更新输入框内容的函数
+  function updateTextarea() {
+    messageTextarea.value = displayContent;
+    console.log('updateTextarea======displayContent', displayContent);
+
+  }
+
+  // 语音播报的函数
+  function speakText(text) {
+    if ('speechSynthesis' in window) {
+      isSpeaking = true; // 标记为正在播报
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'zh-CN'; // 设置语言为中文
+      utterance.onend = () => {
+        isSpeaking = false; // 播报结束后，重置状态
+      };
+      window.speechSynthesis.speak(utterance);
+    } else {
+      console.warn('当前浏览器不支持语音合成功能');
+    }
+  }
+
+  // 显示临时提示框
+  function showTemporaryAlert(message) {
+    const alertBox = document.createElement('div');
+    alertBox.textContent = message;
+    alertBox.style.position = 'fixed';
+    alertBox.style.top = '20px';
+    alertBox.style.left = '50%';
+    alertBox.style.transform = 'translateX(-50%)';
+    alertBox.style.backgroundColor = 'red';
+    alertBox.style.color = 'white';
+    alertBox.style.padding = '10px';
+    alertBox.style.borderRadius = '5px';
+    document.body.appendChild(alertBox);
+
+    setTimeout(() => {
+      document.body.removeChild(alertBox);
+    }, 1000);
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 

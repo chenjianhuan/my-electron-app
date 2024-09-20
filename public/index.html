@@ -1,23 +1,21 @@
 <!DOCTYPE html>
 <html lang="zh">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>消息统计</title>
     <link rel="stylesheet" href="styles.css">
 </head>
-
 <body>
     <div class="top-menu">
+        <button onclick="handleButtonClick(this)">收码详情</button>
+        <button onclick="handleButtonClick(this)">吃码详情</button>
         <button onclick="openModal('recognize')">接单识别文本</button>
         <button onclick="handleSummary()">订单汇总</button>
-        <button onclick="handleButtonClick(this)">吃码上报</button>
         <button onclick="copyClientData()">复制客户订单</button>
         <button onclick="clearUserData()">清空数据</button>
         <button onclick="handleButtonClick(this)">对奖</button>
         <button onclick="handleButtonClick(this)">关于软件</button>
-
     </div>
 
     <div class="main-content">
@@ -52,30 +50,9 @@
         <div class="modal-content">
             <span class="close" onclick="closeModal()">&times;</span>
             <h2 id="modalTitle">粘贴消息进行识别</h2>
-            <!-- <p><span>当前用户：</span> </p> -->
             <textarea id="message" rows="4" cols="50" placeholder="输入消息，例如: 14.21.13.39.38.30.26.18.33～各20"></textarea>
             <button class="recognize-button" onclick="previewMessage()">识别</button>
             <pre id="result"></pre>
-            <button class="confirm-button" onclick="confirmEdit()">确认</button>
-            <button class="cancel-button" onclick="closeModal()">取消</button>
-        </div>
-    </div>
-
-    <div class="modal-content">
-        <span class="close" onclick="closeModal()">&times;</span>
-        <h2 id="modalTitle">粘贴消息进行识别</h2>
-        <p><span>当前用户：</span> </p>
-
-        <!-- 输入框和识别按钮并列 -->
-        <div style="display: flex; align-items: flex-start;">
-            <textarea id="message" rows="4" cols="50" placeholder="输入消息，例如: 14.21.13.39.38.30.26.18.33～各20"></textarea>
-            <button class="recognize-button" onclick="previewMessage()">识别</button>
-        </div>
-
-        <pre id="result"></pre>
-
-        <!-- 确认和取消按钮并列，居中对齐 -->
-        <div style="text-align: center; margin-top: 10px;">
             <button class="confirm-button" onclick="confirmEdit()">确认</button>
             <button class="cancel-button" onclick="closeModal()">取消</button>
         </div>
@@ -89,28 +66,14 @@
         </div>
     </div>
 
-    <div style="display: flex; align-items: center; justify-content: space-between;">
-        <label for="currentValueLabel" style="margin-right: 10px;">当前值：</label>
-        <span id="currentValueLabel">${item.value}</span> <!-- 当前值的展示，不是输入框 -->
-      </div>
-      
-      <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 10px;">
-        <label for="editEaten_${number}" style="margin-right: 10px;">吃的数量：</label>
-        <input type="number" id="editEaten_${number}" value="${item.eaten || 0}" style="width:60px;" 
-               oninput="updateCurrentValue('${number}')" />
-      </div>
-      
-    <div style="text-align: center; margin-top: 15px;">
-        <button onclick="saveSingleUserEditedValue('${number}')">保存</button>
-        <button onclick="closeEditModal()">取消</button>
+    <!-- 输入框和显示内容的容器 -->
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 20px;">
+        <input type="text" id="inputField" />
+        <div id="display" style="border: 1px solid #000; padding: 10px; min-height: 20px; width: 200px;"></div>
     </div>
-    Ï<div style="display: flex; align-items: center; justify-content: space-between;">
-
-      
-
-
+    
 
     <script src="./renderer.js"></script>
-</body>
 
+</body>
 </html>

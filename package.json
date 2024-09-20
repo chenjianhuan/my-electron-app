@@ -1,18 +1,38 @@
 {
   "name": "my-electron-app",
   "version": "1.0.0",
-  "description": "",
+  "description": "A sample Electron application.",
   "main": "src/main/main.js",
   "dependencies": {
-    "antd": "^5.20.5",
-    "sqlite3": "^5.1.7"
+    "antd": "^5.20.5"
   },
-  "devDependencies": {},
+  "devDependencies": {
+    "electron": "^25.9.8",
+    "electron-builder": "^24.13.3",
+    "electron-rebuild": "^3.2.9"
+  },
   "scripts": {
     "start": "electron .",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dist": "electron-builder",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "build": {
+    "appId": "com.my-electron-app",
+    "productName": "MyElectronApp",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
   },
   "keywords": [],
-  "author": "",
+  "author": "Your Name",
   "license": "ISC"
 }

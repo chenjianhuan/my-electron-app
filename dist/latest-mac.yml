@@ -1,0 +1,11 @@
+version: 1.0.0
+files:
+  - url: MyElectronApp-1.0.0-mac.zip
+    sha512: nZjTLsHQyxG9bPIorW0GDKf0gYKwpPJjPksnrri4Uke0KZze3w8scZfvp+lmE0Tc5vIwHU85GYRZCIY7o6f3Ng==
+    size: 101250264
+  - url: MyElectronApp-1.0.0.dmg
+    sha512: Z5VA8zfgSLYgeTSqHr1wA1UTqnCOT2E2/t5fL9X1NE/XS7yk6WaaBv7m+Q4rpz9ZiWVpmCtQGu8XyRRoyqWu9w==
+    size: 104796086
+path: MyElectronApp-1.0.0-mac.zip
+sha512: nZjTLsHQyxG9bPIorW0GDKf0gYKwpPJjPksnrri4Uke0KZze3w8scZfvp+lmE0Tc5vIwHU85GYRZCIY7o6f3Ng==
+releaseDate: '2024-09-15T06:40:56.644Z'

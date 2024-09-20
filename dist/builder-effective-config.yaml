@@ -1,0 +1,13 @@
+directories:
+  output: dist
+  buildResources: build
+appId: com.my-electron-app
+productName: MyElectronApp
+files:
+  - filter:
+      - src/**/*
+      - package.json
+win:
+  target:
+    - nsis
+electronVersion: 25.9.8

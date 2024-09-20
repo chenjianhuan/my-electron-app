@@ -459,3 +459,9 @@ textarea#message {
 textarea#message::placeholder {
     color: #A0A0A0; /* 占位符颜色 */
 }
+#display {
+    border: 1px solid #000;
+    padding: 10px;
+    min-height: 20px;
+    margin-top: 10px;
+}
