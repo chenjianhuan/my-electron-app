@@ -4,7 +4,7 @@ const { ipcRenderer } = require('electron');
 let users = {};  // 用户数据
 let currentUser = null;  // 当前选中的用户
 let isSummaryMode = false; // 确保在文件开头定义
-// 定义赔率变量
+
 const ODDS = 47;
 
 let isNewinput = true;
@@ -34,7 +34,7 @@ function saveUserData() {
 function switchUser(userName) {
   currentUser = userName;
   isSummaryMode = false;
-  document.getElementById('currentUser').textContent = `当前用户: ${currentUser}`;
+  document.getElementById('currentUser').textContent = `当前网友: ${currentUser}`;
   updateTitles();
 
   renderSection('section1');
@@ -73,16 +73,29 @@ function renderUserList() {
 function deleteUser(userName) {
   if (confirm(`确定要删除用户 ${userName} 及其所有数据吗？`)) {
     delete users[userName];
-    if (currentUser === userName) {
+
+    // 检查是否有其他用户存在
+    const remainingUsers = Object.keys(users);
+
+    if (remainingUsers.length > 0) {
+      // 如果当前被删除的用户是当前网友，自动切换为排行第一的用户
+      if (currentUser === userName || currentUser === null) {
+        const sortedUsers = remainingUsers.sort((a, b) => (users[b].totalCount || 0) - (users[a].totalCount || 0));
+        switchUser(sortedUsers[0]); // 切换为排行第一的用户
+      }
+    } else {
+      // 如果没有剩余用户，清空页面
       currentUser = null;
-      document.getElementById('currentUser').textContent = "当前用户: 无";
+      document.getElementById('currentUser').textContent = "当前网友: 无";
       document.getElementById('section1').innerHTML = '';
       document.getElementById('section2').innerHTML = '';
     }
+
     renderUserList();
     saveUserData();
   }
 }
+
 
 // 添加新用户
 function addUser() {
@@ -101,15 +114,34 @@ function addUser() {
 
 // 数据生成（从1到49编号）
 function generateData() {
-  const animals = ['龙', '虎', '兔', '鼠', '蛇', '猪', '马', '羊', '猴', '鸡', '狗', '猪'];
+  const animalMap = {
+    '鼠': [5, 17, 29, 41],
+    '牛': [4, 16, 28, 40],
+    '虎': [3, 15, 27, 39],
+    '兔': [2, 14, 26, 38],
+    '龙': [1, 13, 25, 37, 49],
+    '蛇': [12, 24, 36, 48],
+    '马': [11, 23, 35, 47],
+    '羊': [10, 22, 34, 46],
+    '猴': [9, 21, 33, 45],
+    '鸡': [8, 20, 32, 44],
+    '狗': [7, 19, 31, 43],
+    '猪': [6, 18, 30, 42]
+  };
+
   const data = [];
-  for (let i = 1; i <= 49; i++) {
-    const number = i < 10 ? `0${i}` : `${i}`;
-    const text = animals[i % animals.length];
-    data.push({ number, text, value: 0 });  // 初始值为0
+
+  // 遍历每个生肖和它对应的数字列表
+  for (const [animal, numbers] of Object.entries(animalMap)) {
+    numbers.forEach(number => {
+      const formattedNumber = number < 10 ? `0${number}` : `${number}`;  // 格式化为两位数
+      data.push({ number: formattedNumber, text: animal, value: 0 });  // 初始值为0
+    });
   }
+
   return data;
 }
+
 
 // 更新页面标题
 function updateTitles(count = 0) {
@@ -118,15 +150,15 @@ function updateTitles(count = 0) {
 
   if (isSummaryMode) {
     // 汇总模式时显示所有用户的汇总数据
-    sortedResultsTitle.textContent = `所有用户累计值排序 (总: ${count})：`; // 显示汇总的总值
-    originalDataTitle.textContent = `所有用户的原始输入数据：`;
+    sortedResultsTitle.textContent = `所有网友累计值排序 (总: ${count})：`; // 显示汇总的总值
+    originalDataTitle.textContent = `所有网友的原始输入数据：`;
   } else if (currentUser) {
     // 正常模式时显示当前用户数据
     sortedResultsTitle.textContent = `${currentUser} 累计值排序 (总: ${users[currentUser].totalCount || 0})`;
     originalDataTitle.textContent = `${currentUser} 原始输入数据：`;
   } else {
     // 没有选择用户时的默认标题
-    sortedResultsTitle.textContent = '没有选择用户';
+    sortedResultsTitle.textContent = '没有选择网友';
     originalDataTitle.textContent = '没有原始输入数据';
   }
 }
@@ -136,15 +168,46 @@ function renderSection(sectionId) {
   const section = document.getElementById(sectionId);
   section.innerHTML = '';  // 清空内容
 
-  if (currentUser && users[currentUser]) {
-    users[currentUser].data.forEach(item => {
+  if (sectionId === 'section1') {
+    // section1 显示当前用户的数据
+    if (currentUser && users[currentUser]) {
+      // 对当前用户的数据按照 number 从小到大排序
+      const sortedData = users[currentUser].data.slice().sort((a, b) => parseInt(a.number) - parseInt(b.number));
+
+      sortedData.forEach(item => {
+        const div = document.createElement('div');
+        div.classList.add('item');
+        div.innerHTML = `<span>${item.number} ${item.text}</span> <span>${item.value}</span>`;
+        section.appendChild(div);
+      });
+    }
+  } else if (sectionId === 'section2') {
+    // section2 显示所有用户的汇总数据
+    const summaryData = {};  // 用于存储汇总后的数据
+
+    // 遍历所有用户的数据
+    Object.values(users).forEach(user => {
+      user.data.forEach(item => {
+        if (!summaryData[item.number]) {
+          summaryData[item.number] = { text: item.text, value: 0 };
+        }
+        // 累加相同号码的值
+        summaryData[item.number].value += item.value;
+      });
+    });
+
+    // 将汇总后的数据进行排序并渲染到页面
+    const sortedSummaryData = Object.entries(summaryData).sort((a, b) => parseInt(a[0]) - parseInt(b[0]));
+
+    sortedSummaryData.forEach(([number, data]) => {
       const div = document.createElement('div');
       div.classList.add('item');
-      div.innerHTML = `<span>${item.number} ${item.text}</span> <span>${item.value}</span>`;
+      div.innerHTML = `<span>${number} ${data.text}</span> <span>${data.value}</span>`;
       section.appendChild(div);
     });
   }
 }
+
 
 
 // 渲染排序结果（单用户模式和汇总模式通用）
@@ -192,7 +255,7 @@ function renderSortedResults() {
       }
 
       // 设置列表项的文本内容
-      li.textContent = `${item.number} ${item.text} - 金额：${item.value} 盈亏：`;
+      li.textContent = `${item.number} ${item.text} - 积分：${item.value} 盈亏：`;
       li.appendChild(profitOrLossSpan); // 将盈亏数字部分添加到列表项中
 
       // 添加点击事件
@@ -202,24 +265,96 @@ function renderSortedResults() {
   });
 }
 
-
-
-
+// 渲染原始数据
 // 渲染原始数据
 function renderOriginalData() {
   const originalDataElement = document.getElementById('originalDataList');
   originalDataElement.innerHTML = '';  // 清空内容
 
   if (currentUser && users[currentUser]) {
-    users[currentUser].originalData.forEach(data => {
+    users[currentUser].originalData.forEach((data, idx) => {
       const li = document.createElement('li');
-      li.innerHTML = data.replace(/\n/g, "<br>"); // 将换行符替换为 <br> 标签，实现换行
-      li.style.whiteSpace = 'pre-wrap'; // 保证内容中的换行符生效
-      li.style.textAlign = 'left'; // 设置内容靠左对齐
-      originalDataElement.appendChild(li);
+      li.innerHTML = data.replace(/\n/g, "<br>"); // 显示原始数据
+      li.classList.add('original-data-list'); // 为 li 添加类
+      li.style.whiteSpace = 'pre-wrap'; // 保证换行
+      li.style.textAlign = 'left';
+
+      // 创建删除按钮
+      const deleteButton = document.createElement('button');
+      deleteButton.textContent = '删';
+      deleteButton.classList.add('delete-button'); // 为按钮添加样式类
+      deleteButton.onclick = () => {
+        if (confirm(`确认删除此条数据: ${data} 吗？`)) {
+          deleteOriginalData(data, idx);  // 删除原始数据并更新用户值
+        }
+      };
+
+      li.appendChild(deleteButton); // 将删除按钮添加到 li
+      originalDataElement.appendChild(li); // 将 li 添加到列表中
     });
   }
 }
+
+
+// 删除原始数据并更新用户号码值
+function deleteOriginalData(originalData, index) {
+  // 提取号码和对应的值，例如 "11 22 33 值：55"
+  const match = originalData.match(/((\d+)[\s.,\-]*)+值[:：]\s*(\d+)/);
+  
+  if (match) {
+    const allNumbers = match[0].split('值')[0].match(/\d+/g);  // 提取所有号码
+    const valueToRemove = parseInt(match[match.length - 1], 10);  // 提取值
+
+    if (!isNaN(valueToRemove)) {
+      // 更新用户的号码值
+      allNumbers.forEach(number => {
+        const item = users[currentUser].data.find(i => i.number === number.padStart(2, '0'));
+        if (item) {
+          item.value -= valueToRemove;  // 减去该值
+          if (item.value < 0) item.value = 0;  // 防止出现负值
+        }
+      });
+    }
+
+    // 删除原始数据
+    users[currentUser].originalData.splice(index, 1);
+
+    // 重新计算总值
+    let totalCount = 0;
+    users[currentUser].data.forEach(item => {
+      totalCount += item.value;
+    });
+    users[currentUser].totalCount = totalCount;
+
+    // 更新UI
+    renderUserList();
+    renderSortedResults();
+    renderOriginalData();
+    updateTitles();
+    renderSection('section1');
+    renderSection('section2');
+    saveUserData();
+  }
+}
+
+
+
+// 重新计算当前用户的数据
+function recalculateUserData(userName) {
+  if (users[userName]) {
+    let totalCount = 0;
+
+    // 重新计算用户的每个号码的值和总计值
+    users[userName].data.forEach(item => {
+      // 假设每条数据关联了某个值，这里可以根据业务逻辑来重新计算
+      totalCount += item.value; // 重新计算总值
+    });
+
+    // 更新用户的总计值
+    users[userName].totalCount = totalCount;
+  }
+}
+
 
 
 
@@ -228,7 +363,7 @@ function clearUserData() {
   if (confirm('确定要清空所有用户的账号和数据吗？')) {
     users = {};  // 清空整个 users 对象
     currentUser = null;  // 清空当前用户
-    document.getElementById('currentUser').textContent = "当前用户: 无";
+    document.getElementById('currentUser').textContent = "当前网友: 无";
     renderUserList();
     document.getElementById('section1').innerHTML = '';  // 清空表格显示
     document.getElementById('section2').innerHTML = '';
@@ -257,13 +392,7 @@ function openModal(modalType) {
     setupInputListener(); // 在这里调用 setupInputListener
 
   }
-
-
-
 }
-
-
-
 
 function previewMessage() {
   // 如果处于汇总模式，则不允许操作
@@ -367,6 +496,8 @@ function confirmEdit() {
     renderOriginalData();
     updateTitles();
     renderUserList();
+    renderSection('section1');
+    renderSection('section2');
     saveUserData();
 
     // 清空输入框和识别结果
@@ -791,14 +922,12 @@ function handleInput(event) {
     let remainingInput = inputState.currentInput.replace(/\D/g, '');
     console.log('remainingInput', remainingInput);
 
-    if (/^[1-9]\d*$/.test(remainingInput)) {
+    if (/^[0-9]\d*$/.test(remainingInput)) {
       inputState.displayContent += remainingInput;
       console.log('displayContent', inputState.displayContent);
 
       updateTextarea();
-      if (!inputState.isSpeaking) {
-        speakText('下注' + remainingInput);
-      }
+
     } else if (inputState.currentInput.length > 0) {
       inputState.currentInput = '';
       messageTextarea.value = inputState.displayContent;

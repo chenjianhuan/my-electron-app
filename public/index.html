@@ -3,40 +3,36 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>消息统计</title>
+    <title>网友消息统计</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
     <div class="top-menu">
-        <button onclick="handleButtonClick(this)">收码详情</button>
-        <button onclick="handleButtonClick(this)">吃码详情</button>
-        <button onclick="openModal('recognize')">接单识别文本</button>
-        <button onclick="handleSummary()">订单汇总</button>
-        <button onclick="copyClientData()">复制客户订单</button>
-        <button onclick="clearUserData()">清空数据</button>
-        <button onclick="handleButtonClick(this)">对奖</button>
+        <button onclick="openModal('recognize')">识别网友消息</button>
+        <button onclick="handleSummary()">所有网友消息汇总</button>
+        <button onclick="copyClientData()">复制网友统计消息</button>
+        <button onclick="clearUserData()">清空所有网友数据</button>
         <button onclick="handleButtonClick(this)">关于软件</button>
     </div>
 
     <div class="main-content">
         <div class="user-list">
-            <h3>用户列表</h3>
-            <input type="text" id="newUserName" placeholder="输入新用户名">
-            <button onclick="addUser()">添加用户</button>
+            <h3>网友列表</h3>
+            <input type="text" id="newUserName" placeholder="输入新网友用户名">
+            <button onclick="addUser()">添加网友</button>
             <ul id="userList"></ul>
         </div>
 
         <div class="left-side">
-            <h3 id="currentUser">当前用户: 无</h3>
-            <div class="title">散码汇总</div>
+            <h3 id="currentUser">当前网友: 无</h3>
             <div class="section" id="section1"></div>
 
-            <div class="title">汇总</div>
+            <div class="title">所有网友汇总</div>
             <div class="section" id="section2"></div>
         </div>
 
         <div class="right-side">
-            <h2 id="sortedResultsTitle">所有用户累计值排序：</h2>
+            <h2 id="sortedResultsTitle">所有网友累计值排序：</h2>
             <ul id="sortedResults"></ul>
 
             <div class="original-data">

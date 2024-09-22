@@ -465,3 +465,45 @@ textarea#message::placeholder {
     min-height: 20px;
     margin-top: 10px;
 }
+
+/* li 项的样式，使用 flex 布局 */
+.original-data-list {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px; /* 调整内边距 */
+    border-radius: 10px;
+    border: 1px solid #ccc;
+    margin-bottom: 10px;
+    background-color: #007bff; /* 蓝色背景 */
+    color: white; /* 白色文字 */
+    min-height: 40px;
+  }
+  
+  /* 文本部分 */
+  .original-data-list span {
+    flex-grow: 1; /* 文本占据剩余空间 */
+    white-space: nowrap; /* 不换行 */
+    overflow: hidden; /* 超出部分隐藏 */
+    text-overflow: ellipsis; /* 超出显示省略号 */
+  }
+  
+  /* 删除按钮的样式 */
+  .delete-button {
+    flex-shrink: 0; /* 防止按钮缩小 */
+    width: 50px;
+    height: 30px;
+    background-color: red;
+    color: white;
+    border: none;
+    cursor: pointer;
+    border-radius: 5px;
+    margin-left: 10px; /* 确保按钮与文本有间距 */
+  }
+  
+  /* 删除按钮的悬停效果 */
+  .delete-button:hover {
+    background-color: darkred;
+  }
+  
+  
