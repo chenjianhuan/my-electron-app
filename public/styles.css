@@ -506,4 +506,7 @@ textarea#message::placeholder {
     background-color: darkred;
   }
   
-  
+
+  .modal-content p {
+    font-size: 14px; /* 调整正文字体大小 */
+}

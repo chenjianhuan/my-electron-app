@@ -1,5 +1,8 @@
 // public/renderer.js
 const { ipcRenderer } = require('electron');
+const fs = require('fs');
+const path = require('path');
+const installDateFilePath = path.join(__dirname, 'installDate.txt');
 
 let users = {};  // 用户数据
 let currentUser = null;  // 当前选中的用户
@@ -7,9 +10,14 @@ let isSummaryMode = false; // 确保在文件开头定义
 
 const ODDS = 47;
 
+// 积分系统仅用于娱乐排行，无任何经济价值
+let userPoints = 0; // 积分初始化
+
+
 let isNewinput = true;
 // 以下是其他逻辑代码
 
+console.log('renderer.js 已加载');
 
 // 页面加载时请求主进程加载用户数据
 ipcRenderer.send('load-user-data');
@@ -300,7 +308,7 @@ function renderOriginalData() {
 function deleteOriginalData(originalData, index) {
   // 提取号码和对应的值，例如 "11 22 33 值：55"
   const match = originalData.match(/((\d+)[\s.,\-]*)+值[:：]\s*(\d+)/);
-  
+
   if (match) {
     const allNumbers = match[0].split('值')[0].match(/\d+/g);  // 提取所有号码
     const valueToRemove = parseInt(match[match.length - 1], 10);  // 提取值
@@ -998,10 +1006,41 @@ function showTemporaryAlert(message) {
   }, 1000);
 }
 
+document.addEventListener('DOMContentLoaded', () => {
+  const userAgreementModal = document.getElementById('userAgreementModal');
+  const agreeButton = document.getElementById('agreeButton');
+  const legalNotice = document.getElementById('legalNotice'); // 获取法律声明元素
 
+  // 检查是否第一次登录
+  if (!localStorage.getItem('userAgreed')) {
+    userAgreementModal.style.display = 'block';
+    document.body.classList.add('modal-open'); // 阻止页面滚动
+  } else {
+    legalNotice.parentNode.removeChild(legalNotice);
+  }
 
+  // 用户同意协议
+  agreeButton.addEventListener('click', () => {
+    localStorage.setItem('userAgreed', 'true');
+    userAgreementModal.style.display = 'none';
+    legalNotice.parentNode.removeChild(legalNotice);
+    document.body.classList.remove('modal-open'); // 恢复页面滚动
+  });
+});
 
+// 显示关于软件弹窗
+function openAboutModal() {
+  const aboutModal = document.getElementById('aboutSoftwareModal');
+  aboutModal.style.display = 'block';
+}
 
+// 关闭关于软件弹窗
+function closeAboutModal() {
+  const aboutModal = document.getElementById('aboutSoftwareModal');
+  aboutModal.style.display = 'none';  // 强制设置为 none，确保弹窗隐藏
+  console.log('弹窗已关闭aboutModal.style.display', aboutModal.style.display);
+
+}
 
 
 

@@ -1,18 +1,20 @@
 <!DOCTYPE html>
 <html lang="zh">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>网友消息统计</title>
     <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
     <div class="top-menu">
         <button onclick="openModal('recognize')">识别网友消息</button>
         <button onclick="handleSummary()">所有网友消息汇总</button>
         <button onclick="copyClientData()">复制网友统计消息</button>
         <button onclick="clearUserData()">清空所有网友数据</button>
-        <button onclick="handleButtonClick(this)">关于软件</button>
+        <button onclick="openAboutModal()">关于软件</button>
     </div>
 
     <div class="main-content">
@@ -67,9 +69,63 @@
         <input type="text" id="inputField" />
         <div id="display" style="border: 1px solid #000; padding: 10px; min-height: 20px; width: 200px;"></div>
     </div>
+
+    <!-- 用户协议弹窗 -->
+    <div id="userAgreementModal" class="modal">
+        <div class="modal-content">
+            <h2>用户协议与免责声明</h2>
+            <div class="agreement-text">
+                <p>欢迎使用“生肖数字王”软件！请仔细阅读以下协议条款，使用本软件即表示您已接受并同意遵守本协议。</p>
+                <ol>
+                    <li>本软件仅用于记录用户选择的数字和生肖，并进行积分统计，目的为休闲娱乐。</li>
+                    <li>本软件中的积分系统仅供娱乐和排行显示，积分为虚拟，无任何经济价值。</li>
+                    <li>本软件严格遵守中国法律法规，不涉及任何形式的赌博行为。</li>
+                    <li>如发现用户通过软件进行违法行为，本软件有权立即封禁账号并向有关部门报告。</li>
+                    <li>本软件开发者及运营方不对用户违规操作产生的争议或损失负责。</li>
+                    <li>本软件严格保护用户隐私，不会将用户信息用于非法用途。</li>
+                </ol>
+            </div>
+            <div class="modal-buttons">
+                <button id="agreeButton">我已阅读并同意</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 固定法律声明 -->
+    <div class="legal-notice">
+        <p id="legalNotice">本软件仅用于娱乐用途，积分仅供排行展示，无任何现实经济价值。禁止任何形式的赌博行为，请遵守相关法律法规。</p>
+    </div>
+
+    <!-- 关于软件弹窗 -->
+    <div id="aboutSoftwareModal" class="modal about-software-modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeAboutModal()">&times;</span>
+            <h2>关于软件</h2>
+
+            <!-- 游戏玩法部分 -->
+            <h3>游戏玩法</h3>
+            <p>本游戏是一个猜数字的积分游戏，玩家可以选择 01-49 之间的数字，系统将根据游戏规则分配积分。每轮游戏结束后，积分将用于排行展示。</p>
+            <p>玩家可选择的数字对应12个生肖，分别为鼠、牛、虎、兔、龙、蛇、马、羊、猴、鸡、狗、猪。每局游戏随机生成结果，系统自动统计积分。</p>
+            <p>所有积分仅用于娱乐用途，不具有任何经济价值。</p>
+
+            <!-- 免责声明部分 -->
+            <h3>免责声明</h3>
+            <p>本软件仅用于娱乐用途，所有积分仅用于排行展示，积分无任何实际经济价值。本软件不支持任何形式的赌博行为，禁止将本软件用于赌博、博彩等非法用途。</p>
+            <p>使用本软件的用户应遵守当地的法律法规，禁止参与或组织任何形式的违法活动。如果发现用户违反本声明，本软件有权终止其使用权限，并向相关部门报告。</p>
+
+            <!-- <button onclick="closeAboutModal()">关闭</button> -->
+        </div>
+    </div>
+
+
+
+
+
+    <script src="./trialManager.js"></script>
+    <script src="./renderer.js"></script>
     
 
-    <script src="./renderer.js"></script>
 
 </body>
+
 </html>
