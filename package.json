@@ -1,6 +1,6 @@
 {
   "name": "messagecounter",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "author": "小张",
   "description": "插上 U 盘五分钟,解决你一天的统计工作量",
   "main": "main.js",

@@ -46,6 +46,7 @@ const ATTRIBUTE_GROUPS = [
 // 页面加载完成后的初始化
 document.addEventListener('DOMContentLoaded', function() {
     console.log('页面加载完成，开始初始化...');
+    initAppAccessStatus();
     initLicenseStatus();
     applySavedAttributeGroupOrder();
     initializeApplication();
@@ -66,6 +67,25 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 120);
     });
 });
+
+async function initAppAccessStatus() {
+    if (!ipcRenderer || typeof ipcRenderer.invoke !== 'function') {
+        return;
+    }
+    try {
+        const status = await ipcRenderer.invoke('app:get-access-status');
+        applyAppAccessStatus(status);
+    } catch (error) {
+        console.warn('获取访问状态失败:', error);
+    }
+}
+
+function applyAppAccessStatus(status) {
+    if (!status) return;
+    if (status.mode === 'trial' && status.trial) {
+        showTrialRuntimeWarning(status.trial.remainingDays || 0, status.trial.endAt);
+    }
+}
 
 async function initLicenseStatus() {
     if (!ipcRenderer || typeof ipcRenderer.invoke !== 'function') {
@@ -125,6 +145,34 @@ function showGraceWarning(remainingDays) {
         z-index: 10001;
     `;
     warning.textContent = `授权已到期，当前处于宽限期，剩余 ${remainingDays} 天`;
+    document.body.appendChild(warning);
+}
+
+function showTrialRuntimeWarning(remainingDays, endAt) {
+    const id = 'trialRuntimeWarning';
+    const existing = document.getElementById(id);
+    if (existing) {
+        existing.remove();
+    }
+
+    const warning = document.createElement('div');
+    warning.id = id;
+    warning.style.cssText = `
+        position: fixed;
+        top: 62px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #fef3c7;
+        color: #78350f;
+        border: 1px solid #facc15;
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-weight: 700;
+        box-shadow: 0 8px 20px rgba(0,0,0,0.18);
+        z-index: 10001;
+    `;
+    const endText = endAt ? `，到期时间：${formatTime(endAt)}` : '';
+    warning.textContent = `当前为试用模式，剩余 ${remainingDays} 天${endText}`;
     document.body.appendChild(warning);
 }
 
