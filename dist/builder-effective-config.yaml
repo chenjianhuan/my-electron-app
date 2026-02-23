@@ -1,13 +1,32 @@
 directories:
   output: dist
   buildResources: build
-appId: com.my-electron-app
-productName: MyElectronApp
+appId: com.messagecounter.app
+productName: MessageCounter
+asar: true
 files:
   - filter:
+      - main.js
+      - preload.js
       - src/**/*
+      - public/**/*
       - package.json
+mac:
+  target:
+    - dmg
+    - zip
+  icon: public/icon.icns
 win:
   target:
     - nsis
+    - zip
+  signAndEditExecutable: false
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+extraResources:
+  - from: public/
+    to: public
+    filter:
+      - '**/*'
 electronVersion: 25.9.8
