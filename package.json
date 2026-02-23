@@ -1,8 +1,8 @@
 {
-  "name": "message-counter",
+  "name": "messagecounter",
   "version": "1.0.0",
   "author": "小张",
-  "description": "A sample Electron application.",
+  "description": "插上 U 盘五分钟,解决你一天的统计工作量",
   "main": "main.js",
   "dependencies": {
     "antd": "^5.20.5"
@@ -24,7 +24,7 @@
   },
   "build": {
     "appId": "com.messagecounter.app",
-    "productName": "MessageCounter",
+    "productName": "聊天数据管家",
     "asar": true,
     "directories": {
       "output": "dist"
@@ -40,7 +40,9 @@
       "target": [
         "dmg"
       ],
-      "icon": "public/icon.icns"
+      "icon": "public/icon.icns",
+      "identity": null
+
     },
     "win": {
       "target": [
