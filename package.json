@@ -12,9 +12,14 @@
     "electron-builder": "^24.13.3",
     "electron-rebuild": "^3.2.9"
   },
+  "engines": {
+    "node": "18.x"
+  },
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --mac --win",
+    "dist:win": "electron-builder --win nsis",
+    "dist:mac": "electron-builder --mac dmg",
     "postinstall": "electron-builder install-app-deps"
   },
   "build": {
@@ -33,15 +38,13 @@
     ],
     "mac": {
       "target": [
-        "dmg",
-        "zip"
+        "dmg"
       ],
       "icon": "public/icon.icns"
     },
     "win": {
       "target": [
-        "nsis",
-        "zip"
+        "nsis"
       ],
       "signAndEditExecutable": false
     },
