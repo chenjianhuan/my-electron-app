@@ -11,8 +11,8 @@ node_modules/
 *.dmg
 *.pkg
 *.blockmap
-*.yml
-*.yaml
+# 只忽略构建生成的 yml
+dist/*.yml
 
 # OS/editor noise
 .DS_Store
