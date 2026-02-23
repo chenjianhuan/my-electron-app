@@ -13,6 +13,8 @@ let isAttributeEditMode = false;
 let attributeSwapSource = null;
 let attributeLongPressTimer = null;
 let speechVoice = null;
+let currentLicenseStatus = null;
+let licenseLastUpdatedAt = null;
 
 const ATTRIBUTE_GROUPS = [
     ['单', '双', '大', '小'],
@@ -44,6 +46,7 @@ const ATTRIBUTE_GROUPS = [
 // 页面加载完成后的初始化
 document.addEventListener('DOMContentLoaded', function() {
     console.log('页面加载完成，开始初始化...');
+    initLicenseStatus();
     applySavedAttributeGroupOrder();
     initializeApplication();
     renderRecognizeRegionButtons();
@@ -63,6 +66,163 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 120);
     });
 });
+
+async function initLicenseStatus() {
+    if (!ipcRenderer || typeof ipcRenderer.invoke !== 'function') {
+        return;
+    }
+
+    try {
+        const status = await ipcRenderer.invoke('license:get-status');
+        applyLicenseStatus(status);
+    } catch (error) {
+        console.warn('获取授权状态失败:', error);
+    }
+
+    ipcRenderer.on('license-status-changed', (status) => {
+        applyLicenseStatus(status);
+    });
+
+    ipcRenderer.on('license-force-exit', (payload) => {
+        const reason = payload && payload.reason ? payload.reason : '授权U盘已移除，软件将退出。';
+        alert(reason);
+    });
+}
+
+function applyLicenseStatus(status) {
+    currentLicenseStatus = status || null;
+    licenseLastUpdatedAt = new Date();
+    renderLicenseStatusPanel();
+
+    if (!status || !status.authorized) {
+        return;
+    }
+    if (status.mode === 'grace') {
+        showGraceWarning(status.remainingDays || 0);
+    }
+}
+
+function showGraceWarning(remainingDays) {
+    const id = 'licenseGraceWarning';
+    const existing = document.getElementById(id);
+    if (existing) {
+        existing.remove();
+    }
+
+    const warning = document.createElement('div');
+    warning.id = id;
+    warning.style.cssText = `
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #f59e0b;
+        color: #111827;
+        border-radius: 8px;
+        padding: 10px 14px;
+        font-weight: 700;
+        box-shadow: 0 8px 20px rgba(0,0,0,0.25);
+        z-index: 10001;
+    `;
+    warning.textContent = `授权已到期，当前处于宽限期，剩余 ${remainingDays} 天`;
+    document.body.appendChild(warning);
+}
+
+function openLicenseModal() {
+    const modal = document.getElementById('licenseModal');
+    if (!modal) return;
+    renderLicenseStatusPanel();
+    modal.style.display = 'block';
+    refreshLicenseStatus();
+}
+
+function closeLicenseModal() {
+    const modal = document.getElementById('licenseModal');
+    if (!modal) return;
+    modal.style.display = 'none';
+}
+
+async function refreshLicenseStatus() {
+    if (!ipcRenderer || typeof ipcRenderer.invoke !== 'function') {
+        return;
+    }
+    try {
+        const status = await ipcRenderer.invoke('license:get-status');
+        applyLicenseStatus(status);
+    } catch (error) {
+        applyLicenseStatus({
+            authorized: false,
+            mode: 'blocked',
+            reason: `刷新失败: ${error.message}`
+        });
+    }
+}
+
+function renderLicenseStatusPanel() {
+    setText('licenseCustomerId', currentLicenseStatus && currentLicenseStatus.customerId ? currentLicenseStatus.customerId : '-');
+    setText('licenseMode', formatLicenseMode(currentLicenseStatus ? currentLicenseStatus.mode : null));
+    setText('licenseExpireAt', formatTime(currentLicenseStatus ? currentLicenseStatus.expireAt : null));
+    setText('licenseRemainingDays', formatRemainingDays(currentLicenseStatus));
+    setText('licenseUsbMountPath', currentLicenseStatus && currentLicenseStatus.usbMountPath ? currentLicenseStatus.usbMountPath : '-');
+    setText('licenseFilePath', currentLicenseStatus && currentLicenseStatus.licensePath ? currentLicenseStatus.licensePath : '-');
+    setText('licenseReason', currentLicenseStatus && currentLicenseStatus.reason ? currentLicenseStatus.reason : '-');
+    setText('licenseLastUpdated', licenseLastUpdatedAt ? formatTime(licenseLastUpdatedAt.toISOString()) : '-');
+    renderLicenseStatusBanner(currentLicenseStatus);
+}
+
+function renderLicenseStatusBanner(status) {
+    const banner = document.getElementById('licenseStatusBanner');
+    if (!banner) return;
+
+    banner.className = 'license-status-banner';
+
+    if (!status) {
+        banner.classList.add('license-status-unknown');
+        banner.textContent = '尚未获取授权状态';
+        return;
+    }
+
+    if (!status.authorized) {
+        banner.classList.add('license-status-invalid');
+        banner.textContent = '授权无效';
+        return;
+    }
+
+    if (status.mode === 'grace') {
+        banner.classList.add('license-status-grace');
+        banner.textContent = `授权宽限期（剩余 ${status.remainingDays || 0} 天）`;
+        return;
+    }
+
+    banner.classList.add('license-status-ok');
+    banner.textContent = '授权有效';
+}
+
+function formatLicenseMode(mode) {
+    if (mode === 'normal') return '正常授权';
+    if (mode === 'grace') return '宽限期';
+    if (mode === 'blocked') return '已阻止';
+    return '-';
+}
+
+function formatRemainingDays(status) {
+    if (!status || !status.authorized) return '-';
+    if (status.mode !== 'grace') return '不适用';
+    return `${status.remainingDays || 0} 天`;
+}
+
+function formatTime(isoText) {
+    if (!isoText) return '-';
+    const date = new Date(isoText);
+    if (Number.isNaN(date.getTime())) return String(isoText);
+    return date.toLocaleString();
+}
+
+function setText(id, value) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = value == null ? '-' : String(value);
+}
 
 function initLegalNotice() {
     const notice = document.getElementById('legalNoticeBox');
@@ -1573,6 +1733,7 @@ window.onclick = function(event) {
     const editModal = document.getElementById('editModal');
     const aboutModal = document.getElementById('aboutSoftwareModal');
     const editOriginalModal = document.getElementById('editOriginalModal');
+    const licenseModal = document.getElementById('licenseModal');
     
     if (event.target === modal) {
         closeModal();
@@ -1585,6 +1746,9 @@ window.onclick = function(event) {
     }
     if (event.target === editOriginalModal && window.userManager) {
         window.userManager.closeEditOriginalModal();
+    }
+    if (event.target === licenseModal) {
+        closeLicenseModal();
     }
 }
 
@@ -1609,3 +1773,6 @@ window.toggleAttributeEditMode = toggleAttributeEditMode;
 window.confirmAttributeEdit = confirmAttributeEdit;
 window.cancelAttributeEdit = cancelAttributeEdit;
 window.dismissLegalNotice = dismissLegalNotice;
+window.openLicenseModal = openLicenseModal;
+window.closeLicenseModal = closeLicenseModal;
+window.refreshLicenseStatus = refreshLicenseStatus;

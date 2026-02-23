@@ -17,3 +17,7 @@ dist/*.yml
 # OS/editor noise
 .DS_Store
 Thumbs.db
+
+# License private keys (keep out of repo)
+keys/*private*.pem
+keys/*.key

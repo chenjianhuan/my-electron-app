@@ -78,6 +78,7 @@ body {
   grid-template-columns: 290px minmax(500px, 1fr) 420px;
   gap: 12px;
   padding: 12px;
+  min-height: 0;
 }
 
 .user-list,
@@ -387,6 +388,12 @@ button:active {
 .right-side {
   padding: 14px;
   overflow: hidden;
+  min-height: 0;
+}
+
+.left-side {
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 #currentUser {
@@ -1228,6 +1235,75 @@ textarea#message:focus,
   cursor: pointer;
 }
 
+.license-modal .modal-content {
+  max-width: 760px;
+}
+
+.license-status-banner {
+  margin: 8px 0 14px;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-weight: 700;
+  border: 1px solid transparent;
+}
+
+.license-status-ok {
+  color: #165f36;
+  background: #e5f6ec;
+  border-color: #a7dbbc;
+}
+
+.license-status-grace {
+  color: #7a4e06;
+  background: #fff4de;
+  border-color: #f2d08f;
+}
+
+.license-status-invalid {
+  color: #7f1d1d;
+  background: #fde8e8;
+  border-color: #f3b0b0;
+}
+
+.license-status-unknown {
+  color: #334155;
+  background: #eef2f7;
+  border-color: #cbd5e1;
+}
+
+.license-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.license-field {
+  background: #f8fbff;
+  border: 1px solid #d8e3ef;
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.license-field label {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  color: #64748b;
+  margin-bottom: 6px;
+}
+
+.license-field div {
+  color: #1e293b;
+  font-size: 13px;
+  line-height: 1.45;
+  word-break: break-all;
+}
+
+.license-field.full-width {
+  grid-column: 1 / -1;
+}
+
 @media (max-width: 1280px) {
   .main-content {
     grid-template-columns: 250px minmax(460px, 1fr) 360px;
@@ -1267,6 +1343,10 @@ textarea#message:focus,
   .modal-content {
     margin: 2vh auto;
     max-height: 95vh;
+  }
+
+  .license-grid {
+    grid-template-columns: 1fr;
   }
 
   .recognize-layout {

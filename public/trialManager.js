@@ -5,7 +5,7 @@ class TrialManager {
         this.lastRunDateKey = 'lastRunDate';
         this.expirationDays = 14; // 试用期14天
         this.currentDate = new Date();
-        this.trialEnabled = true; // 开启试用期限制
+        this.trialEnabled = false; // 已切换为U盘离线授权，不再启用本地试用期限制
         // this.isDevelopment = this.checkDevelopmentMode(); // 已废弃自动重置逻辑
     }
 
