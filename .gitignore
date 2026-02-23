@@ -1,1 +1,19 @@
 node_modules/
+
+# Build artifacts
+/dist/
+/out/
+/build/
+
+# Packaged installers/archives
+*.zip
+*.exe
+*.dmg
+*.pkg
+*.blockmap
+*.yml
+*.yaml
+
+# OS/editor noise
+.DS_Store
+Thumbs.db

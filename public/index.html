@@ -1,13 +1,11 @@
 <!DOCTYPE html>
 <html lang="zh">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>网友消息统计</title>
     <link rel="stylesheet" href="styles.css">
 </head>
-
 <body>
     <div class="top-menu">
         <button onclick="openModal('recognize')">识别网友消息</button>
@@ -20,8 +18,25 @@
     <div class="main-content">
         <div class="user-list">
             <h3>网友列表</h3>
-            <input type="text" id="newUserName" placeholder="输入新网友用户名">
-            <button onclick="addUser()">添加网友</button>
+            <div class="user-add-row">
+                <input type="text" id="newUserName" placeholder="输入新网友用户名">
+                <button onclick="addUser()">添加网友</button>
+            </div>
+            <div class="selection-mode-row">
+                <span class="selection-mode-label">统计人数</span>
+                <label class="mode-slider">
+                    <input id="multiSelectToggle" type="checkbox" onchange="userManager.setMultiSelectEnabled(this.checked)">
+                    <span class="mode-slider-track">
+                        <span class="mode-slider-label mode-single">单人</span>
+                        <span class="mode-slider-label mode-multi">多人</span>
+                        <span class="mode-slider-thumb"></span>
+                    </span>
+                </label>
+            </div>
+            <div class="view-region-row">
+                <span class="selection-mode-label">查看地区</span>
+                <div id="viewRegionGroup" class="region-chip-group"></div>
+            </div>
             <ul id="userList"></ul>
         </div>
 
@@ -29,7 +44,7 @@
             <h3 id="currentUser">当前网友: 无</h3>
             <div class="section" id="section1"></div>
 
-            <div class="title">所有网友汇总</div>
+            <div class="title" id="summarySectionTitle">所有网友汇总</div>
             <div class="section" id="section2"></div>
         </div>
 
@@ -47,12 +62,44 @@
     <div id="myModal" class="modal">
         <div class="modal-content">
             <span class="close" onclick="closeModal()">&times;</span>
-            <h2 id="modalTitle">粘贴消息进行识别</h2>
-            <textarea id="message" rows="4" cols="50" placeholder="输入消息，例如: 14.21.13.39.38.30.26.18.33～各20"></textarea>
-            <button class="recognize-button" onclick="previewMessage()">识别</button>
-            <pre id="result"></pre>
-            <button class="confirm-button" onclick="confirmEdit()">确认</button>
-            <button class="cancel-button" onclick="closeModal()">取消</button>
+            <h2 id="modalTitle">输入消息进行识别</h2>
+            <div class="recognize-layout">
+                <div class="recognize-main">
+                    <div class="recognize-region-row">
+                        <label>录入地区</label>
+                        <div id="recognizeRegionGroup" class="region-chip-group single"></div>
+                    </div>
+                    <div class="message-input-wrap">
+                        <div id="messageLineNumbers" class="message-line-numbers" aria-hidden="true"></div>
+                        <textarea id="message" rows="4" cols="50" placeholder="输入消息，例如: 14.21.13.39.38.30.26.18.33～各20"></textarea>
+                    </div>
+                    <div class="modal-action-row">
+                        <button class="recognize-button modal-action-btn" onclick="previewMessage()">识别</button>
+                        <button class="clear-button modal-action-btn" onclick="clearAttributeSelection()">清空</button>
+                    </div>
+                    <pre id="result"></pre>
+                    <div class="modal-action-row modal-submit-row">
+                        <button class="confirm-button modal-action-btn" onclick="confirmEdit()">添加</button>
+                        <button class="cancel-button modal-action-btn" onclick="closeModal()">取消</button>
+                    </div>
+                </div>
+                <aside id="attributeHelpPanel" class="attribute-help">
+                    <div class="attribute-help-body">
+                        <div class="attribute-help-header">
+                            <h4>属性词选择</h4>
+                        </div>
+                        <div class="custom-attribute-editor">
+                            <input id="customAttrName" type="text" placeholder="自定义属性名，如：快码A">
+                            <input id="customAttrNumbers" type="text" placeholder="对应号码，如：01,05,12,49">
+                            <div class="custom-attribute-actions">
+                                <button class="edit-button" onclick="addCustomAttribute()">添加属性</button>
+                                <button id="toggleAttributeEditBtn" class="cancel-button" onclick="toggleAttributeEditMode()">编辑属性</button>
+                            </div>
+                        </div>
+                        <div id="attributePicker" class="attribute-picker"></div>
+                    </div>
+                </aside>
+            </div>
         </div>
     </div>
 
@@ -64,10 +111,16 @@
         </div>
     </div>
 
-    <!-- 输入框和显示内容的容器 -->
-    <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 20px;">
-        <input type="text" id="inputField" />
-        <div id="display" style="border: 1px solid #000; padding: 10px; min-height: 20px; width: 200px;"></div>
+    <div id="editOriginalModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="userManager.closeEditOriginalModal()">&times;</span>
+            <h2 id="editOriginalModalTitle">编辑原始消息</h2>
+            <textarea id="editOriginalMessageInput" rows="5" placeholder="请输入消息，例如：14.21.13～各20"></textarea>
+            <div class="modal-buttons">
+                <button class="confirm-button" onclick="userManager.saveEditedOriginalData()">保存</button>
+                <button class="cancel-button" onclick="userManager.closeEditOriginalModal()">取消</button>
+            </div>
+        </div>
     </div>
 
     <!-- 用户协议弹窗 -->
@@ -92,8 +145,9 @@
     </div>
 
     <!-- 固定法律声明 -->
-    <div class="legal-notice">
+    <div id="legalNoticeBox" class="legal-notice">
         <p id="legalNotice">本软件仅用于娱乐用途，积分仅供排行展示，无任何现实经济价值。禁止任何形式的赌博行为，请遵守相关法律法规。</p>
+        <button id="legalNoticeClose" class="legal-notice-close" onclick="dismissLegalNotice()" aria-label="关闭法律声明">×</button>
     </div>
 
     <!-- 关于软件弹窗 -->
@@ -102,30 +156,36 @@
             <span class="close" onclick="closeAboutModal()">&times;</span>
             <h2>关于软件</h2>
 
-            <!-- 游戏玩法部分 -->
-            <h3>游戏玩法</h3>
-            <p>本游戏是一个猜数字的积分游戏，玩家可以选择 01-49 之间的数字，系统将根据游戏规则分配积分。每轮游戏结束后，积分将用于排行展示。</p>
-            <p>玩家可选择的数字对应12个生肖，分别为鼠、牛、虎、兔、龙、蛇、马、羊、猴、鸡、狗、猪。每局游戏随机生成结果，系统自动统计积分。</p>
-            <p>所有积分仅用于娱乐用途，不具有任何经济价值。</p>
+            <h3>软件定位</h3>
+            <p>本软件为文本录入与统计工具，用于对输入消息进行解析、分类与可视化展示。展示的分值/累计值仅为软件内部统计字段，不代表任何财产、收益或结算凭证。</p>
 
-            <!-- 免责声明部分 -->
-            <h3>免责声明</h3>
-            <p>本软件仅用于娱乐用途，所有积分仅用于排行展示，积分无任何实际经济价值。本软件不支持任何形式的赌博行为，禁止将本软件用于赌博、博彩等非法用途。</p>
-            <p>使用本软件的用户应遵守当地的法律法规，禁止参与或组织任何形式的违法活动。如果发现用户违反本声明，本软件有权终止其使用权限，并向相关部门报告。</p>
+            <h3>合规与风险提示</h3>
+            <ol>
+                <li>本软件不提供下注、交易、支付、提现、返奖等任何资金相关功能。</li>
+                <li>严禁将本软件用于赌博、博彩、洗钱、诈骗或其他违法活动。</li>
+                <li>用户应自行确保使用行为符合所在地区法律法规与监管要求。</li>
+                <li>开发者仅提供通用统计能力，不参与用户业务决策，不对用户违法使用产生的后果负责。</li>
+                <li>若发现违法违规用途，软件可停止服务并配合依法处理。</li>
+            </ol>
 
-            <!-- <button onclick="closeAboutModal()">关闭</button> -->
+            <h3>软件使用说明</h3>
+            <ol>
+                <li>先在左侧添加并选择网友；单人/多人模式可切换统计范围。</li>
+                <li>点击“识别网友消息”打开录入面板，输入原始消息后点“识别”预览，再点“添加”入库。</li>
+                <li>可在录入消息中写地区关键字（如新奥/老奥/香港），系统会按片段分地区统计。</li>
+                <li>右侧显示累计排序与原始消息，可对原始消息执行编辑/删除并自动重算。</li>
+                <li>属性面板支持新增、编辑、删除、拖拽调整顺序；编辑状态下可长按卡片后交换位置。</li>
+                <li>数据保存在本机，不上传云端。建议定期备份应用数据目录，避免设备故障导致数据丢失。</li>
+            </ol>
+
+            <h3>免责边界</h3>
+            <p>本软件按“现状”提供，不承诺特定用途适配、绝对准确或持续可用。请勿将本软件作为财务、法律或执法证据系统使用。</p>
         </div>
     </div>
 
-
-
-
-
     <script src="./trialManager.js"></script>
-    <script src="./renderer.js"></script>
-    
-
-
+    <script src="./userManager.js"></script>
+    <script src="./messageProcessor.js"></script>
+    <script src="./renderer-optimized.js"></script>
 </body>
-
 </html>
