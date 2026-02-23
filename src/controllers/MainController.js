@@ -1,6 +1,6 @@
 // src/controllers/MainController.js
 const { ipcMain } = require('electron');
-const UserModel = require('../models/UserModel');
+const UserModel = require('../models/userModel');
 
 class MainController {
   constructor(app) {
