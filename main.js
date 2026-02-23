@@ -1,10 +1,75 @@
 // main.js
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const { spawn } = require('child_process');
 const MainController = require('./src/controllers/MainController');
+const { LicenseGuard } = require('./src/services/LicenseGuard');
+const { initAutoUpdater } = require('./src/updater/autoUpdater');
 
 let win;
 let mainController;
+let licenseGuard;
+let exitingForLicense = false;
+
+function copyDirectorySync(source, target) {
+  fs.mkdirSync(target, { recursive: true });
+  const entries = fs.readdirSync(source, { withFileTypes: true });
+  for (const entry of entries) {
+    const srcPath = path.join(source, entry.name);
+    const dstPath = path.join(target, entry.name);
+    if (entry.isDirectory()) {
+      copyDirectorySync(srcPath, dstPath);
+    } else if (entry.isSymbolicLink()) {
+      const link = fs.readlinkSync(srcPath);
+      fs.symlinkSync(link, dstPath);
+    } else {
+      fs.copyFileSync(srcPath, dstPath);
+    }
+  }
+}
+
+function relaunchFromTempOnWindows() {
+  if (process.platform !== 'win32') return false;
+  if (!app.isPackaged) return false;
+  if (process.env.MC_TEMP_RUN === '1') return false;
+
+  const sourceDir = path.dirname(process.execPath);
+  const version = app.getVersion() || 'unknown';
+  const targetDir = path.join(os.tmpdir(), 'messagecounter-runtime', version);
+  const targetExePath = path.join(targetDir, path.basename(process.execPath));
+
+  try {
+    if (!fs.existsSync(targetExePath)) {
+      copyDirectorySync(sourceDir, targetDir);
+    }
+    spawn(targetExePath, process.argv.slice(1), {
+      detached: true,
+      stdio: 'ignore',
+      env: { ...process.env, MC_TEMP_RUN: '1' },
+    }).unref();
+    return true;
+  } catch (error) {
+    console.error('Failed to relaunch from temp:', error);
+    return false;
+  }
+}
+
+function enforceLicenseExit(reason) {
+  if (exitingForLicense) return;
+  exitingForLicense = true;
+  const msg = reason || '授权U盘已移除，软件将立即退出。';
+  dialog.showErrorBox('授权已失效', msg);
+  if (win && !win.isDestroyed()) {
+    try {
+      win.webContents.send('license-force-exit', { reason: msg });
+    } catch (error) {
+      // ignore
+    }
+  }
+  setTimeout(() => app.exit(41), 50);
+}
 
 function createWindow() {
   win = new BrowserWindow({
@@ -73,15 +138,61 @@ function createWindow() {
 
 // 显示错误对话框
 function showErrorDialog(title, message) {
-  const { dialog } = require('electron');
   dialog.showErrorBox(title, message);
+}
+
+function registerLicenseIpc() {
+  ipcMain.handle('license:get-status', () => {
+    return licenseGuard ? licenseGuard.getStatus() : { authorized: false, reason: '授权未初始化' };
+  });
+}
+
+function setupLicenseGuard() {
+  if (process.env.SKIP_LICENSE_CHECK === '1') {
+    console.warn('License check skipped by SKIP_LICENSE_CHECK=1');
+    return true;
+  }
+
+  licenseGuard = new LicenseGuard({
+    app,
+    onRevoked: (status) => {
+      console.error('License revoked:', status.reason);
+      enforceLicenseExit(status.reason || '授权已失效');
+    },
+    onStatusChange: (status) => {
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('license-status-changed', status);
+      }
+    },
+  });
+
+  const initialStatus = licenseGuard.checkAuthorization();
+  licenseGuard.updateStatus(initialStatus);
+  if (!initialStatus.authorized) {
+    dialog.showErrorBox('未检测到有效授权', initialStatus.reason || '请插入授权U盘并重试。');
+    app.exit(40);
+    return false;
+  }
+
+  licenseGuard.startMonitoring();
+  return true;
+}
+
+if (relaunchFromTempOnWindows()) {
+  process.exit(0);
 }
 
 // 应用准备就绪
 app.whenReady().then(() => {
   try {
+    registerLicenseIpc();
+    if (!setupLicenseGuard()) {
+      return;
+    }
+
     // 创建主窗口
     createWindow();
+    initAutoUpdater(win);
 
     // 初始化主控制器
     mainController = new MainController(app);
@@ -110,7 +221,9 @@ app.on('window-all-closed', () => {
 // 监听应用即将退出
 app.on('before-quit', () => {
   console.log('Application is about to quit');
-  // 在这里可以添加清理代码
+  if (licenseGuard) {
+    licenseGuard.stopMonitoring();
+  }
 });
 
 // 监听应用退出

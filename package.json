@@ -5,7 +5,8 @@
   "description": "插上 U 盘五分钟,解决你一天的统计工作量",
   "main": "main.js",
   "dependencies": {
-    "antd": "^5.20.5"
+    "antd": "^5.20.5",
+    "electron-updater": "^6.3.9"
   },
   "devDependencies": {
     "electron": "^25.9.8",
@@ -20,7 +21,11 @@
     "dist": "electron-builder --mac --win",
     "dist:win": "electron-builder --win nsis",
     "dist:mac": "electron-builder --mac dmg",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "license:list-usb": "node scripts/license-tools.js list-usb",
+    "license:issue": "node scripts/license-tools.js issue-license",
+    "license:issue-to-usb": "node scripts/license-tools.js issue-to-usb",
+    "license:wizard": "node scripts/license-tools.js issue-wizard"
   },
   "build": {
     "appId": "com.messagecounter.app",
@@ -38,7 +43,8 @@
     ],
     "mac": {
       "target": [
-        "dmg"
+        "dmg",
+        "zip"
       ],
       "icon": "public/icon.icns",
       "identity": null
@@ -61,6 +67,19 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "keys/",
+        "to": "keys",
+        "filter": [
+          "*.pem"
+        ]
+      }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "releaseType": "release"
       }
     ]
   }
