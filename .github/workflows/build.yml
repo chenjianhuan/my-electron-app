@@ -27,11 +27,11 @@ jobs:
 
       - name: Build (Windows)
         if: matrix.os == 'windows-latest'
-        run: npx electron-builder --win nsis
+        run: npx electron-builder --win nsis --publish never
 
       - name: Build (macOS)
         if: matrix.os == 'macos-latest'
-        run: npx electron-builder --mac dmg
+        run: npx electron-builder --mac dmg --publish never
 
       - name: Upload Windows installer
         if: matrix.os == 'windows-latest'
