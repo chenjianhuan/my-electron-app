@@ -1,12 +1,14 @@
 {
   "name": "messagecounter",
-  "version": "2.0.3",
+  "version": "3.0.0",
   "author": "小张",
   "description": "插上 U 盘五分钟,解决你一天的统计工作量",
   "main": "main.js",
   "dependencies": {
     "antd": "^5.20.5",
-    "electron-updater": "^6.3.9"
+    "electron-updater": "^6.3.9",
+    "sharp": "^0.34.4",
+    "tesseract.js": "^6.0.1"
   },
   "devDependencies": {
     "electron": "^25.9.8",
@@ -73,6 +75,13 @@
         "to": "keys",
         "filter": [
           "*.pem"
+        ]
+      },
+      {
+        "from": "assets/ocr/",
+        "to": "ocr",
+        "filter": [
+          "**/*"
         ]
       }
     ],

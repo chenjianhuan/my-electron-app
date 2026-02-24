@@ -15,6 +15,7 @@ let attributeLongPressTimer = null;
 let speechVoice = null;
 let currentLicenseStatus = null;
 let licenseLastUpdatedAt = null;
+let selectedOcrImage = null;
 
 const ATTRIBUTE_GROUPS = [
     ['单', '双', '大', '小'],
@@ -837,6 +838,8 @@ function removeCustomAttribute(name) {
 function setupRecognizeMessageInput() {
     const messageTextarea = document.getElementById('message');
     const lineNumberEl = document.getElementById('messageLineNumbers');
+    const ocrInput = document.getElementById('ocrImageInput');
+    const ocrDropZone = document.getElementById('ocrDropZone');
     if (!messageTextarea) return;
 
     const syncLineNumbersScroll = () => {
@@ -852,9 +855,164 @@ function setupRecognizeMessageInput() {
         renderMessageLineNumbers();
     });
     messageTextarea.addEventListener('scroll', syncLineNumbersScroll);
+    messageTextarea.addEventListener('paste', handleOcrPaste);
+
+    if (ocrInput) {
+        ocrInput.addEventListener('change', handleOcrFileSelected);
+    }
+    if (ocrDropZone) {
+        ocrDropZone.addEventListener('dragover', handleOcrDragOver);
+        ocrDropZone.addEventListener('dragleave', handleOcrDragLeave);
+        ocrDropZone.addEventListener('drop', handleOcrDrop);
+    }
 
     renderMessageLineNumbers();
     syncLineNumbersScroll();
+    updateOcrHint();
+}
+
+function pickOcrImage() {
+    const ocrInput = document.getElementById('ocrImageInput');
+    if (!ocrInput) return;
+    ocrInput.value = '';
+    ocrInput.click();
+}
+
+function handleOcrFileSelected(event) {
+    const file = event.target && event.target.files ? event.target.files[0] : null;
+    if (!file) return;
+    setSelectedOcrImage(file);
+}
+
+function handleOcrPaste(event) {
+    const clipboardItems = event.clipboardData && event.clipboardData.items ? event.clipboardData.items : [];
+    if (!clipboardItems || !clipboardItems.length) return;
+
+    for (let i = 0; i < clipboardItems.length; i += 1) {
+        const item = clipboardItems[i];
+        if (!item || !item.type || !item.type.startsWith('image/')) continue;
+        const file = item.getAsFile();
+        if (file) {
+            event.preventDefault();
+            setSelectedOcrImage(file);
+            runOcrFromSelectedImage();
+            return;
+        }
+    }
+}
+
+function handleOcrDragOver(event) {
+    event.preventDefault();
+    const zone = document.getElementById('ocrDropZone');
+    if (zone) zone.classList.add('dragover');
+}
+
+function handleOcrDragLeave() {
+    const zone = document.getElementById('ocrDropZone');
+    if (zone) zone.classList.remove('dragover');
+}
+
+function handleOcrDrop(event) {
+    event.preventDefault();
+    const zone = document.getElementById('ocrDropZone');
+    if (zone) zone.classList.remove('dragover');
+    const files = event.dataTransfer && event.dataTransfer.files ? event.dataTransfer.files : [];
+    if (!files || !files.length) return;
+    const imageFile = Array.from(files).find(file => file.type && file.type.startsWith('image/'));
+    if (!imageFile) {
+        showError('图片识别失败', '请拖入图片文件');
+        return;
+    }
+    setSelectedOcrImage(imageFile);
+}
+
+function setSelectedOcrImage(file) {
+    if (!file) return;
+    selectedOcrImage = {
+        name: file.name || 'clipboard-image.png',
+        size: file.size || 0,
+        path: file.path || '',
+        file
+    };
+    updateOcrHint();
+}
+
+function clearOcrImage() {
+    selectedOcrImage = null;
+    updateOcrHint();
+}
+
+function updateOcrHint(stateText = '') {
+    const hint = document.getElementById('ocrImageHint');
+    if (!hint) return;
+    if (stateText) {
+        hint.textContent = stateText;
+        return;
+    }
+    if (!selectedOcrImage) {
+        hint.textContent = '拖拽图片到这里，或在输入框中粘贴截图';
+        return;
+    }
+    const kb = Math.max(1, Math.round((selectedOcrImage.size || 0) / 1024));
+    hint.textContent = `已选择图片：${selectedOcrImage.name} (${kb} KB)`;
+}
+
+function fileToDataUrl(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error('读取图片失败'));
+        reader.readAsDataURL(file);
+    });
+}
+
+async function runOcrFromSelectedImage() {
+    if (!ipcRenderer || typeof ipcRenderer.invoke !== 'function') {
+        showError('图片识别失败', 'OCR通道不可用');
+        return;
+    }
+    if (!selectedOcrImage || (!selectedOcrImage.path && !selectedOcrImage.file)) {
+        showError('图片识别失败', '请先选择或粘贴图片');
+        return;
+    }
+
+    try {
+        updateOcrHint('图片识别中，请稍候...');
+        const payload = {
+            preferOnline: false,
+            allowOnlineFallback: typeof navigator !== 'undefined' && navigator.onLine === true
+        };
+        if (selectedOcrImage.path) {
+            payload.filePath = selectedOcrImage.path;
+        } else if (selectedOcrImage.file) {
+            payload.dataUrl = await fileToDataUrl(selectedOcrImage.file);
+        } else {
+            throw new Error('未找到可用图片数据');
+        }
+
+        const result = await ipcRenderer.invoke('ocr:recognize-image', payload);
+        if (!result || !result.success) {
+            throw new Error(result && result.message ? result.message : '识别失败');
+        }
+
+        const text = String(result.text || '').trim();
+        if (!text) {
+            throw new Error('未识别到可用文本');
+        }
+
+        const messageTextarea = document.getElementById('message');
+        if (!messageTextarea) {
+            throw new Error('消息输入框不存在');
+        }
+        const merged = [String(messageTextarea.value || '').trim(), text].filter(Boolean).join('\n');
+        messageTextarea.value = merged;
+        renderMessageLineNumbers();
+        updateOcrHint(`识别完成（${result.source || 'offline'}，耗时 ${result.elapsedMs || 0} ms）`);
+        showSuccess('图片识别成功，结果已写入输入框');
+    } catch (error) {
+        updateOcrHint();
+        showError('图片识别失败', error.message || '未知错误');
+    }
 }
 
 function renderMessageLineNumbers() {
@@ -1117,6 +1275,7 @@ function resetRecognizeModalState() {
     const customNumbers = document.getElementById('customAttrNumbers');
     if (customName) customName.value = '';
     if (customNumbers) customNumbers.value = '';
+    clearOcrImage();
 }
 
 // 应用初始化
@@ -1824,3 +1983,6 @@ window.dismissLegalNotice = dismissLegalNotice;
 window.openLicenseModal = openLicenseModal;
 window.closeLicenseModal = closeLicenseModal;
 window.refreshLicenseStatus = refreshLicenseStatus;
+window.pickOcrImage = pickOcrImage;
+window.runOcrFromSelectedImage = runOcrFromSelectedImage;
+window.clearOcrImage = clearOcrImage;

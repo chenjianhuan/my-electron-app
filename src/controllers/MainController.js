@@ -1,10 +1,12 @@
 // src/controllers/MainController.js
 const { ipcMain } = require('electron');
 const UserModel = require('../models/userModel');
+const OcrService = require('../services/OcrService');
 
 class MainController {
   constructor(app) {
     this.userModel = new UserModel(app);
+    this.ocrService = new OcrService(app);
 
     // 监听从渲染进程发来的数据保存请求
     ipcMain.on('save-user-data', (event, userData) => {
@@ -83,6 +85,18 @@ class MainController {
         event.reply('attribute-config-loaded', config);
       } catch (error) {
         event.reply('attribute-config-loaded', { overrides: {}, hidden: [] });
+      }
+    });
+
+    ipcMain.handle('ocr:recognize-image', async (_event, payload) => {
+      try {
+        return await this.ocrService.recognizeImage(payload || {});
+      } catch (error) {
+        return {
+          success: false,
+          source: 'none',
+          message: error.message || 'OCR识别失败',
+        };
       }
     });
   }

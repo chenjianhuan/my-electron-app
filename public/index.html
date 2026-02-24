@@ -74,6 +74,15 @@
                         <div id="messageLineNumbers" class="message-line-numbers" aria-hidden="true"></div>
                         <textarea id="message" rows="4" cols="50" placeholder="输入消息，例如: 14.21.13.39.38.30.26.18.33～各20"></textarea>
                     </div>
+                    <div class="ocr-uploader" id="ocrDropZone">
+                        <input id="ocrImageInput" type="file" accept="image/*" hidden>
+                        <div class="ocr-uploader-text" id="ocrImageHint">拖拽图片到这里，或在输入框中粘贴截图</div>
+                        <div class="ocr-uploader-actions">
+                            <button type="button" class="edit-button" onclick="pickOcrImage()">选择图片</button>
+                            <button type="button" class="recognize-button" onclick="runOcrFromSelectedImage()">识别图片</button>
+                            <button type="button" class="clear-button" onclick="clearOcrImage()">清除图片</button>
+                        </div>
+                    </div>
                     <div class="modal-action-row">
                         <button class="recognize-button modal-action-btn" onclick="previewMessage()">识别</button>
                         <button class="clear-button modal-action-btn" onclick="clearAttributeSelection()">清空</button>
