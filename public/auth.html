@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MessageCounter - 安全入口</title>
+  <link rel="stylesheet" href="./auth.css">
+</head>
+<body>
+  <main class="auth-shell">
+    <section class="auth-card" aria-labelledby="auth-title">
+      <div class="auth-head">
+        <p class="auth-kicker">MessageCounter</p>
+        <h1 id="auth-title">请输入访问密码</h1>
+      </div>
+
+      <form id="unlockForm" class="auth-form" autocomplete="off">
+        <label class="auth-label" for="passwordInput">访问密码</label>
+        <input
+          id="passwordInput"
+          class="auth-input"
+          type="password"
+          inputmode="text"
+          autocomplete="current-password"
+          placeholder="输入密码"
+          required
+        >
+        <button id="unlockButton" class="auth-button" type="submit">进入系统</button>
+      </form>
+
+      <p id="authStatus" class="auth-status" role="status" aria-live="polite"></p>
+    </section>
+  </main>
+
+  <script src="./auth.js"></script>
+</body>
+</html>

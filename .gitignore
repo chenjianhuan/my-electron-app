@@ -18,6 +18,12 @@ dist/*.yml
 .DS_Store
 Thumbs.db
 
+# Local tooling/data artifacts
+.venv-ocr/
+dist-license-studio/
+chi_sim.traineddata
+eng.traineddata
+
 # License private keys (keep out of repo)
 keys/*private*.pem
 keys/*.key

@@ -9,6 +9,282 @@ class UserManager {
         this.viewRegions = new Set(['new_ao']); // 统计查看地区（主页面多选）
         this.isSummaryMode = false;
         this.editingOriginal = null;
+        this.virtualListStates = {};
+    }
+
+    getVirtualListKey(container) {
+        if (!container) return '';
+        return container.id || container.getAttribute('data-virtual-key') || '';
+    }
+
+    ensureVirtualListState(container, options = {}) {
+        if (!container) return null;
+        const key = this.getVirtualListKey(container);
+        if (!key) return null;
+
+        let state = this.virtualListStates[key];
+        if (!state || state.container !== container) {
+            state = {
+                key,
+                container,
+                topSpacer: null,
+                bottomSpacer: null,
+                emptyNode: null,
+                items: [],
+                renderItem: null,
+                options: {},
+                dataVersion: 0,
+                appliedVersion: -1,
+                lastStartIndex: -1,
+                lastEndIndex: -1,
+                lastTotalCount: -1,
+                estimateOffsets: null,
+                totalEstimateHeight: 0,
+                rafId: null,
+                lastPaintTs: 0,
+                bound: false
+            };
+            this.virtualListStates[key] = state;
+        }
+
+        state.options = {
+            estimateItemHeight: 56,
+            overscan: 6,
+            minRenderCount: 24,
+            maxRenderCount: 120,
+            emptyText: '',
+            ...state.options,
+            ...options
+        };
+
+        this.mountVirtualListScaffold(state);
+        return state;
+    }
+
+    mountVirtualListScaffold(state) {
+        if (!state || !state.container) return;
+        const container = state.container;
+        if (!state.topSpacer || !state.bottomSpacer || !container.contains(state.topSpacer) || !container.contains(state.bottomSpacer)) {
+            container.innerHTML = '';
+            const topSpacer = document.createElement('li');
+            topSpacer.className = 'virtual-spacer';
+            topSpacer.setAttribute('aria-hidden', 'true');
+            const bottomSpacer = document.createElement('li');
+            bottomSpacer.className = 'virtual-spacer';
+            bottomSpacer.setAttribute('aria-hidden', 'true');
+            container.appendChild(topSpacer);
+            container.appendChild(bottomSpacer);
+            state.topSpacer = topSpacer;
+            state.bottomSpacer = bottomSpacer;
+        }
+
+        if (!state.bound) {
+            container.addEventListener('scroll', () => {
+                const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+                    ? performance.now()
+                    : Date.now();
+                if ((now - (state.lastPaintTs || 0)) >= 14) {
+                    this.paintVirtualList(state);
+                    state.lastPaintTs = now;
+                    return;
+                }
+                this.scheduleVirtualListRender(state);
+            }, { passive: true });
+            state.bound = true;
+        }
+    }
+
+    clearVirtualListRows(state) {
+        if (!state || !state.topSpacer || !state.bottomSpacer) return;
+        let node = state.topSpacer.nextSibling;
+        while (node && node !== state.bottomSpacer) {
+            const next = node.nextSibling;
+            node.remove();
+            node = next;
+        }
+    }
+
+    scheduleVirtualListRender(state) {
+        if (!state || state.rafId) return;
+        state.rafId = requestAnimationFrame(() => {
+            state.rafId = null;
+            this.paintVirtualList(state);
+        });
+    }
+
+    setVirtualListData(container, items, renderItem, options = {}) {
+        const state = this.ensureVirtualListState(container, options);
+        if (!state) return;
+        state.items = Array.isArray(items) ? items : [];
+        state.renderItem = typeof renderItem === 'function' ? renderItem : null;
+        this.buildVirtualEstimateOffsets(state);
+        state.dataVersion += 1;
+        state.lastStartIndex = -1;
+        state.lastEndIndex = -1;
+        state.lastTotalCount = -1;
+        this.scheduleVirtualListRender(state);
+    }
+
+    getVirtualEstimatedHeight(state, item, index) {
+        if (!state) return 56;
+        const estimateByItem = state.options && typeof state.options.getItemEstimate === 'function'
+            ? Number(state.options.getItemEstimate(item, index))
+            : NaN;
+        if (Number.isFinite(estimateByItem) && estimateByItem > 0) {
+            return Math.max(20, Math.min(1600, estimateByItem));
+        }
+        const estimate = Number(state.options && state.options.estimateItemHeight);
+        if (Number.isFinite(estimate) && estimate > 0) {
+            return Math.max(20, Math.min(1600, estimate));
+        }
+        return 56;
+    }
+
+    buildVirtualEstimateOffsets(state) {
+        if (!state) return;
+        const items = Array.isArray(state.items) ? state.items : [];
+        const total = items.length;
+        const offsets = new Array(total + 1);
+        offsets[0] = 0;
+        let acc = 0;
+        for (let i = 0; i < total; i += 1) {
+            acc += this.getVirtualEstimatedHeight(state, items[i], i);
+            offsets[i + 1] = acc;
+        }
+        state.estimateOffsets = offsets;
+        state.totalEstimateHeight = acc;
+    }
+
+    findVirtualItemIndexByOffset(offsets, target) {
+        if (!Array.isArray(offsets) || offsets.length <= 1) return 0;
+        const total = offsets.length - 1;
+        if (target <= 0) return 0;
+        const totalHeight = offsets[total] || 0;
+        if (target >= totalHeight) return Math.max(0, total - 1);
+
+        let left = 0;
+        let right = total - 1;
+        while (left <= right) {
+            const mid = (left + right) >> 1;
+            const start = offsets[mid] || 0;
+            const end = offsets[mid + 1] || start;
+            if (target < start) {
+                right = mid - 1;
+            } else if (target >= end) {
+                left = mid + 1;
+            } else {
+                return mid;
+            }
+        }
+        return Math.max(0, Math.min(total - 1, left));
+    }
+
+    paintVirtualList(state) {
+        if (!state || !state.container || !state.topSpacer || !state.bottomSpacer) return;
+        state.lastPaintTs = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+            ? performance.now()
+            : Date.now();
+        const container = state.container;
+        const items = Array.isArray(state.items) ? state.items : [];
+        const totalCount = items.length;
+
+        if (state.emptyNode) {
+            state.emptyNode.remove();
+            state.emptyNode = null;
+        }
+
+        if (totalCount === 0 || typeof state.renderItem !== 'function') {
+            this.clearVirtualListRows(state);
+            state.topSpacer.style.height = '0px';
+            state.bottomSpacer.style.height = '0px';
+            if (state.options.emptyText) {
+                const emptyNode = document.createElement('li');
+                emptyNode.className = 'virtual-empty';
+                emptyNode.textContent = state.options.emptyText;
+                state.bottomSpacer.before(emptyNode);
+                state.emptyNode = emptyNode;
+            }
+            state.lastStartIndex = -1;
+            state.lastEndIndex = -1;
+            state.lastTotalCount = totalCount;
+            state.appliedVersion = state.dataVersion;
+            return;
+        }
+
+        const itemHeight = Math.max(24, state.options.estimateItemHeight || 56);
+        const viewportHeight = Math.max(itemHeight * 4, container.clientHeight || 0);
+        const scrollTop = Math.max(0, container.scrollTop);
+        const overscan = Math.max(0, state.options.overscan || 0);
+        const minRenderCount = Math.max(20, state.options.minRenderCount || 72);
+        const maxRenderCount = Math.max(minRenderCount, state.options.maxRenderCount || 160);
+        const offsets = Array.isArray(state.estimateOffsets) && state.estimateOffsets.length === totalCount + 1
+            ? state.estimateOffsets
+            : null;
+
+        let startIndex = 0;
+        let endIndex = 0;
+        let topHeight = 0;
+        let bottomHeight = 0;
+        if (offsets) {
+            const viewportBottom = scrollTop + viewportHeight;
+            const baseIndex = this.findVirtualItemIndexByOffset(offsets, scrollTop);
+            startIndex = Math.max(0, baseIndex - overscan);
+            const viewportEnd = this.findVirtualItemIndexByOffset(offsets, viewportBottom);
+            endIndex = Math.min(totalCount, viewportEnd + 1 + overscan);
+            if ((endIndex - startIndex) < minRenderCount) {
+                endIndex = Math.min(totalCount, startIndex + minRenderCount);
+            }
+            if ((endIndex - startIndex) > maxRenderCount) {
+                endIndex = Math.min(totalCount, startIndex + maxRenderCount);
+            }
+            if (endIndex < startIndex) {
+                endIndex = startIndex;
+            }
+            topHeight = Math.max(0, offsets[startIndex] || 0);
+            const endOffset = offsets[endIndex] || topHeight;
+            const totalHeight = Number.isFinite(state.totalEstimateHeight)
+                ? state.totalEstimateHeight
+                : (offsets[offsets.length - 1] || endOffset);
+            bottomHeight = Math.max(0, totalHeight - endOffset);
+        } else {
+            const baseIndex = Math.floor(scrollTop / itemHeight);
+            startIndex = Math.max(0, baseIndex - overscan);
+            const visibleCount = Math.ceil(viewportHeight / itemHeight) + (overscan * 2);
+            const renderCount = Math.min(maxRenderCount, Math.max(minRenderCount, visibleCount));
+            endIndex = Math.min(totalCount, startIndex + renderCount);
+            topHeight = Math.max(0, startIndex * itemHeight);
+            bottomHeight = Math.max(0, (totalCount - endIndex) * itemHeight);
+        }
+
+        state.topSpacer.style.height = `${topHeight}px`;
+        state.bottomSpacer.style.height = `${bottomHeight}px`;
+
+        const sameRange =
+            state.lastStartIndex === startIndex &&
+            state.lastEndIndex === endIndex &&
+            state.lastTotalCount === totalCount &&
+            state.appliedVersion === state.dataVersion;
+        if (sameRange) {
+            return;
+        }
+
+        this.clearVirtualListRows(state);
+        const fragment = document.createDocumentFragment();
+        for (let i = startIndex; i < endIndex; i += 1) {
+            const rowNode = state.renderItem(items[i], i);
+            if (!rowNode) continue;
+            rowNode.setAttribute('data-virtual-index', String(i));
+            fragment.appendChild(rowNode);
+        }
+        state.bottomSpacer.before(fragment);
+        state.lastStartIndex = startIndex;
+        state.lastEndIndex = endIndex;
+        state.lastTotalCount = totalCount;
+        state.appliedVersion = state.dataVersion;
+    }
+
+    renderVirtualRows(container, rows, renderItem, options = {}) {
+        this.setVirtualListData(container, rows, renderItem, options);
     }
 
     getRegionOptions() {
@@ -58,14 +334,142 @@ class UserManager {
     }
 
     createEmptyRegionData() {
+        const data = this.generateData();
         return {
-            data: this.generateData(),
+            data,
+            payoutData: data.map(item => ({ ...item, value: 0 })),
             originalData: [],
             totalCount: 0
         };
     }
 
+    getDefaultPayoutOdds() {
+        if (window.messageProcessor && typeof window.messageProcessor.getEffectiveDefaultOdds === 'function') {
+            const odds = Number(window.messageProcessor.getEffectiveDefaultOdds(''));
+            if (Number.isFinite(odds) && odds > 0) return odds;
+        }
+        if (window.messageProcessor) {
+            const legacyOdds = Number(window.messageProcessor.ODDS);
+            if (Number.isFinite(legacyOdds) && legacyOdds > 0) return legacyOdds;
+        }
+        return 47;
+    }
+
+    createPayoutDataFromStakeData(stakeData = [], odds = this.getDefaultPayoutOdds()) {
+        const safeOdds = Number.isFinite(Number(odds)) && Number(odds) > 0 ? Number(odds) : 47;
+        return (Array.isArray(stakeData) ? stakeData : this.generateData()).map(item => ({
+            number: item.number,
+            text: item.text,
+            value: (Number(item.value) || 0) * safeOdds
+        }));
+    }
+
+    normalizeNumberDataSeries(source = [], fallbackSeries = []) {
+        const template = this.generateData().map(item => ({
+            number: item.number,
+            text: item.text,
+            value: 0
+        }));
+        const map = new Map(template.map(item => [item.number, { ...item }]));
+        const applyFallback = (series) => {
+            if (!Array.isArray(series)) return;
+            series.forEach((item) => {
+                if (!item || typeof item !== 'object') return;
+                const number = String(item.number || '').padStart(2, '0');
+                if (!map.has(number)) return;
+                const value = Number(item.value);
+                if (!Number.isFinite(value)) return;
+                map.get(number).value = value;
+            });
+        };
+        const sourceAgg = new Map();
+        if (Array.isArray(source)) {
+            source.forEach((item) => {
+                if (!item || typeof item !== 'object') return;
+                const number = String(item.number || '').padStart(2, '0');
+                if (!map.has(number)) return;
+                const value = Number(item.value);
+                if (!Number.isFinite(value)) return;
+                sourceAgg.set(number, (sourceAgg.get(number) || 0) + value);
+            });
+        }
+        applyFallback(fallbackSeries);
+        sourceAgg.forEach((value, number) => {
+            if (!map.has(number)) return;
+            map.get(number).value = value;
+        });
+        return template.map(item => map.get(item.number) || item);
+    }
+
+    ensureRegionPayoutData(regionData, options = {}) {
+        if (!regionData || !Array.isArray(regionData.data)) return [];
+        const fallbackOdds = Number(options && options.fallbackOdds);
+        const odds = Number.isFinite(fallbackOdds) && fallbackOdds > 0
+            ? fallbackOdds
+            : this.getDefaultPayoutOdds();
+        const fallback = this.createPayoutDataFromStakeData(regionData.data, odds);
+        regionData.payoutData = this.normalizeNumberDataSeries(regionData.payoutData, fallback);
+        return regionData.payoutData;
+    }
+
+    hasIncompletePayoutData() {
+        const regionKeys = this.getRegionOptions().map(item => item.key);
+        return Object.keys(this.users || {}).some((userName) => {
+            return regionKeys.some((regionKey) => {
+                const regionData = this.getUserRegionData(userName, regionKey);
+                if (!regionData || !Array.isArray(regionData.data)) return false;
+                if (!Array.isArray(regionData.payoutData)) return true;
+                return regionData.payoutData.length !== regionData.data.length;
+            });
+        });
+    }
+
+    extractOriginalMessageText(entry) {
+        if (typeof entry === 'string') {
+            return entry.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        }
+        if (entry && typeof entry === 'object') {
+            const candidates = ['raw', 'message', 'text', 'original', 'value', 'canonical'];
+            for (const key of candidates) {
+                if (typeof entry[key] === 'string') {
+                    return entry[key].replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+                }
+            }
+        }
+        if (entry == null) return '';
+        return String(entry).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    }
+
+    hasOriginalDataAt(regionData, index) {
+        return !!(regionData
+            && Array.isArray(regionData.originalData)
+            && Number.isInteger(index)
+            && index >= 0
+            && index < regionData.originalData.length);
+    }
+
     normalizeUserRecord(userRecord) {
+        const normalizeOriginalDataArray = (rawList) => {
+            if (!Array.isArray(rawList)) return [];
+            return rawList.map(item => this.extractOriginalMessageText(item));
+        };
+
+        const normalizeRegionPayload = (sourceRegion) => {
+            const source = sourceRegion && typeof sourceRegion === 'object' ? sourceRegion : {};
+            const normalizedData = this.normalizeNumberDataSeries(Array.isArray(source.data) ? source.data : []);
+            const normalizedPayoutData = this.normalizeNumberDataSeries(
+                Array.isArray(source.payoutData) ? source.payoutData : [],
+                this.createPayoutDataFromStakeData(normalizedData, this.getDefaultPayoutOdds())
+            );
+            const totalCount = normalizedData.reduce((sum, item) => sum + (Number(item.value) || 0), 0);
+            return {
+                data: normalizedData,
+                payoutData: normalizedPayoutData,
+                originalData: normalizeOriginalDataArray(source.originalData),
+                totalCount
+            };
+        };
+
         if (!userRecord || typeof userRecord !== 'object') {
             return {
                 regions: {
@@ -77,13 +481,15 @@ class UserManager {
         }
 
         if (!userRecord.regions) {
+            const legacyRegion = normalizeRegionPayload({
+                data: Array.isArray(userRecord.data) ? userRecord.data : this.generateData(),
+                payoutData: Array.isArray(userRecord.payoutData) ? userRecord.payoutData : [],
+                originalData: Array.isArray(userRecord.originalData) ? userRecord.originalData : [],
+                totalCount: Number(userRecord.totalCount) || 0
+            });
             return {
                 regions: {
-                    new_ao: {
-                        data: Array.isArray(userRecord.data) ? userRecord.data : this.generateData(),
-                        originalData: Array.isArray(userRecord.originalData) ? userRecord.originalData : [],
-                        totalCount: Number(userRecord.totalCount) || 0
-                    },
+                    new_ao: legacyRegion,
                     old_ao: this.createEmptyRegionData(),
                     hongkong: this.createEmptyRegionData()
                 }
@@ -93,15 +499,7 @@ class UserManager {
         const normalized = { regions: {} };
         this.getRegionOptions().forEach(region => {
             const source = userRecord.regions[region.key];
-            if (source && Array.isArray(source.data) && Array.isArray(source.originalData)) {
-                normalized.regions[region.key] = {
-                    data: source.data,
-                    originalData: source.originalData,
-                    totalCount: Number(source.totalCount) || 0
-                };
-            } else {
-                normalized.regions[region.key] = this.createEmptyRegionData();
-            }
+            normalized.regions[region.key] = normalizeRegionPayload(source || {});
         });
         return normalized;
     }
@@ -181,114 +579,64 @@ class UserManager {
 
     renderZodiacBoard(section, sourceData = []) {
         const board = document.createElement('div');
-        board.classList.add('zodiac-board');
+        board.classList.add('zodiac-board', 'zodiac-board-vertical');
         const maxValue = (sourceData || []).reduce((max, item) => {
             const v = Number(item.value) || 0;
             return v > max ? v : max;
         }, 0);
-
-        const bar = document.createElement('div');
-        bar.classList.add('zodiac-bar');
-
-        const columnsContainer = document.createElement('div');
-        columnsContainer.classList.add('zodiac-columns');
-
         const columns = this.buildZodiacColumns(sourceData);
-        const minSize = 54;
-        const maxSize = 106;
-        const noValueSize = 38;
-        const columnGap = 8;
-        const columnPadding = 6;
         const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
-        const calcSingleLineFontSize = (size, text, prefer) => {
-            const len = Math.max(1, String(text).length);
-            const maxByWidth = Math.floor((size * 0.84) / (0.62 * len));
-            return clamp(Math.min(prefer, maxByWidth), 10, prefer);
-        };
-        const calcValueFontSize = (size, valueText) => {
-            const len = Math.max(1, String(valueText).length);
-            // 优先保证完整显示：用保守字符宽度系数和更小的可用宽度估算
-            const preferred = Math.round(size * 0.30);
-            const maxByWidth = Math.floor((size * 0.72) / (0.68 * len));
-            const maxByHeight = Math.floor(size * 0.30);
-            return clamp(Math.min(preferred, maxByWidth, maxByHeight), 8, Math.round(size * 0.34));
-        };
+        const rowsContainer = document.createElement('div');
+        rowsContainer.classList.add('zodiac-rows');
 
-        board.style.setProperty('--zodiac-gap', `${columnGap}px`);
+        columns.forEach(column => {
+            const row = document.createElement('div');
+            row.classList.add('zodiac-row');
 
-        const columnLayouts = columns.map(column => {
-            const cards = column.numbers.map(item => {
-                if (item.value > 0) {
-                    const scale = maxValue > 0 ? (1 + 0.6 * (item.value / maxValue)) : 1;
-                    const size = Math.round(minSize * Math.min(1.6, scale));
-                    const finalSize = Math.min(maxSize, size);
-                    const valueFontSize = calcValueFontSize(finalSize, item.value);
-                    const numberFontSize = clamp(Math.round(valueFontSize * 0.98), 8, valueFontSize);
-                    return { ...item, size: finalSize, fontSize: valueFontSize, numberFontSize, valueFontSize, hasValue: true };
-                }
+            const animalCell = document.createElement('div');
+            animalCell.classList.add('zodiac-row-animal');
+            animalCell.classList.add(`wave-${column.wave}`);
+            animalCell.textContent = column.animal;
+            row.appendChild(animalCell);
 
-                const text = item.number;
-                const fontSize = calcSingleLineFontSize(noValueSize, text, 24);
-                return { ...item, size: noValueSize, fontSize, hasValue: false, text };
-            });
-            return { ...column, cards };
-        });
+            const numbersContainer = document.createElement('div');
+            numbersContainer.classList.add('zodiac-row-numbers');
 
-        const sectionInnerWidth = Math.max(0, section.clientWidth - 16);
-        const totalGap = columnGap * (columnLayouts.length - 1);
-        const equalFillWidth = Math.max(72, Math.floor((sectionInnerWidth - totalGap) / 12));
-        const columnWidths = columnLayouts.map(column => {
-            const required = column.cards.reduce((m, c) => Math.max(m, c.size), 0) + columnPadding;
-            return Math.max(equalFillWidth, required);
-        });
-        const gridTemplate = columnWidths.map(w => `${w}px`).join(' ');
-        bar.style.gridTemplateColumns = gridTemplate;
-        columnsContainer.style.gridTemplateColumns = gridTemplate;
-
-        columnLayouts.forEach(column => {
-            const barCell = document.createElement('div');
-            barCell.classList.add('zodiac-bar-cell');
-            barCell.classList.add(`wave-${column.wave}`);
-            barCell.textContent = column.animal;
-            bar.appendChild(barCell);
-
-            const col = document.createElement('div');
-            col.classList.add('zodiac-column');
-
-            column.cards.forEach(item => {
+            column.numbers.forEach(item => {
                 const card = document.createElement('div');
                 card.classList.add('number-card');
                 card.classList.add(`wave-${item.wave}`);
-                card.style.setProperty('--card-size', `${item.size}px`);
-                card.style.setProperty('--card-font-size', `${item.fontSize}px`);
-                if (item.numberFontSize) {
-                    card.style.setProperty('--card-number-font-size', `${item.numberFontSize}px`);
-                }
-                if (item.valueFontSize) {
-                    card.style.setProperty('--card-value-font-size', `${item.valueFontSize}px`);
-                }
-
-                if (item.hasValue) {
+                const value = Number(item.value) || 0;
+                if (value > 0) {
+                    const scale = maxValue > 0 ? (1 + 0.55 * (value / maxValue)) : 1;
+                    const size = clamp(Math.round(40 * Math.min(1.45, scale)), 40, 58);
+                    const valueFontSize = clamp(Math.round(size * 0.28), 10, 18);
+                    const numberFontSize = clamp(Math.round(valueFontSize * 0.95), 9, valueFontSize);
+                    card.style.setProperty('--card-size', `${size}px`);
+                    card.style.setProperty('--card-number-font-size', `${numberFontSize}px`);
+                    card.style.setProperty('--card-value-font-size', `${valueFontSize}px`);
                     card.classList.add('has-value');
                     card.innerHTML = `
                         <span class="number-stack-layout">
                             <span class="number-stack-top number-stack-chip">${item.number}</span>
-                            <span class="number-stack-bottom">${item.value}</span>
+                            <span class="number-stack-bottom">${value}</span>
                         </span>
                     `;
                     this.fitValueText(card);
                 } else {
                     card.classList.add('no-value');
-                    card.textContent = item.text;
+                    card.style.setProperty('--card-size', '40px');
+                    card.style.setProperty('--card-font-size', '16px');
+                    card.textContent = item.number;
                 }
-                col.appendChild(card);
+                numbersContainer.appendChild(card);
             });
 
-            columnsContainer.appendChild(col);
+            row.appendChild(numbersContainer);
+            rowsContainer.appendChild(row);
         });
 
-        board.appendChild(bar);
-        board.appendChild(columnsContainer);
+        board.appendChild(rowsContainer);
         section.appendChild(board);
     }
 
@@ -362,6 +710,7 @@ class UserManager {
         }
 
         const mergedMap = new Map(this.generateData().map(item => [item.number, { ...item, value: 0 }]));
+        const mergedPayoutMap = new Map(this.generateData().map(item => [item.number, { ...item, value: 0 }]));
         const originalData = [];
         let totalCount = 0;
         const viewRegions = this.getViewRegions();
@@ -370,6 +719,7 @@ class UserManager {
             viewRegions.forEach(regionKey => {
                 const regionData = this.getUserRegionData(userName, regionKey);
                 if (!regionData) return;
+                this.ensureRegionPayoutData(regionData);
                 totalCount += regionData.totalCount || 0;
                 regionData.data.forEach(item => {
                     const merged = mergedMap.get(item.number);
@@ -377,8 +727,20 @@ class UserManager {
                         merged.value += item.value || 0;
                     }
                 });
+                (regionData.payoutData || []).forEach(item => {
+                    const merged = mergedPayoutMap.get(item.number);
+                    if (merged) {
+                        merged.value += item.value || 0;
+                    }
+                });
                 regionData.originalData.forEach((message, index) => {
-                    originalData.push({ userName, index, message, regionKey, regionLabel: this.getRegionLabel(regionKey) });
+                    originalData.push({
+                        userName,
+                        index,
+                        message: this.extractOriginalMessageText(message),
+                        regionKey,
+                        regionLabel: this.getRegionLabel(regionKey)
+                    });
                 });
             });
         });
@@ -386,6 +748,7 @@ class UserManager {
         return {
             users: selected,
             data: Array.from(mergedMap.values()),
+            payoutData: Array.from(mergedPayoutMap.values()),
             totalCount,
             originalData
         };
@@ -427,11 +790,11 @@ class UserManager {
         const regionLabel = this.getViewRegionLabels().join('、');
         if (currentUserElement) {
             currentUserElement.textContent = selected.length > 0
-                ? `当前网友(${regionLabel}): ${selected.join('，')}`
-                : `当前网友(${regionLabel}): 无`;
+                ? `当前客户(${regionLabel}): ${selected.join('，')}`
+                : `当前客户(${regionLabel}): 无`;
         }
         if (summarySectionTitle) {
-            summarySectionTitle.textContent = `所有网友汇总(${regionLabel})`;
+            summarySectionTitle.textContent = `所有客户汇总(${regionLabel})`;
         }
     }
 
@@ -446,8 +809,8 @@ class UserManager {
                 return sum + this.getUserTotalInViewRegions(userName);
             }, 0);
             const total = Number.isFinite(count) && count > 0 ? count : summaryTotal;
-            sortedResultsTitle.textContent = `所有网友累计值排序（${regionLabel}） (总: ${total})：`;
-            originalDataTitle.textContent = `所有网友的原始输入数据（${regionLabel}）：`;
+            sortedResultsTitle.textContent = `所有客户累计值排序（${regionLabel}） (总: ${total})：`;
+            originalDataTitle.textContent = `所有客户的原始输入数据（${regionLabel}）：`;
         } else {
             const selectedData = this.getSelectedUserData();
             if (selectedData.users.length > 0) {
@@ -455,7 +818,7 @@ class UserManager {
                 sortedResultsTitle.textContent = `${userLabel} 累计值排序（${regionLabel}） (总: ${selectedData.totalCount || 0})`;
                 originalDataTitle.textContent = `${userLabel} 原始输入数据（${regionLabel}）：`;
             } else {
-                sortedResultsTitle.textContent = `没有选择网友（${regionLabel}）`;
+                sortedResultsTitle.textContent = `没有选择客户（${regionLabel}）`;
                 originalDataTitle.textContent = `没有原始输入数据（${regionLabel}）`;
             }
         }
@@ -470,6 +833,25 @@ class UserManager {
         this.renderUserList();
         if (typeof window.refreshViewRegionBar === 'function') {
             window.refreshViewRegionBar();
+        }
+        if (typeof window.refreshRegionPnlPanel === 'function') {
+            window.refreshRegionPnlPanel();
+        }
+        if (typeof window.refreshDashboardStatus === 'function') {
+            window.refreshDashboardStatus();
+        }
+        if (typeof window.handleAnchorRuleScopeChange === 'function') {
+            window.handleAnchorRuleScopeChange();
+        } else {
+            if (typeof window.renderAnchorAliasList === 'function') {
+                window.renderAnchorAliasList();
+            }
+            if (typeof window.renderAnchorParseModeState === 'function') {
+                window.renderAnchorParseModeState();
+            }
+            if (typeof window.renderAttributeCombinePolicyState === 'function') {
+                window.renderAttributeCombinePolicyState();
+            }
         }
     }
 
@@ -510,6 +892,13 @@ class UserManager {
         }
 
         delete this.users[userName];
+        if (window.messageProcessor && typeof window.messageProcessor.resetClientRules === 'function') {
+            try {
+                window.messageProcessor.resetClientRules(userName);
+            } catch (error) {
+                console.warn(`删除客户规则失败(${userName}):`, error);
+            }
+        }
         const remainingUsers = Object.keys(this.users);
         this.selectedUsers.delete(userName);
         if (this.lastActiveUser === userName) {
@@ -524,22 +913,62 @@ class UserManager {
                 this.setSelectedUsers([sortedUsers[0]]);
                 this.lastActiveUser = sortedUsers[0];
                 this.isSummaryMode = false;
-                this.updateCurrentUserDisplay();
-                this.updateTitles();
-                this.renderAllSections();
             }
         } else {
             this.selectedUsers.clear();
             this.lastActiveUser = null;
-            this.updateCurrentUserDisplay();
             this.clearSections();
         }
 
-        this.renderUserList();
+        // 删除后无论当前是否仍有选中客户，都必须统一刷新主页面，
+        // 否则右侧累计值/原始消息可能停留在删除前的数据。
+        this.updateCurrentUserDisplay();
+        this.updateTitles();
+        this.renderAllSections();
         this.saveUserData();
         
         console.log('删除用户:', userName);
         return true;
+    }
+
+    resolveActionUserName() {
+        if (this.lastActiveUser && this.users[this.lastActiveUser]) {
+            return this.lastActiveUser;
+        }
+        const selected = this.getSelectedUsers();
+        if (selected.length > 0) {
+            return selected[0];
+        }
+        const sorted = this.getSortedUsers();
+        return sorted.length > 0 ? sorted[0] : '';
+    }
+
+    // 清空当前客户数据（仅消息与统计，不删除客户规则偏好）
+    clearCurrentUserData() {
+        const userName = this.resolveActionUserName();
+        if (!userName || !this.users[userName]) {
+            throw new Error('请先选择客户');
+        }
+        const ok = confirm(`确定清空客户 ${userName} 的消息数据吗？\n仅清空号码统计与原始消息，不会删除该客户的锚点偏好规则。`);
+        if (!ok) {
+            return { cleared: false, userName };
+        }
+
+        const userRecord = this.users[userName];
+        if (!userRecord || typeof userRecord !== 'object') {
+            throw new Error('客户数据不存在');
+        }
+        if (!userRecord.regions || typeof userRecord.regions !== 'object') {
+            userRecord.regions = {};
+        }
+        this.getRegionOptions().forEach(region => {
+            userRecord.regions[region.key] = this.createEmptyRegionData();
+        });
+
+        this.renderAllSections();
+        this.saveUserData();
+        console.log('已清空客户数据:', userName);
+        return { cleared: true, userName };
     }
 
     // 清空区域
@@ -649,42 +1078,44 @@ class UserManager {
         const sortedResultsElement = document.getElementById('sortedResults');
         if (!sortedResultsElement) return;
 
-        sortedResultsElement.innerHTML = '';
-
+        let rows = [];
         if (this.isSummaryMode) {
-            this.renderSummarySortedResults(sortedResultsElement);
+            rows = this.buildSummarySortedRows();
         } else if (this.getSelectedUsers().length > 0) {
-            this.renderUserSortedResults(sortedResultsElement);
+            rows = this.buildUserSortedRows();
         }
+
+        this.renderVirtualRows(
+            sortedResultsElement,
+            rows,
+            (row) => this.createSortedResultRow(row),
+            {
+                estimateItemHeight: 66,
+                overscan: 6,
+                minRenderCount: 24,
+                maxRenderCount: 120,
+                emptyText: '暂无累计数据'
+            }
+        );
     }
 
-    // 渲染用户排序结果
-    renderUserSortedResults(container) {
+    buildUserSortedRows() {
         const selectedData = this.getSelectedUserData();
-        if (!selectedData.users.length) return;
+        if (!selectedData.users.length) return [];
 
-        const sortedData = selectedData.data
+        return selectedData.data
             .slice()
-            .sort((a, b) => b.value - a.value);
-
-        sortedData.forEach(item => {
-            const li = document.createElement('li');
-            li.innerHTML = `
-                <span class="sorted-number-badge wave-${this.getNumberWave(item.number)}">${item.number}</span>
-                <span class="sorted-text">${item.text}: ${item.value}</span>
-            `;
-            li.title = '点击可编辑该号码数值';
-            li.onclick = () => {
-                if (window.handleCellClick) {
-                    window.handleCellClick(item.number);
-                }
-            };
-            container.appendChild(li);
-        });
+            .sort((a, b) => b.value - a.value)
+            .map(item => ({
+                number: item.number,
+                text: item.text,
+                value: item.value,
+                pnl: null,
+                clickable: true
+            }));
     }
 
-    // 渲染汇总排序结果
-    renderSummarySortedResults(container) {
+    buildSummarySortedRows() {
         const summaryData = {};
         const viewRegions = this.getViewRegions();
         const showPnl = this.isSummaryMode && viewRegions.length === 1;
@@ -693,11 +1124,18 @@ class UserManager {
             viewRegions.forEach(regionKey => {
                 const regionData = this.getUserRegionData(userName, regionKey);
                 if (!regionData) return;
+                this.ensureRegionPayoutData(regionData);
                 regionData.data.forEach(item => {
                     if (!summaryData[item.number]) {
-                        summaryData[item.number] = { text: item.text, value: 0 };
+                        summaryData[item.number] = { text: item.text, value: 0, payout: 0 };
                     }
                     summaryData[item.number].value += item.value;
+                });
+                (regionData.payoutData || []).forEach(item => {
+                    if (!summaryData[item.number]) {
+                        summaryData[item.number] = { text: item.text, value: 0, payout: 0 };
+                    }
+                    summaryData[item.number].payout += item.value || 0;
                 });
             });
         });
@@ -708,25 +1146,56 @@ class UserManager {
             ? sortedSummaryData.reduce((sum, [, data]) => sum + (data.value || 0), 0)
             : 0;
 
-        sortedSummaryData.forEach(([number, data]) => {
-            const li = document.createElement('li');
-            if (showPnl) {
-                const pnl = totalValue - (47 * (data.value || 0));
-                const pnlClass = pnl > 0 ? 'profit' : (pnl < 0 ? 'loss' : 'even');
-                const pnlText = pnl > 0 ? `+${pnl}` : `${pnl}`;
-                li.innerHTML = `
-                    <span class="sorted-number-badge wave-${this.getNumberWave(number)}">${number}</span>
-                    <span class="sorted-text">${data.text}: ${data.value}</span>
-                    <span class="sorted-pnl ${pnlClass}">${pnlText}</span>
-                `;
-            } else {
-                li.innerHTML = `
-                    <span class="sorted-number-badge wave-${this.getNumberWave(number)}">${number}</span>
-                    <span class="sorted-text">${data.text}: ${data.value}</span>
-                `;
-            }
-            container.appendChild(li);
+        return sortedSummaryData.map(([number, data]) => {
+            const payout = Number(data && data.payout);
+            const pnl = showPnl ? (totalValue - (Number.isFinite(payout) ? payout : 0)) : null;
+            return {
+                number,
+                text: data.text,
+                value: data.value,
+                pnl,
+                clickable: false
+            };
         });
+    }
+
+    createSortedResultRow(row) {
+        const li = document.createElement('li');
+        const number = String(row.number || '').padStart(2, '0');
+        const value = Number(row.value) || 0;
+        li.innerHTML = `
+            <span class="sorted-number-badge wave-${this.getNumberWave(number)}">${number}</span>
+            <span class="sorted-text">${row.text}: ${value}</span>
+        `;
+
+        if (Number.isFinite(row.pnl)) {
+            const pnlValue = Number(row.pnl);
+            const pnlClass = row.pnl > 0 ? 'profit' : (row.pnl < 0 ? 'loss' : 'even');
+            const formatPnl = (value) => {
+                if (!Number.isFinite(value)) return '0';
+                if (Math.abs(value) < 1e-9) return '0';
+                if (Number.isInteger(value)) return `${value}`;
+                return value.toFixed(4).replace(/\.?0+$/, '');
+            };
+            const pnlText = pnlValue > 0 ? `+${formatPnl(pnlValue)}` : `${formatPnl(pnlValue)}`;
+            const pnlSpan = document.createElement('span');
+            pnlSpan.className = `sorted-pnl ${pnlClass}`;
+            pnlSpan.textContent = pnlText;
+            li.appendChild(pnlSpan);
+        }
+
+        if (row.clickable) {
+            li.title = '点击可编辑该号码数值';
+            li.onclick = () => {
+                if (window.handleCellClick) {
+                    window.handleCellClick(number);
+                }
+            };
+        } else {
+            li.style.cursor = 'default';
+        }
+
+        return li;
     }
 
     // 渲染原始数据
@@ -734,101 +1203,139 @@ class UserManager {
         const originalDataListElement = document.getElementById('originalDataList');
         if (!originalDataListElement) return;
 
-        originalDataListElement.innerHTML = '';
-
+        let rows = [];
         if (this.isSummaryMode) {
-            this.renderAllOriginalData(originalDataListElement);
+            rows = this.collectAllOriginalRows();
         } else if (this.getSelectedUsers().length > 0) {
-            this.renderUserOriginalData(originalDataListElement);
+            rows = this.collectSelectedOriginalRows();
         }
+
+        this.renderVirtualRows(
+            originalDataListElement,
+            rows,
+            (row) => this.createOriginalDataRow(row),
+            {
+                estimateItemHeight: 110,
+                getItemEstimate: (row) => this.estimateOriginalRowHeight(row),
+                overscan: 6,
+                minRenderCount: 24,
+                maxRenderCount: 96,
+                emptyText: '暂无原始消息'
+            }
+        );
     }
 
-    // 渲染用户原始数据
-    renderUserOriginalData(container) {
+    collectSelectedOriginalRows() {
         const selectedData = this.getSelectedUserData();
-        if (!selectedData.users.length) return;
-
-        selectedData.originalData.forEach(({ userName, index, message, regionKey, regionLabel }) => {
-            const li = document.createElement('li');
-            li.classList.add('original-data-list');
-
-            const textSpan = document.createElement('span');
-            textSpan.classList.add('message-text');
-            textSpan.textContent = `${userName}（${regionLabel || this.getRegionLabel(regionKey)}）：\n${message}`;
-
-            const actions = document.createElement('div');
-            actions.classList.add('message-actions');
-
-            const editButton = document.createElement('button');
-            editButton.classList.add('edit-button');
-            editButton.textContent = '编辑';
-            editButton.onclick = () => this.editOriginalData(userName, index, regionKey);
-
-            const deleteButton = document.createElement('button');
-            deleteButton.classList.add('delete-button');
-            deleteButton.textContent = '删除';
-            deleteButton.onclick = () => {
-                const ok = confirm('确认删除这条原始数据吗？删除后将重新统计该用户数据。');
-                if (ok) {
-                    this.deleteOriginalData(userName, index, regionKey);
-                }
-            };
-
-            actions.appendChild(editButton);
-            actions.appendChild(deleteButton);
-            li.appendChild(textSpan);
-            li.appendChild(actions);
-            container.appendChild(li);
-        });
+        if (!selectedData.users.length) return [];
+        return selectedData.originalData.map(({ userName, index, message, regionKey, regionLabel }) => ({
+            userName,
+            index,
+            message: this.extractOriginalMessageText(message),
+            regionKey,
+            regionLabel: regionLabel || this.getRegionLabel(regionKey)
+        }));
     }
 
-    // 渲染所有原始数据
-    renderAllOriginalData(container) {
+    collectAllOriginalRows() {
+        const rows = [];
         const viewRegions = this.getViewRegions();
         Object.entries(this.users).forEach(([userName, _user]) => {
             viewRegions.forEach(regionKey => {
                 const regionData = this.getUserRegionData(userName, regionKey);
                 if (!regionData) return;
                 regionData.originalData.forEach((data, index) => {
-                    const li = document.createElement('li');
-                    li.classList.add('original-data-list');
-
-                    const textSpan = document.createElement('span');
-                    textSpan.classList.add('message-text');
-                    textSpan.textContent = `${userName}（${this.getRegionLabel(regionKey)}）：\n${data}`;
-
-                    const actions = document.createElement('div');
-                    actions.classList.add('message-actions');
-
-                    const editButton = document.createElement('button');
-                    editButton.classList.add('edit-button');
-                    editButton.textContent = '编辑';
-                    editButton.onclick = () => this.editOriginalData(userName, index, regionKey);
-
-                    const deleteButton = document.createElement('button');
-                    deleteButton.classList.add('delete-button');
-                    deleteButton.textContent = '删除';
-                    deleteButton.onclick = () => {
-                        const ok = confirm(`确认删除 ${userName}（${this.getRegionLabel(regionKey)}）的这条原始数据吗？删除后将重新统计。`);
-                        if (ok) {
-                            this.deleteOriginalData(userName, index, regionKey);
-                        }
-                    };
-
-                    actions.appendChild(editButton);
-                    actions.appendChild(deleteButton);
-                    li.appendChild(textSpan);
-                    li.appendChild(actions);
-                    container.appendChild(li);
+                    rows.push({
+                        userName,
+                        index,
+                        message: this.extractOriginalMessageText(data),
+                        regionKey,
+                        regionLabel: this.getRegionLabel(regionKey)
+                    });
                 });
             });
         });
+        return rows;
+    }
+
+    estimateOriginalRowHeight(row) {
+        if (!row) return 110;
+        const regionLabel = row.regionLabel || this.getRegionLabel(row.regionKey);
+        const rawMessage = this.extractOriginalMessageText(row.message);
+        const text = `${row.userName || ''}（${regionLabel || ''}）\n${rawMessage}`.replace(/\r/g, '');
+        const logicalLines = text
+            .split('\n')
+            .reduce((sum, line) => sum + Math.max(1, Math.ceil(String(line || '').length / 32)), 0);
+        const estimated = 52 + (logicalLines * 20);
+        return Math.max(72, Math.min(1400, estimated));
+    }
+
+    createOriginalDataRow(row) {
+        const li = document.createElement('li');
+        li.classList.add('original-data-list');
+        const regionLabel = row.regionLabel || this.getRegionLabel(row.regionKey);
+        const rawMessage = this.extractOriginalMessageText(row.message);
+        const metaText = `${row.userName}（${regionLabel}）`;
+        const fullMessage = `${metaText}\n${rawMessage}`;
+        li.title = fullMessage;
+
+        const contentWrap = document.createElement('div');
+        contentWrap.classList.add('message-main');
+
+        const metaSpan = document.createElement('span');
+        metaSpan.classList.add('message-meta');
+        metaSpan.textContent = metaText;
+
+        const textSpan = document.createElement('span');
+        textSpan.classList.add('message-text');
+        textSpan.textContent = rawMessage;
+
+        contentWrap.appendChild(metaSpan);
+        contentWrap.appendChild(textSpan);
+
+        const actions = document.createElement('div');
+        actions.classList.add('message-actions');
+
+        const editButton = document.createElement('button');
+        editButton.classList.add('edit-button');
+        editButton.textContent = '编辑';
+        editButton.onclick = () => this.editOriginalData(row.userName, row.index, row.regionKey);
+
+        const deleteButton = document.createElement('button');
+        deleteButton.classList.add('delete-button');
+        deleteButton.textContent = '删除';
+        deleteButton.onclick = () => {
+            const scopeLabel = this.isSummaryMode
+                ? `${row.userName}（${regionLabel}）`
+                : '这条';
+            const ok = confirm(`确认删除${scopeLabel}原始数据吗？删除后将重新统计。`);
+            if (ok) {
+                this.deleteOriginalData(row.userName, row.index, row.regionKey);
+            }
+        };
+
+        actions.appendChild(editButton);
+        actions.appendChild(deleteButton);
+        li.appendChild(contentWrap);
+        li.appendChild(actions);
+        return li;
     }
 
     // 编辑原始数据
     editOriginalData(userName, index, regionKey = this.activeRegion) {
         const regionData = this.getUserRegionData(userName, regionKey);
-        if (!regionData || !regionData.originalData[index]) return;
+        if (!this.hasOriginalDataAt(regionData, index)) return;
+        const message = this.extractOriginalMessageText(regionData.originalData[index]);
+
+        if (typeof window !== 'undefined' && typeof window.openOriginalDataEditInRecognize === 'function') {
+            window.openOriginalDataEditInRecognize({
+                userName,
+                index,
+                regionKey,
+                message
+            });
+            return;
+        }
 
         const modal = document.getElementById('editOriginalModal');
         const input = document.getElementById('editOriginalMessageInput');
@@ -836,13 +1343,33 @@ class UserManager {
         if (!modal || !input) return;
 
         this.editingOriginal = { userName, index, regionKey };
-        input.value = regionData.originalData[index];
+        input.value = message;
         if (title) {
             title.textContent = `编辑 ${userName} 的原始消息`;
         }
         modal.style.display = 'block';
         input.focus();
         input.setSelectionRange(input.value.length, input.value.length);
+    }
+
+    applyEditedOriginalData(userName, index, regionKey = this.activeRegion, nextValue = '') {
+        const regionData = this.getUserRegionData(userName, regionKey);
+        if (!regionData || !Array.isArray(regionData.originalData)) {
+            throw new Error('原始消息不存在或盘口无效');
+        }
+        if (!this.hasOriginalDataAt(regionData, index)) {
+            throw new Error('原始消息已不存在，可能已被删除');
+        }
+
+        const message = String(nextValue || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        if (!message.trim()) {
+            throw new Error('消息不能为空');
+        }
+
+        regionData.originalData[index] = message;
+        this.recalculateUserData(userName, regionKey);
+        this.renderAllSections();
+        this.saveUserData();
     }
 
     closeEditOriginalModal() {
@@ -861,28 +1388,25 @@ class UserManager {
         const { userName, index, regionKey } = this.editingOriginal;
         const regionData = this.getUserRegionData(userName, regionKey);
         const input = document.getElementById('editOriginalMessageInput');
-        if (!regionData || !input || !regionData.originalData[index]) {
+        if (!input || !this.hasOriginalDataAt(regionData, index)) {
             this.closeEditOriginalModal();
             return;
         }
 
-        const nextValue = input.value.trim();
-        if (!nextValue) {
+        const nextValue = String(input.value || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        if (!nextValue.trim()) {
             alert('消息不能为空');
             return;
         }
 
-        regionData.originalData[index] = nextValue;
-        this.recalculateUserData(userName, regionKey);
-        this.renderAllSections();
-        this.saveUserData();
+        this.applyEditedOriginalData(userName, index, regionKey, nextValue);
         this.closeEditOriginalModal();
     }
 
     // 删除原始数据
     deleteOriginalData(userName, index, regionKey = this.activeRegion) {
         const regionData = this.getUserRegionData(userName, regionKey);
-        if (regionData && regionData.originalData[index]) {
+        if (this.hasOriginalDataAt(regionData, index)) {
             regionData.originalData.splice(index, 1);
             this.recalculateUserData(userName, regionKey);
             this.renderAllSections();
@@ -899,31 +1423,67 @@ class UserManager {
         regionData.data.forEach(item => {
             item.value = 0;
         });
+        const payoutData = this.ensureRegionPayoutData(regionData, {
+            fallbackOdds: this.getDefaultPayoutOdds()
+        });
+        payoutData.forEach(item => {
+            item.value = 0;
+        });
 
         // 重新计算
         regionData.originalData.forEach(data => {
-            this.processMessageData(data, userName, regionKey);
+            const rawMessage = this.extractOriginalMessageText(data);
+            if (!rawMessage.trim()) return;
+            this.processMessageData(rawMessage, userName, regionKey);
         });
 
         // 计算总数
         regionData.totalCount = regionData.data.reduce((sum, item) => sum + item.value, 0);
     }
 
+    recalculateAllUsersData() {
+        const regionKeys = this.getRegionOptions().map(item => item.key);
+        Object.keys(this.users || {}).forEach((userName) => {
+            regionKeys.forEach((regionKey) => {
+                this.recalculateUserData(userName, regionKey);
+            });
+        });
+    }
+
+    getUserRegionPayoutByNumber(userName, regionKey = this.activeRegion, number = '') {
+        const regionData = this.getUserRegionData(userName, regionKey);
+        if (!regionData) return 0;
+        const payoutData = this.ensureRegionPayoutData(regionData);
+        const target = String(number || '').padStart(2, '0');
+        const found = payoutData.find(item => item && item.number === target);
+        const value = Number(found && found.value);
+        return Number.isFinite(value) ? value : 0;
+    }
+
     // 处理消息数据
     processMessageData(message, userName, regionKey = this.activeRegion) {
+        const sourceMessage = this.extractOriginalMessageText(message);
         const regionData = this.getUserRegionData(userName, regionKey);
-        if (!regionData || !message) return;
+        if (!regionData || !sourceMessage.trim()) return;
+        const payoutData = this.ensureRegionPayoutData(regionData, {
+            fallbackOdds: this.getDefaultPayoutOdds()
+        });
 
-        const applyParsedData = (numbers, amount) => {
+        const applyParsedData = (numbers, amount, odds = this.getDefaultPayoutOdds()) => {
             if (!Array.isArray(numbers) || numbers.length === 0 || !Number.isFinite(amount) || amount <= 0) {
                 return;
             }
+            const safeOdds = Number.isFinite(Number(odds)) && Number(odds) > 0 ? Number(odds) : this.getDefaultPayoutOdds();
 
             numbers.forEach(number => {
                 const normalized = String(number).padStart(2, '0');
                 const item = regionData.data.find(entry => entry.number === normalized);
+                const payoutItem = payoutData.find(entry => entry.number === normalized);
                 if (item) {
                     item.value += amount;
+                }
+                if (payoutItem) {
+                    payoutItem.value += amount * safeOdds;
                 }
             });
         };
@@ -931,9 +1491,11 @@ class UserManager {
         // 优先复用统一解析器，确保与录入逻辑一致（支持属性词、生肖、多段金额）
         if (window.messageProcessor && typeof window.messageProcessor.parseMessage === 'function') {
             try {
-                const parsed = window.messageProcessor.parseMessage(message);
+                const parsed = window.messageProcessor.parseMessage(sourceMessage, { clientId: userName });
                 parsed.entries.forEach(entry => {
-                    applyParsedData(entry.numbers, entry.amount);
+                    const entryRegion = entry && entry.regionKey ? entry.regionKey : regionKey;
+                    if (entryRegion !== regionKey) return;
+                    applyParsedData(entry.numbers, entry.amount, entry.odds);
                 });
                 return;
             } catch (error) {
@@ -942,22 +1504,23 @@ class UserManager {
         }
 
         // 兼容旧格式: "11 22 33 值：55"
-        const legacyMatches = [...message.matchAll(/((\d+)[\s.,\-]*)+值[:：]\s*(\d+)/g)];
+        const legacyMatches = [...sourceMessage.matchAll(/((\d+)[\s.,\-]*)+值[:：]\s*(\d+)/g)];
         if (legacyMatches.length > 0) {
+            const legacyOdds = this.getDefaultPayoutOdds();
             legacyMatches.forEach(match => {
                 const numbers = match[0].split('值')[0].match(/\d+/g) || [];
                 const amount = parseInt(match[match.length - 1], 10);
-                applyParsedData(numbers, amount);
+                applyParsedData(numbers, amount, legacyOdds);
             });
             return;
         }
 
         // 新格式: "14.21.13～各20" / "14.21.13～各号20"
-        const modernMatch = message.match(/([\d\s.,\-—，。]+)[～~]\s*各(?:号)?\s*(\d+)/);
+        const modernMatch = sourceMessage.match(/([\d\s.,\-—，。]+)[～~]\s*各(?:号)?\s*(\d+)/);
         if (modernMatch) {
             const numbers = (modernMatch[1].match(/\d+/g) || []).map(n => parseInt(n, 10));
             const amount = parseInt(modernMatch[2], 10);
-            applyParsedData(numbers, amount);
+            applyParsedData(numbers, amount, this.getDefaultPayoutOdds());
         }
     }
 

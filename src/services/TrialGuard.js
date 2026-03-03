@@ -27,7 +27,7 @@ class TrialGuard {
     if (loaded.tampered) {
       this.lastStatus = {
         allowed: false,
-        reason: '检测到试用数据异常，请插入授权U盘使用。',
+        reason: '检测到试用数据异常，请插入授权U盘或导入离线授权文件使用。',
       };
       return this.lastStatus;
     }
@@ -46,7 +46,7 @@ class TrialGuard {
     if (now + CLOCK_ROLLBACK_TOLERANCE_MS < lastSeenAt) {
       this.lastStatus = {
         allowed: false,
-        reason: '检测到系统时间回拨，试用已锁定，请插入授权U盘使用。',
+        reason: '检测到系统时间回拨，试用已锁定，请插入授权U盘或导入离线授权文件使用。',
       };
       return this.lastStatus;
     }
@@ -57,7 +57,7 @@ class TrialGuard {
         allowed: false,
         firstSeenAt: new Date(firstSeenAt).toISOString(),
         endAt: new Date(endTs).toISOString(),
-        reason: `试用期已结束（${this.trialDays}天），请插入授权U盘继续使用。`,
+        reason: `试用期已结束（${this.trialDays}天），请插入授权U盘或导入离线授权文件继续使用。`,
       };
       return this.lastStatus;
     }

@@ -1,0 +1,37 @@
+{
+  "appId": "com.messagecounter.license.studio",
+  "productName": "聊天数据管家-授权签发工具",
+  "asar": true,
+  "directories": {
+    "output": "dist-license-studio"
+  },
+  "electronDist": "node_modules/electron/dist",
+  "files": [
+    "package.json",
+    "scripts/license-studio/**/*",
+    "scripts/license-tools.js"
+  ],
+  "extraMetadata": {
+    "name": "messagecounter-license-studio",
+    "main": "scripts/license-studio/main.js",
+    "description": "MessageCounter 授权签发工具"
+  },
+  "mac": {
+    "target": [
+      "zip"
+    ],
+    "icon": "public/icon.icns",
+    "identity": null
+  },
+  "win": {
+    "target": [
+      "nsis"
+    ],
+    "icon": "public/icon.ico",
+    "signAndEditExecutable": false
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true
+  }
+}

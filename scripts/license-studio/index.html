@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>授权签发工具</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <h1>授权签发工具</h1>
+      <p>不需要记命令，按表单填写后点击签发即可。</p>
+    </header>
+
+    <section class="card">
+      <h2>全局设置</h2>
+      <div class="row">
+        <label for="privateKeyPath">私钥路径</label>
+        <input id="privateKeyPath" type="text" placeholder="选择外部私钥文件（如 D:\secure\license-private.pem）">
+        <button id="pickPrivateKeyBtn" class="secondary">选择文件</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-title">
+        <h2>U 盘授权签发</h2>
+        <button id="refreshUsbBtn" class="secondary">刷新U盘列表</button>
+      </div>
+      <div class="grid">
+        <div class="field">
+          <label for="usbMountPath">U盘路径</label>
+          <select id="usbMountPath"></select>
+        </div>
+        <div class="field">
+          <label for="usbCustomerId">客户编号</label>
+          <input id="usbCustomerId" type="text" placeholder="例如 C001">
+        </div>
+        <div class="field">
+          <label for="usbExpireAt">到期日期</label>
+          <input id="usbExpireAt" type="date">
+        </div>
+        <div class="field">
+          <label for="usbGraceDays">宽限天数</label>
+          <input id="usbGraceDays" type="number" min="0" value="3">
+        </div>
+        <div class="field">
+          <label for="usbTier">套餐</label>
+          <select id="usbTier">
+            <option value="plus">Plus</option>
+            <option value="pro" selected>Pro</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="usbBillingCycle">计费周期</label>
+          <select id="usbBillingCycle">
+            <option value="lifetime" selected>lifetime</option>
+          </select>
+        </div>
+      </div>
+      <div class="actions">
+        <button id="issueUsbBtn">签发到U盘</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-title">
+        <h2>离线授权签发（不插U盘）</h2>
+        <button id="loadMachineFingerprintBtn" class="secondary">读取本机指纹</button>
+      </div>
+      <div class="grid">
+        <div class="field">
+          <label for="offlineCustomerId">客户编号</label>
+          <input id="offlineCustomerId" type="text" placeholder="例如 C001">
+        </div>
+        <div class="field">
+          <label for="offlineExpireAt">到期日期</label>
+          <input id="offlineExpireAt" type="date">
+        </div>
+        <div class="field">
+          <label for="offlineGraceDays">宽限天数</label>
+          <input id="offlineGraceDays" type="number" min="0" value="3">
+        </div>
+        <div class="field">
+          <label for="offlineTier">套餐</label>
+          <select id="offlineTier">
+            <option value="plus" selected>Plus</option>
+            <option value="pro">Pro</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="offlineBillingCycle">计费周期</label>
+          <select id="offlineBillingCycle">
+            <option value="lifetime" selected>lifetime</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <label for="machineFingerprint">机器指纹</label>
+        <input id="machineFingerprint" type="text" placeholder="客户发来的 machineFingerprint">
+      </div>
+      <div class="row">
+        <label for="offlineOutputPath">输出文件</label>
+        <input id="offlineOutputPath" type="text" placeholder="选择 license.dat 保存位置">
+        <button id="pickOutputBtn" class="secondary">选择路径</button>
+      </div>
+      <div class="actions">
+        <button id="issueOfflineBtn">签发离线授权文件</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>执行日志</h2>
+      <pre id="logBox" class="log-box"></pre>
+    </section>
+  </main>
+
+  <script src="./renderer.js"></script>
+</body>
+</html>

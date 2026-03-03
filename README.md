@@ -2,6 +2,177 @@
 
 一个基于Electron的桌面应用，用于统计和管理网友消息中的数字和生肖数据。
 
+## 当前功能梳理（V3）
+
+1. 消息录入与解析
+   - 支持多行消息、灵活分隔符、中文金额（如“各二十”）
+   - 支持数字、生肖、属性词混合识别
+   - 解析前实时预览，错误定位到具体行
+2. 数据统计与展示
+   - 多用户统计、汇总排序、分地区（新奥/老奥/香港）查看
+   - 生肖看板、号码榜单、原始消息列表联动
+   - 支持原始消息编辑/删除后自动重算
+3. 属性体系
+   - 内置大批属性词（单双、波色、尾数、余数等）
+   - 支持自定义属性新增/编辑/删除与布局调整
+4. 效率工具
+   - 消息弹窗内自动预览
+   - 一键复制统计结果
+   - OCR 图片识别（候选排序 + 风险提示）
+   - 微信复制自动监听与同日重复拦截
+5. 授权与安全
+   - U 盘授权 + 本机离线授权（签名校验 + 指纹绑定）
+   - 试用期与系统时间回拨检测
+   - 授权实时监控，授权失效即退出
+
+## 套餐版本与收费（永久授权）
+
+| 套餐 | 价格 | 适用场景 | 核心能力 |
+| --- | ---: | --- | --- |
+| Plus | ¥1499 | 稳定录入与日常统计 | 录入提效、统计清晰、导出交付、规则可控，适合稳定业务长期使用 |
+| Pro | ¥2999 | 高频业务与自动化 | 在 Plus 基础上提供 OCR 识别引擎、微信自动监听中枢、全链路自动化与持续更新，适合追求效率和规模化运营 |
+
+### 套餐规则
+- 试用期默认开放 Plus 能力（到期后需授权）
+- Plus 核心价值：`录入提效`、`统计清晰`、`一键导出`、`一次买断`
+- Pro 专属价值：`OCR 智能识别引擎`、`微信自动监听去重`、`全链路自动化`、`持续更新`
+- 授权文件支持写入 `tier`（plus/pro）和 `billingCycle`（lifetime）
+- 旧版仅年费授权文件会自动兼容为 Pro
+- 升级客服 Telegram：`@Wffftttp`（链接：`https://t.me/Wffftttp`）
+- 联系方式：
+  - 方式一：扫码添加 Telegram 客服
+  - 方式二：Telegram 搜索 `@Wffftttp`
+- 详细步骤：
+  - 第1步：安装并登录 Telegram（手机或电脑端）
+  - 第2步：扫码二维码，或在搜索框输入 `@Wffftttp`
+  - 第3步：进入客服主页后点击 `Start/开始`
+  - 第4步：发送“升级 Plus”或“升级 Pro”
+  - 第5步：补充客户ID、当前套餐、设备授权信息（可附截图）
+  - 第6步：按客服回复的支付与授权更新步骤完成升级
+
+### 发证脚本（新增参数）
+
+> 私钥安全要求：私钥必须放在项目目录外（例如 `/secure/license-private.pem` 或 `D:\\secure\\license-private.pem`），并通过 `--private-key` 或环境变量 `MC_LICENSE_PRIVATE_KEY_PATH` 指定。
+
+```bash
+# 启动图形签发工具（推荐）
+npm run license:studio
+
+# 打包签发工具（当前系统）
+npm run license:studio:dist
+
+# macOS 打包 zip（内含 .app）
+npm run license:studio:dist:mac
+
+# macOS 打包 dmg（如环境支持）
+npm run license:studio:dist:mac:dmg
+
+# 仅做目录打包验证（不生成安装包）
+npm run license:studio:dist:dir
+
+# 查看本机指纹（仅源码环境客户机）
+node scripts/license-tools.js machine-fingerprint
+
+# 指定套餐签发（永久授权）
+node scripts/license-tools.js issue-license \
+  --private-key /path/private.pem \
+  --customer-id C001 \
+  --usb-fingerprint <fingerprint> \
+  --expire-at 2027-12-31 \
+  --output /tmp/license.dat \
+  --tier plus \
+  --billing-cycle lifetime
+
+# 离线授权签发（绑定 machineFingerprint）
+node scripts/license-tools.js issue-offline \
+  --private-key /path/private.pem \
+  --customer-id C001 \
+  --machine-fingerprint <machineFingerprint> \
+  --expire-at 2027-12-31 \
+  --output /tmp/license.dat \
+  --tier plus \
+  --billing-cycle lifetime
+```
+
+### 授权交付流程（按原 U 盘教程方式）
+
+优先建议：发证方使用 `npm run license:studio` 打开图形工具，按界面填写并点击签发。
+命令行步骤保留给自动化或批量处理。
+
+#### A. U 盘授权交付（客户侧无需命令）
+
+1) 发证方在项目目录执行：
+
+```bash
+cd /Users/wangci/my-electron-app
+npm run license:list-usb
+```
+
+2) 确认目标 U 盘路径后，签发并写入 U 盘根目录：
+
+macOS 发证示例：
+
+```bash
+cd /Users/wangci/my-electron-app
+npm run license:issue-to-usb -- \
+  --private-key /secure/license-private.pem \
+  --customer-id C001 \
+  --mount-path "/Volumes/你的U盘名" \
+  --expire-at 2027-12-31 \
+  --grace-days 3 \
+  --tier pro \
+  --billing-cycle lifetime
+```
+
+Windows 发证示例（在 Windows 终端执行）：
+
+```powershell
+cd C:\path\to\my-electron-app
+npm run license:issue-to-usb -- --private-key D:\secure\license-private.pem --customer-id C001 --mount-path "E:\" --expire-at 2027-12-31 --grace-days 3 --tier pro --billing-cycle lifetime
+```
+
+3) 将该 U 盘交付客户。客户使用方式：
+- 插上这只授权 U 盘；
+- 启动应用；
+- 在“授权管理”确认状态为有效。
+
+4) 到期/升级时重复第2步，覆盖 U 盘内 `license.dat` 即可。
+
+#### B. 离线授权交付（不插 U 盘）
+
+1) 先获取客户机器指纹：
+- 安装包客户（无源码）：直接启动应用，未授权弹窗会显示 `本机指纹`；
+- 源码环境客户：在项目目录执行 `npm run license:machine-fingerprint`。
+
+2) 发证方按该指纹签发：
+
+```bash
+cd /Users/wangci/my-electron-app
+npm run license:issue-offline -- \
+  --private-key /secure/license-private.pem \
+  --customer-id C001 \
+  --machine-fingerprint <客户指纹> \
+  --expire-at 2027-12-31 \
+  --output /tmp/license.dat \
+  --grace-days 3 \
+  --tier plus \
+  --billing-cycle lifetime
+```
+
+3) 将生成的 `license.dat` 发送给客户。
+
+4) 客户把文件放到本机授权目录：
+- Windows: `C:\Users\用户名\AppData\Roaming\messagecounter\license.dat`
+- macOS: `/Users/用户名/Library/Application Support/messagecounter/license.dat`
+
+5) 客户重启应用，在“授权管理”看到“授权来源 = 离线授权”即交付完成。
+
+### 常见问题
+
+- 报错 `ENOENT package.json`：当前目录不对。先 `cd /Users/wangci/my-electron-app` 再执行 `npm run ...`。
+- 文件名错误：确保是 `license.dat`，不要变成 `license.dat.txt`。
+- 路径错误：Windows 使用 `%APPDATA%\messagecounter`，macOS 使用 `~/Library/Application Support/messagecounter`。
+
 ## 主要功能
 
 ### 1. 消息识别与处理
@@ -26,9 +197,9 @@
 - 数据备份和恢复
 
 ### 5. 试用期管理
-- 7天试用期限制
+- 3天试用期限制（默认 Plus 能力）
 - 试用期提醒
-- 系统时间检测
+- 系统时间回拨检测
 
 ## 优化内容
 
@@ -42,10 +213,10 @@
   - `MainController.js` - 主控制器
 
 ### 2. 试用期管理优化
-- 统一试用期为7天
+- 统一试用期为3天
 - 增加试用期提醒功能
 - 优化试用期检测逻辑
-- 添加试用期重置功能（开发用）
+- 增加 U 盘授权或离线授权后自动切换正式套餐
 
 ### 3. 错误处理优化
 - 完善的异常捕获机制
@@ -139,7 +310,7 @@ my-electron-app/
 
 ## 注意事项
 
-1. **试用期限制**：应用有7天试用期，过期后功能将被禁用
+1. **试用期限制**：应用有3天试用期，过期后需插入有效授权U盘或导入离线授权文件
 2. **数据备份**：重要数据建议定期备份
 3. **格式要求**：消息必须严格按照指定格式输入
 4. **系统兼容**：支持Windows和macOS系统

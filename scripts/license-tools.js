@@ -2,11 +2,16 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const readline = require('readline');
 
 const LICENSE_NAME = 'license.dat';
+const PLAN_TIERS = ['plus', 'pro'];
+const BILLING_CYCLES = ['lifetime'];
+const PRIVATE_KEY_ENV_PRIMARY = 'MC_LICENSE_PRIVATE_KEY_PATH';
+const PRIVATE_KEY_ENV_COMPAT = 'LICENSE_PRIVATE_KEY_PATH';
 
 function hashFingerprint(input) {
   return crypto.createHash('sha256').update(input).digest('hex');
@@ -94,6 +99,56 @@ function parseArgs(argv) {
   return args;
 }
 
+function parseTier(input, fallback = 'pro') {
+  const value = String(input || fallback).trim().toLowerCase();
+  if (!PLAN_TIERS.includes(value)) {
+    throw new Error(`套餐档位无效: ${input || '-'}，可选值: ${PLAN_TIERS.join('/')}`);
+  }
+  return value;
+}
+
+function parseBillingCycle(input, fallback = 'lifetime') {
+  const value = String(input || fallback).trim().toLowerCase();
+  if (value === 'monthly' || value === 'yearly') {
+    return 'lifetime';
+  }
+  if (!BILLING_CYCLES.includes(value)) {
+    throw new Error(`计费周期无效: ${input || '-'}，可选值: ${BILLING_CYCLES.join('/')}`);
+  }
+  return value;
+}
+
+function parseExpireAtIso(input) {
+  const ts = Date.parse(input);
+  if (Number.isNaN(ts)) {
+    throw new Error(`到期日期格式无效: ${input || '-'}`);
+  }
+  return new Date(ts).toISOString();
+}
+
+function getPrivateKeyFromEnv() {
+  const primary = String(process.env[PRIVATE_KEY_ENV_PRIMARY] || '').trim();
+  if (primary) return primary;
+  return String(process.env[PRIVATE_KEY_ENV_COMPAT] || '').trim();
+}
+
+function resolvePrivateKeyPath(candidatePath) {
+  const provided = String(candidatePath || '').trim();
+  const rawPath = provided || getPrivateKeyFromEnv();
+  if (!rawPath) {
+    throw new Error(`缺少私钥路径，请传 --private-key 或设置环境变量 ${PRIVATE_KEY_ENV_PRIMARY}`);
+  }
+  const resolvedPath = path.resolve(rawPath);
+  if (!fs.existsSync(resolvedPath)) {
+    throw new Error(`私钥不存在: ${resolvedPath}`);
+  }
+  const stat = fs.statSync(resolvedPath);
+  if (!stat.isFile()) {
+    throw new Error(`私钥路径不是文件: ${resolvedPath}`);
+  }
+  return resolvedPath;
+}
+
 function signLicense(payload, privateKeyPath) {
   const privateKey = fs.readFileSync(privateKeyPath, 'utf8');
   const payloadBuffer = Buffer.from(JSON.stringify(payload), 'utf8');
@@ -112,7 +167,7 @@ function cmdList() {
 }
 
 function cmdIssue(args) {
-  const required = ['private-key', 'customer-id', 'expire-at', 'usb-fingerprint', 'output'];
+  const required = ['customer-id', 'expire-at', 'usb-fingerprint', 'output'];
   for (const field of required) {
     if (!args[field]) {
       throw new Error(`缺少参数 --${field}`);
@@ -120,50 +175,58 @@ function cmdIssue(args) {
   }
 
   const graceDays = Number.isFinite(Number(args['grace-days'])) ? Number(args['grace-days']) : 3;
+  const tier = parseTier(args.tier, 'pro');
+  const billingCycle = parseBillingCycle(args['billing-cycle'], 'lifetime');
   const payload = {
     customerId: args['customer-id'],
     usbFingerprint: args['usb-fingerprint'],
-    expireAt: new Date(args['expire-at']).toISOString(),
+    expireAt: parseExpireAtIso(args['expire-at']),
     graceDays,
-    plan: 'yearly',
+    tier,
+    billingCycle,
+    plan: billingCycle,
     issuedAt: new Date().toISOString(),
   };
 
-  const license = signLicense(payload, args['private-key']);
+  const privateKeyPath = resolvePrivateKeyPath(args['private-key']);
+  const license = signLicense(payload, privateKeyPath);
   fs.writeFileSync(args.output, JSON.stringify(license, null, 2), 'utf8');
   console.log(`license 已生成: ${args.output}`);
+  console.log(`套餐档位: ${tier}`);
+  console.log(`计费周期: ${billingCycle}`);
+}
+
+function cmdIssueOffline(args) {
+  const result = issueOfflineLicense({
+    privateKeyPath: resolvePrivateKeyPath(args['private-key']),
+    customerId: args['customer-id'],
+    machineFingerprint: args['machine-fingerprint'],
+    expireAt: args['expire-at'],
+    outputPath: args.output,
+    graceDays: args['grace-days'],
+    tier: args.tier,
+    billingCycle: args['billing-cycle'],
+  });
+  console.log(`离线 license 已生成: ${result.outputPath}`);
+  console.log(`machineFingerprint: ${result.payload.machineFingerprint}`);
+  console.log(`套餐档位: ${result.payload.tier}`);
+  console.log(`计费周期: ${result.payload.billingCycle}`);
 }
 
 function cmdIssueToUsb(args) {
-  const required = ['private-key', 'customer-id', 'expire-at', 'mount-path'];
-  for (const field of required) {
-    if (!args[field]) {
-      throw new Error(`缺少参数 --${field}`);
-    }
-  }
-
-  const mountPath = args['mount-path'];
-  const drives = listUsb();
-  const drive = drives.find(item => path.resolve(item.mountPath) === path.resolve(mountPath));
-  if (!drive) {
-    throw new Error(`找不到目标U盘: ${mountPath}`);
-  }
-
-  const graceDays = Number.isFinite(Number(args['grace-days'])) ? Number(args['grace-days']) : 3;
-  const payload = {
+  const result = issueUsbLicense({
+    privateKeyPath: resolvePrivateKeyPath(args['private-key']),
     customerId: args['customer-id'],
-    usbFingerprint: drive.fingerprint,
-    expireAt: new Date(args['expire-at']).toISOString(),
-    graceDays,
-    plan: 'yearly',
-    issuedAt: new Date().toISOString(),
-  };
-
-  const license = signLicense(payload, args['private-key']);
-  const output = path.join(mountPath, LICENSE_NAME);
-  fs.writeFileSync(output, JSON.stringify(license, null, 2), 'utf8');
-  console.log(`license 已写入: ${output}`);
-  console.log(`usbFingerprint: ${drive.fingerprint}`);
+    mountPath: args['mount-path'],
+    expireAt: args['expire-at'],
+    graceDays: args['grace-days'],
+    tier: args.tier,
+    billingCycle: args['billing-cycle'],
+  });
+  console.log(`license 已写入: ${result.outputPath}`);
+  console.log(`usbFingerprint: ${result.drive.fingerprint}`);
+  console.log(`套餐档位: ${result.payload.tier}`);
+  console.log(`计费周期: ${result.payload.billingCycle}`);
 }
 
 function ask(question) {
@@ -186,12 +249,10 @@ function getDefaultExpireAtIso() {
 }
 
 async function cmdIssueWizard(args) {
-  const defaultPrivateKey = path.resolve(args['private-key'] || path.join(__dirname, '..', 'keys', 'license-private.pem'));
-  const privateKeyInput = await ask(`私钥路径 [${defaultPrivateKey}]: `);
-  const privateKeyPath = privateKeyInput || defaultPrivateKey;
-  if (!fs.existsSync(privateKeyPath)) {
-    throw new Error(`私钥不存在: ${privateKeyPath}`);
-  }
+  const configuredPrivateKey = String(args['private-key'] || getPrivateKeyFromEnv() || '').trim();
+  const privateKeyHint = configuredPrivateKey || '必填，当前未设置';
+  const privateKeyInput = await ask(`私钥路径 [${privateKeyHint}]: `);
+  const privateKeyPath = resolvePrivateKeyPath(privateKeyInput || configuredPrivateKey);
 
   const drives = listUsb();
   if (!drives.length) {
@@ -217,20 +278,23 @@ async function cmdIssueWizard(args) {
   const defaultExpireIso = getDefaultExpireAtIso();
   const defaultExpireLabel = defaultExpireIso.slice(0, 10);
   const expireInput = await ask(`到期日期 YYYY-MM-DD（留空=自动+1年） [${defaultExpireLabel}]: `);
-  const expireIso = expireInput ? new Date(expireInput).toISOString() : defaultExpireIso;
-  if (!expireIso || Number.isNaN(Date.parse(expireIso))) {
-    throw new Error('到期日期格式无效');
-  }
+  const expireIso = expireInput ? parseExpireAtIso(expireInput) : defaultExpireIso;
 
   const graceInput = await ask('宽限天数 [3]: ');
   const graceDays = Number.isFinite(Number(graceInput)) ? Number(graceInput) : 3;
+  const tierInput = await ask('套餐档位 plus/pro [pro]: ');
+  const billingInput = await ask('计费周期 lifetime [lifetime]: ');
+  const tier = parseTier(tierInput || args.tier, 'pro');
+  const billingCycle = parseBillingCycle(billingInput || args['billing-cycle'], 'lifetime');
 
   const payload = {
     customerId,
     usbFingerprint: drive.fingerprint,
     expireAt: expireIso,
     graceDays,
-    plan: 'yearly',
+    tier,
+    billingCycle,
+    plan: billingCycle,
     issuedAt: new Date().toISOString(),
   };
 
@@ -243,8 +307,140 @@ async function cmdIssueWizard(args) {
   console.log(`U盘路径: ${drive.mountPath}`);
   console.log(`U盘指纹: ${drive.fingerprint}`);
   console.log(`到期时间: ${expireIso}`);
+  console.log(`套餐档位: ${tier}`);
+  console.log(`计费周期: ${billingCycle}`);
   console.log(`宽限天数: ${graceDays}`);
   console.log(`授权文件: ${output}`);
+}
+
+function getPlatformMachineId() {
+  try {
+    if (process.platform === 'darwin') {
+      const text = execFileSync('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice'], { encoding: 'utf8', timeout: 3000 });
+      const match = text.match(/"IOPlatformUUID"\s=\s"([^"]+)"/);
+      return match ? match[1] : '';
+    }
+    if (process.platform === 'win32') {
+      const ps = '(Get-CimInstance Win32_ComputerSystemProduct).UUID';
+      return execFileSync('powershell', ['-NoProfile', '-Command', ps], { encoding: 'utf8', timeout: 3000 }).trim();
+    }
+    if (process.platform === 'linux') {
+      const machineIdPath = '/etc/machine-id';
+      if (fs.existsSync(machineIdPath)) {
+        return fs.readFileSync(machineIdPath, 'utf8').trim();
+      }
+    }
+  } catch (error) {
+    return '';
+  }
+  return '';
+}
+
+function buildMachineFingerprint() {
+  const machineId = getPlatformMachineId();
+  const parts = [
+    process.platform,
+    os.arch(),
+    machineId || os.hostname(),
+  ].filter(Boolean);
+  return hashFingerprint(parts.join('|'));
+}
+
+function cmdMachineFingerprint() {
+  console.log(JSON.stringify(getMachineFingerprintInfo(), null, 2));
+}
+
+function ensureRequiredFields(fields, source) {
+  for (const field of fields) {
+    if (!source[field]) {
+      throw new Error(`缺少参数 ${field}`);
+    }
+  }
+}
+
+function buildUsbPayload(options) {
+  ensureRequiredFields(['customerId', 'expireAt', 'mountPath'], options);
+  const drives = listUsb();
+  const drive = drives.find(item => path.resolve(item.mountPath) === path.resolve(options.mountPath));
+  if (!drive) {
+    throw new Error(`找不到目标U盘: ${options.mountPath}`);
+  }
+
+  const graceDays = Number.isFinite(Number(options.graceDays)) ? Number(options.graceDays) : 3;
+  const tier = parseTier(options.tier, 'pro');
+  const billingCycle = parseBillingCycle(options.billingCycle, 'lifetime');
+  return {
+    drive,
+    payload: {
+      customerId: options.customerId,
+      usbFingerprint: drive.fingerprint,
+      expireAt: parseExpireAtIso(options.expireAt),
+      graceDays,
+      tier,
+      billingCycle,
+      plan: billingCycle,
+      issuedAt: new Date().toISOString(),
+    },
+  };
+}
+
+function buildOfflinePayload(options) {
+  ensureRequiredFields(['customerId', 'expireAt', 'machineFingerprint'], options);
+  const machineFingerprint = String(options.machineFingerprint || '').trim();
+  if (!machineFingerprint) {
+    throw new Error('machineFingerprint 不能为空');
+  }
+
+  const graceDays = Number.isFinite(Number(options.graceDays)) ? Number(options.graceDays) : 3;
+  const tier = parseTier(options.tier, 'pro');
+  const billingCycle = parseBillingCycle(options.billingCycle, 'lifetime');
+  return {
+    payload: {
+      customerId: options.customerId,
+      machineFingerprint,
+      expireAt: parseExpireAtIso(options.expireAt),
+      graceDays,
+      tier,
+      billingCycle,
+      plan: billingCycle,
+      issuedAt: new Date().toISOString(),
+    },
+  };
+}
+
+function issueUsbLicense(options) {
+  const privateKeyPath = resolvePrivateKeyPath(options.privateKeyPath);
+  const { drive, payload } = buildUsbPayload(options);
+  const outputPath = path.join(options.mountPath, LICENSE_NAME);
+  const license = signLicense(payload, privateKeyPath);
+  fs.writeFileSync(outputPath, JSON.stringify(license, null, 2), 'utf8');
+  return {
+    outputPath,
+    drive,
+    payload,
+  };
+}
+
+function issueOfflineLicense(options) {
+  ensureRequiredFields(['outputPath'], options);
+  const privateKeyPath = resolvePrivateKeyPath(options.privateKeyPath);
+  const { payload } = buildOfflinePayload(options);
+  const license = signLicense(payload, privateKeyPath);
+  fs.writeFileSync(options.outputPath, JSON.stringify(license, null, 2), 'utf8');
+  return {
+    outputPath: options.outputPath,
+    payload,
+  };
+}
+
+function getMachineFingerprintInfo() {
+  const machineId = getPlatformMachineId();
+  return {
+    platform: process.platform,
+    arch: os.arch(),
+    machineId: machineId || '(fallback-hostname)',
+    machineFingerprint: buildMachineFingerprint(),
+  };
 }
 
 async function main() {
@@ -259,8 +455,16 @@ async function main() {
     cmdIssue(args);
     return;
   }
+  if (command === 'issue-offline') {
+    cmdIssueOffline(args);
+    return;
+  }
   if (command === 'issue-to-usb') {
     cmdIssueToUsb(args);
+    return;
+  }
+  if (command === 'machine-fingerprint') {
+    cmdMachineFingerprint();
     return;
   }
   if (command === 'issue-wizard') {
@@ -270,12 +474,30 @@ async function main() {
 
   console.log('用法:');
   console.log('  node scripts/license-tools.js list-usb');
-  console.log('  node scripts/license-tools.js issue-license --private-key /path/private.pem --customer-id C001 --usb-fingerprint <fingerprint> --expire-at 2027-12-31 --output /tmp/license.dat --grace-days 3');
-  console.log('  node scripts/license-tools.js issue-to-usb --private-key /path/private.pem --customer-id C001 --mount-path E:\\ --expire-at 2027-12-31 --grace-days 3');
-  console.log('  node scripts/license-tools.js issue-wizard [--private-key /path/private.pem]');
+  console.log('  node scripts/license-tools.js machine-fingerprint');
+  console.log(`  # 私钥可通过 --private-key 传入，或设置环境变量 ${PRIVATE_KEY_ENV_PRIMARY}`);
+  console.log('  node scripts/license-tools.js issue-license --private-key /path/private.pem --customer-id C001 --usb-fingerprint <fingerprint> --expire-at 2027-12-31 --output /tmp/license.dat --grace-days 3 --tier plus --billing-cycle lifetime');
+  console.log('  node scripts/license-tools.js issue-offline --private-key /path/private.pem --customer-id C001 --machine-fingerprint <fingerprint> --expire-at 2027-12-31 --output /tmp/license.dat --grace-days 3 --tier plus --billing-cycle lifetime');
+  console.log('  node scripts/license-tools.js issue-to-usb --private-key /path/private.pem --customer-id C001 --mount-path E:\\ --expire-at 2027-12-31 --grace-days 3 --tier pro --billing-cycle lifetime');
+  console.log('  node scripts/license-tools.js issue-wizard [--private-key /path/private.pem] [--tier plus|pro] [--billing-cycle lifetime]');
 }
 
-main().catch(error => {
-  console.error(`执行失败: ${error.message}`);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(error => {
+    console.error(`执行失败: ${error.message}`);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  listUsb,
+  parseTier,
+  parseBillingCycle,
+  parseExpireAtIso,
+  issueUsbLicense,
+  issueOfflineLicense,
+  getMachineFingerprintInfo,
+  buildMachineFingerprint,
+  getPrivateKeyFromEnv,
+  resolvePrivateKeyPath,
+};

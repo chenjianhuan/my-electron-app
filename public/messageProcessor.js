@@ -1,11 +1,16 @@
 // 消息处理模块
 class MessageProcessor {
     constructor() {
-        this.ODDS = 47; // 赔率
+        this.SYSTEM_DEFAULT_ODDS = 47;
+        this.ODDS = this.SYSTEM_DEFAULT_ODDS; // 兼容旧逻辑：当前生效默认赔率
         this.CUSTOM_ATTRIBUTE_STORAGE_KEY = 'customAttributeMap.v1';
         this.customAttributeCache = null;
         this.attributeOverrides = {};
         this.hiddenAttributeKeys = new Set();
+        this.globalRuleProfile = {};
+        this.clientRuleProfiles = {};
+        this.activeRuleClientId = '';
+        this.activeRuleProfileCache = null;
         this.animalMap = {
             '鼠': [7, 19, 31, 43],
             '牛': [6, 18, 30, 42],
@@ -208,7 +213,10 @@ class MessageProcessor {
     getAttributeConfig() {
         return {
             overrides: this.sanitizeCustomAttributeMap(this.attributeOverrides),
-            hidden: Array.from(this.hiddenAttributeKeys)
+            hidden: Array.from(this.hiddenAttributeKeys),
+            anchorAliases: this.getAnchorAliasOverrides(),
+            globalRules: this.getGlobalRuleProfile(),
+            clientRules: this.getClientRuleProfiles()
         };
     }
 
@@ -220,10 +228,925 @@ class MessageProcessor {
                 ? payload.hidden.filter(item => typeof item === 'string' && item.trim().length > 0)
                 : []
         );
+        this.globalRuleProfile = this.sanitizeRuleProfile(payload.globalRules || {}, { forOverride: true });
+        this.clientRuleProfiles = this.sanitizeClientRuleProfiles(payload.clientRules || {});
+
+        // 兼容旧版本配置：anchorAliases 视为全局锚点覆盖。
+        if (!payload.globalRules && payload.anchorAliases && typeof payload.anchorAliases === 'object') {
+            const legacyAnchorRules = this.convertLegacyAnchorAliasMapToRules(payload.anchorAliases);
+            this.globalRuleProfile = this.mergeRuleProfiles(this.globalRuleProfile, {
+                anchorSemantics: legacyAnchorRules
+            });
+        }
         this.customAttributeCache = this.attributeOverrides;
         if (typeof localStorage !== 'undefined') {
             localStorage.setItem(this.CUSTOM_ATTRIBUTE_STORAGE_KEY, JSON.stringify(this.attributeOverrides));
         }
+        this.ODDS = this.getEffectiveDefaultOdds('');
+    }
+
+    getSystemRuleProfile() {
+        return {
+            version: 'v1.1',
+            defaultOdds: this.SYSTEM_DEFAULT_ODDS,
+            anchorSemantics: {
+                '各': { amountDistribute: 'per_number', enabled: true },
+                '各号': { amountDistribute: 'per_number', enabled: true },
+                '买': { amountDistribute: 'per_number', enabled: true },
+                '每个': { amountDistribute: 'per_number', enabled: true },
+                '每个号': { amountDistribute: 'per_number', enabled: true },
+                '每个码': { amountDistribute: 'per_number', enabled: true },
+                '每个号码': { amountDistribute: 'per_number', enabled: true },
+                '各个': { amountDistribute: 'per_number', enabled: true },
+                '各子': { amountDistribute: 'per_number', enabled: true },
+                '各数': { amountDistribute: 'per_number', enabled: true },
+                '每个数': { amountDistribute: 'per_number', enabled: true },
+                '各个数': { amountDistribute: 'per_number', enabled: true }
+            },
+            attributeCombinePolicy: 'intersection_then_union_fallback',
+            symbolPolicy: {
+                '#': 'noise',
+                '井': 'noise',
+                '*': 'noise'
+            },
+            ambiguityPolicy: 'confirm',
+            anchorParseMode: 'strict',
+            regionPolicy: {
+                defaultRegion: 'new_ao',
+                canonicalAlwaysShowRegion: true
+            }
+        };
+    }
+
+    getDefaultGlobalRuleProfile() {
+        return {
+            anchorSemantics: {
+                '都': { amountDistribute: 'undetermined', enabled: true },
+                '都买': { amountDistribute: 'undetermined', enabled: true },
+                '全买': { amountDistribute: 'undetermined', enabled: true },
+                '全下': { amountDistribute: 'undetermined', enabled: true },
+                '通买': { amountDistribute: 'undetermined', enabled: true },
+                '每号': { amountDistribute: 'undetermined', enabled: true },
+                '每码': { amountDistribute: 'undetermined', enabled: true },
+                '每数': { amountDistribute: 'undetermined', enabled: true },
+                '各肖': { amountDistribute: 'undetermined', enabled: true },
+                '每肖': { amountDistribute: 'undetermined', enabled: true },
+                '每个肖': { amountDistribute: 'undetermined', enabled: true },
+                '每个生肖': { amountDistribute: 'undetermined', enabled: true },
+                '各尾': { amountDistribute: 'undetermined', enabled: true },
+                '每尾': { amountDistribute: 'undetermined', enabled: true },
+                '各波': { amountDistribute: 'undetermined', enabled: true },
+                '每波': { amountDistribute: 'undetermined', enabled: true },
+                '各门': { amountDistribute: 'undetermined', enabled: true },
+                '每门': { amountDistribute: 'undetermined', enabled: true },
+                '平摊': { amountDistribute: 'undetermined', enabled: true },
+                '均分': { amountDistribute: 'undetermined', enabled: true },
+                '共买': { amountDistribute: 'undetermined', enabled: true },
+                '共下': { amountDistribute: 'undetermined', enabled: true },
+                '一共': { amountDistribute: 'undetermined', enabled: true },
+                '合共': { amountDistribute: 'undetermined', enabled: true },
+                '全部': { amountDistribute: 'undetermined', enabled: true }
+            }
+        };
+    }
+
+    getResolvedGlobalRuleProfile() {
+        return this.mergeRuleProfiles(
+            this.getDefaultGlobalRuleProfile(),
+            this.globalRuleProfile || {}
+        );
+    }
+
+    getAllowedAmountDistributeValues() {
+        return ['per_number', 'per_target_equal_split', 'per_entry_equal_split', 'undetermined'];
+    }
+
+    getAllowedAttributeCombinePolicyValues() {
+        return ['intersection', 'union', 'intersection_then_union_fallback', 'confirm'];
+    }
+
+    getAllowedSymbolPolicyValues() {
+        return ['noise', 'unit', 'marker', 'error'];
+    }
+
+    getAllowedAmbiguityPolicyValues() {
+        return ['confirm', 'auto', 'error'];
+    }
+
+    getAllowedAnchorParseModeValues() {
+        return ['strict', 'loose'];
+    }
+
+    normalizeOddsValue(rawOdds, fallback = NaN) {
+        const parsed = Number(rawOdds);
+        if (Number.isFinite(parsed) && parsed > 0) {
+            return parsed;
+        }
+        return Number.isFinite(fallback) && fallback > 0 ? fallback : NaN;
+    }
+
+    getActiveDefaultOdds() {
+        const activeProfile = this.getActiveRuleProfile();
+        const activeOdds = this.normalizeOddsValue(
+            activeProfile && activeProfile.defaultOdds,
+            this.SYSTEM_DEFAULT_ODDS
+        );
+        return Number.isFinite(activeOdds) ? activeOdds : this.SYSTEM_DEFAULT_ODDS;
+    }
+
+    getEffectiveDefaultOdds(clientId = '') {
+        const effectiveProfile = this.getEffectiveRuleProfile(clientId);
+        const effectiveOdds = this.normalizeOddsValue(
+            effectiveProfile && effectiveProfile.defaultOdds,
+            this.SYSTEM_DEFAULT_ODDS
+        );
+        return Number.isFinite(effectiveOdds) ? effectiveOdds : this.SYSTEM_DEFAULT_ODDS;
+    }
+
+    normalizeRuleClientId(clientId) {
+        return String(clientId || '').trim();
+    }
+
+    normalizeAnchorAliasToken(token) {
+        return String(token || '')
+            .replace(/\s+/g, '')
+            .replace(/[：:]+$/g, '')
+            .trim();
+    }
+
+    normalizeAmountDistributeValue(valueRaw) {
+        const value = String(valueRaw || '').trim();
+        if (this.getAllowedAmountDistributeValues().includes(value)) return value;
+        if (value === 'combo_number') return 'per_number';
+        if (value === 'per_animal') return 'per_target_equal_split';
+        return '';
+    }
+
+    normalizeLegacyAliasMode(modeRaw) {
+        const mode = String(modeRaw || '').trim();
+        if (mode === 'ignore') return 'ignore';
+        if (mode === 'per_animal') return 'per_target_equal_split';
+        if (mode === 'combo_number') return 'per_number';
+        if (mode === 'per_number') return 'per_number';
+        const normalized = this.normalizeAmountDistributeValue(mode);
+        return normalized || '';
+    }
+
+    normalizeRegionKey(input, fallback = 'new_ao') {
+        const value = String(input || '').trim();
+        if (value === 'new_ao' || value === 'old_ao' || value === 'hongkong') return value;
+        return fallback;
+    }
+
+    sanitizeAnchorRuleItem(rawRule) {
+        if (!rawRule || typeof rawRule !== 'object') {
+            return null;
+        }
+        const distribute = this.normalizeAmountDistributeValue(rawRule.amountDistribute);
+        if (!distribute) return null;
+        const item = {
+            amountDistribute: distribute,
+            enabled: rawRule.enabled !== false
+        };
+        const odds = this.normalizeOddsValue(rawRule.odds);
+        if (Number.isFinite(odds)) {
+            item.odds = odds;
+        }
+        if (typeof rawRule.notes === 'string' && rawRule.notes.trim()) {
+            item.notes = rawRule.notes.trim().slice(0, 80);
+        }
+        return item;
+    }
+
+    sanitizeRuleProfile(profile, options = {}) {
+        const forOverride = !!(options && options.forOverride);
+        const safe = {};
+        if (!profile || typeof profile !== 'object') {
+            return safe;
+        }
+
+        if (!forOverride && typeof profile.version === 'string' && profile.version.trim()) {
+            safe.version = profile.version.trim();
+        }
+
+        const defaultOdds = this.normalizeOddsValue(profile.defaultOdds);
+        if (Number.isFinite(defaultOdds)) {
+            safe.defaultOdds = defaultOdds;
+        }
+
+        if (profile.anchorSemantics && typeof profile.anchorSemantics === 'object') {
+            const anchors = {};
+            Object.entries(profile.anchorSemantics).forEach(([rawToken, rawRule]) => {
+                const token = this.normalizeAnchorAliasToken(rawToken);
+                if (!token || token.length > 12) return;
+                if (!/[\u4e00-\u9fa5A-Za-z]/.test(token)) return;
+                const item = this.sanitizeAnchorRuleItem(rawRule);
+                if (!item) return;
+                anchors[token] = item;
+            });
+            if (Object.keys(anchors).length > 0) {
+                safe.anchorSemantics = anchors;
+            }
+        }
+
+        const combinePolicy = String(profile.attributeCombinePolicy || '').trim();
+        if (this.getAllowedAttributeCombinePolicyValues().includes(combinePolicy)) {
+            safe.attributeCombinePolicy = combinePolicy;
+        }
+
+        if (profile.symbolPolicy && typeof profile.symbolPolicy === 'object') {
+            const symbolPolicy = {};
+            Object.entries(profile.symbolPolicy).forEach(([rawSymbol, rawPolicy]) => {
+                const symbol = String(rawSymbol || '').trim();
+                const policy = String(rawPolicy || '').trim();
+                if (!symbol || symbol.length > 3) return;
+                if (!this.getAllowedSymbolPolicyValues().includes(policy)) return;
+                symbolPolicy[symbol] = policy;
+            });
+            if (Object.keys(symbolPolicy).length > 0) {
+                safe.symbolPolicy = symbolPolicy;
+            }
+        }
+
+        const ambiguityPolicy = String(profile.ambiguityPolicy || '').trim();
+        if (this.getAllowedAmbiguityPolicyValues().includes(ambiguityPolicy)) {
+            safe.ambiguityPolicy = ambiguityPolicy;
+        }
+
+        const anchorParseMode = String(profile.anchorParseMode || '').trim();
+        if (this.getAllowedAnchorParseModeValues().includes(anchorParseMode)) {
+            safe.anchorParseMode = anchorParseMode;
+        }
+
+        if (profile.regionPolicy && typeof profile.regionPolicy === 'object') {
+            const regionPolicy = {};
+            if (profile.regionPolicy.defaultRegion) {
+                regionPolicy.defaultRegion = this.normalizeRegionKey(profile.regionPolicy.defaultRegion, 'new_ao');
+            }
+            if (typeof profile.regionPolicy.canonicalAlwaysShowRegion === 'boolean') {
+                regionPolicy.canonicalAlwaysShowRegion = profile.regionPolicy.canonicalAlwaysShowRegion;
+            }
+            if (Object.keys(regionPolicy).length > 0) {
+                safe.regionPolicy = regionPolicy;
+            }
+        }
+
+        return safe;
+    }
+
+    isRuleProfileEmpty(profile) {
+        if (!profile || typeof profile !== 'object') return true;
+        return Object.keys(profile).length === 0;
+    }
+
+    sanitizeClientRuleProfiles(clientRules) {
+        const safe = {};
+        if (!clientRules || typeof clientRules !== 'object') {
+            return safe;
+        }
+        Object.entries(clientRules).forEach(([rawClientId, rawProfile]) => {
+            const clientId = this.normalizeRuleClientId(rawClientId);
+            if (!clientId) return;
+            const profile = this.sanitizeRuleProfile(rawProfile || {}, { forOverride: true });
+            if (this.isRuleProfileEmpty(profile)) return;
+            safe[clientId] = profile;
+        });
+        return safe;
+    }
+
+    mergeRuleProfiles(baseProfile, patchProfile) {
+        const base = baseProfile && typeof baseProfile === 'object' ? baseProfile : {};
+        const patch = patchProfile && typeof patchProfile === 'object' ? patchProfile : {};
+        const merged = { ...base };
+
+        Object.entries(patch).forEach(([key, value]) => {
+            if (value === undefined) return;
+            if (key === 'anchorSemantics' && value && typeof value === 'object') {
+                merged.anchorSemantics = {
+                    ...(merged.anchorSemantics || {}),
+                    ...value
+                };
+                return;
+            }
+            if (key === 'symbolPolicy' && value && typeof value === 'object') {
+                merged.symbolPolicy = {
+                    ...(merged.symbolPolicy || {}),
+                    ...value
+                };
+                return;
+            }
+            if (key === 'regionPolicy' && value && typeof value === 'object') {
+                merged.regionPolicy = {
+                    ...(merged.regionPolicy || {}),
+                    ...value
+                };
+                return;
+            }
+            merged[key] = value;
+        });
+
+        return merged;
+    }
+
+    getGlobalRuleProfile() {
+        return JSON.parse(JSON.stringify(this.getResolvedGlobalRuleProfile()));
+    }
+
+    getClientRuleProfiles() {
+        return JSON.parse(JSON.stringify(this.clientRuleProfiles || {}));
+    }
+
+    getClientRuleProfile(clientId) {
+        const normalizedId = this.normalizeRuleClientId(clientId);
+        if (!normalizedId) return {};
+        const profile = (this.clientRuleProfiles || {})[normalizedId] || {};
+        return JSON.parse(JSON.stringify(profile));
+    }
+
+    getEffectiveRuleProfile(clientId = '') {
+        const normalizedId = this.normalizeRuleClientId(clientId);
+        const systemProfile = this.getSystemRuleProfile();
+        const globalProfile = this.getResolvedGlobalRuleProfile();
+        const clientProfile = normalizedId ? ((this.clientRuleProfiles || {})[normalizedId] || {}) : {};
+
+        let effective = this.mergeRuleProfiles(systemProfile, globalProfile);
+        effective = this.mergeRuleProfiles(effective, clientProfile);
+
+        if (!effective.anchorSemantics || typeof effective.anchorSemantics !== 'object') {
+            effective.anchorSemantics = {};
+        }
+        if (!Object.values(effective.anchorSemantics).some(item => item && item.enabled !== false)) {
+            effective.anchorSemantics['各'] = { amountDistribute: 'per_number', enabled: true };
+        }
+        if (!this.getAllowedAttributeCombinePolicyValues().includes(effective.attributeCombinePolicy)) {
+            effective.attributeCombinePolicy = 'intersection_then_union_fallback';
+        }
+        if (!this.getAllowedAmbiguityPolicyValues().includes(effective.ambiguityPolicy)) {
+            effective.ambiguityPolicy = 'confirm';
+        }
+        if (!this.getAllowedAnchorParseModeValues().includes(effective.anchorParseMode)) {
+            effective.anchorParseMode = 'strict';
+        }
+        effective.defaultOdds = this.normalizeOddsValue(
+            effective.defaultOdds,
+            this.SYSTEM_DEFAULT_ODDS
+        );
+        if (!Number.isFinite(effective.defaultOdds) || effective.defaultOdds <= 0) {
+            effective.defaultOdds = this.SYSTEM_DEFAULT_ODDS;
+        }
+        if (!effective.regionPolicy || typeof effective.regionPolicy !== 'object') {
+            effective.regionPolicy = {};
+        }
+        effective.regionPolicy.defaultRegion = this.normalizeRegionKey(effective.regionPolicy.defaultRegion, 'new_ao');
+        if (typeof effective.regionPolicy.canonicalAlwaysShowRegion !== 'boolean') {
+            effective.regionPolicy.canonicalAlwaysShowRegion = true;
+        }
+
+        return effective;
+    }
+
+    setGlobalRuleProfile(profile) {
+        this.globalRuleProfile = this.sanitizeRuleProfile(profile || {}, { forOverride: true });
+        this.ODDS = this.getEffectiveDefaultOdds('');
+    }
+
+    setClientRuleProfile(clientId, profile) {
+        const normalizedId = this.normalizeRuleClientId(clientId);
+        if (!normalizedId) {
+            throw new Error('网友标识不能为空');
+        }
+        const sanitized = this.sanitizeRuleProfile(profile || {}, { forOverride: true });
+        if (this.isRuleProfileEmpty(sanitized)) {
+            delete this.clientRuleProfiles[normalizedId];
+        } else {
+            this.clientRuleProfiles[normalizedId] = sanitized;
+        }
+    }
+
+    updateRuleProfile(scope = 'global', patch = {}, options = {}) {
+        const normalizedScope = scope === 'client' ? 'client' : 'global';
+        const sanitizedPatch = this.sanitizeRuleProfile(patch || {}, { forOverride: true });
+        if (this.isRuleProfileEmpty(sanitizedPatch)) {
+            return;
+        }
+
+        if (normalizedScope === 'global') {
+            this.globalRuleProfile = this.mergeRuleProfiles(this.globalRuleProfile || {}, sanitizedPatch);
+            this.ODDS = this.getEffectiveDefaultOdds('');
+            return;
+        }
+
+        const clientId = this.normalizeRuleClientId(options.clientId);
+        if (!clientId) {
+            throw new Error('请先选择网友后再设置专属规则');
+        }
+        const current = this.clientRuleProfiles[clientId] || {};
+        const next = this.mergeRuleProfiles(current, sanitizedPatch);
+        this.clientRuleProfiles[clientId] = this.sanitizeRuleProfile(next, { forOverride: true });
+    }
+
+    resetRuleProfile(scope = 'global', options = {}) {
+        const normalizedScope = scope === 'client' ? 'client' : 'global';
+        if (normalizedScope === 'global') {
+            this.globalRuleProfile = {};
+            this.ODDS = this.getEffectiveDefaultOdds('');
+            return;
+        }
+        const clientId = this.normalizeRuleClientId(options.clientId);
+        if (!clientId) {
+            throw new Error('请先选择网友后再恢复默认');
+        }
+        delete this.clientRuleProfiles[clientId];
+    }
+
+    withRuleContext(clientId, fn) {
+        const prevClientId = this.activeRuleClientId;
+        const prevProfile = this.activeRuleProfileCache;
+        this.activeRuleClientId = this.normalizeRuleClientId(clientId);
+        this.activeRuleProfileCache = this.getEffectiveRuleProfile(this.activeRuleClientId);
+        try {
+            return fn();
+        } finally {
+            this.activeRuleClientId = prevClientId;
+            this.activeRuleProfileCache = prevProfile;
+        }
+    }
+
+    getActiveRuleProfile() {
+        if (this.activeRuleProfileCache && typeof this.activeRuleProfileCache === 'object') {
+            return this.activeRuleProfileCache;
+        }
+        return this.getEffectiveRuleProfile('');
+    }
+
+    convertLegacyAnchorAliasMapToRules(anchorAliases) {
+        const rules = {};
+        if (!anchorAliases || typeof anchorAliases !== 'object') return rules;
+        Object.entries(anchorAliases).forEach(([rawToken, rawMode]) => {
+            const token = this.normalizeAnchorAliasToken(rawToken);
+            const mapped = this.normalizeLegacyAliasMode(rawMode);
+            if (!token || !mapped) return;
+            if (mapped === 'ignore') {
+                rules[token] = { amountDistribute: 'per_number', enabled: false };
+                return;
+            }
+            rules[token] = { amountDistribute: mapped, enabled: true };
+        });
+        return rules;
+    }
+
+    exportLegacyAnchorAliasMap(anchorSemantics) {
+        const map = {};
+        if (!anchorSemantics || typeof anchorSemantics !== 'object') return map;
+        Object.entries(anchorSemantics).forEach(([token, rule]) => {
+            if (!rule || typeof rule !== 'object') return;
+            if (rule.enabled === false) {
+                map[token] = 'ignore';
+                return;
+            }
+            const distribute = this.normalizeAmountDistributeValue(rule.amountDistribute);
+            if (!distribute) return;
+            if (distribute === 'per_target_equal_split') {
+                map[token] = 'per_animal';
+                return;
+            }
+            map[token] = 'per_number';
+        });
+        return map;
+    }
+
+    getDefaultAnchorAliasMap() {
+        const defaults = {};
+        const mergedDefaults = this.mergeRuleProfiles(
+            this.getSystemRuleProfile(),
+            this.getDefaultGlobalRuleProfile()
+        );
+        Object.entries(mergedDefaults.anchorSemantics || {}).forEach(([token, rule]) => {
+            if (rule && rule.enabled !== false && rule.amountDistribute) {
+                defaults[token] = rule.amountDistribute;
+            }
+        });
+        return defaults;
+    }
+
+    sanitizeAnchorAliasMap(anchorAliases) {
+        return this.exportLegacyAnchorAliasMap(this.convertLegacyAnchorAliasMapToRules(anchorAliases));
+    }
+
+    getAnchorAliasOverrides() {
+        const globalAnchors = (this.getResolvedGlobalRuleProfile().anchorSemantics)
+            ? this.getResolvedGlobalRuleProfile().anchorSemantics
+            : {};
+        return this.exportLegacyAnchorAliasMap(globalAnchors);
+    }
+
+    setAnchorAliasOverrides(anchorAliases) {
+        const patch = this.convertLegacyAnchorAliasMapToRules(anchorAliases);
+        this.globalRuleProfile = this.mergeRuleProfiles(
+            this.globalRuleProfile || {},
+            { anchorSemantics: patch }
+        );
+    }
+
+    saveAnchorAliasOverrides(anchorAliases) {
+        this.setAnchorAliasOverrides(anchorAliases);
+        this.persistAttributeConfig();
+        return this.getAnchorAliasOverrides();
+    }
+
+    upsertAnchorRule(token, amountDistribute, options = {}) {
+        const normalizedToken = this.normalizeAnchorAliasToken(token);
+        if (!normalizedToken) {
+            throw new Error('词语不能为空');
+        }
+        if (normalizedToken.length > 12) {
+            throw new Error('词语长度不能超过12个字符');
+        }
+        if (!/[\u4e00-\u9fa5A-Za-z]/.test(normalizedToken)) {
+            throw new Error('词语必须包含中文或英文');
+        }
+        const normalizedDistribute = this.normalizeAmountDistributeValue(amountDistribute);
+        if (!normalizedDistribute) {
+            throw new Error('分配策略无效');
+        }
+
+        const scope = options && options.scope === 'client' ? 'client' : 'global';
+        const enabled = options && options.enabled === false ? false : true;
+        const inputHasOdds = options && Object.prototype.hasOwnProperty.call(options, 'odds');
+        const normalizedOdds = inputHasOdds ? this.normalizeOddsValue(options.odds) : NaN;
+        const patch = {
+            anchorSemantics: {
+                [normalizedToken]: {
+                    amountDistribute: normalizedDistribute,
+                    enabled
+                }
+            }
+        };
+        if (inputHasOdds && Number.isFinite(normalizedOdds)) {
+            patch.anchorSemantics[normalizedToken].odds = normalizedOdds;
+        }
+        this.updateRuleProfile(scope, patch, { clientId: options && options.clientId ? options.clientId : '' });
+        this.persistAttributeConfig();
+        this.ODDS = this.getEffectiveDefaultOdds('');
+        return {
+            token: normalizedToken,
+            amountDistribute: normalizedDistribute,
+            odds: inputHasOdds && Number.isFinite(normalizedOdds) ? normalizedOdds : null,
+            enabled,
+            scope
+        };
+    }
+
+    removeAnchorRule(token, options = {}) {
+        const normalizedToken = this.normalizeAnchorAliasToken(token);
+        if (!normalizedToken) return;
+        const scope = options && options.scope === 'client' ? 'client' : 'global';
+        if (scope === 'global') {
+            const defaultAnchors = (this.getDefaultGlobalRuleProfile().anchorSemantics) || {};
+            const defaultRule = defaultAnchors[normalizedToken];
+            if (defaultRule) {
+                const sanitizedDefault = this.sanitizeAnchorRuleItem(defaultRule);
+                if (sanitizedDefault) {
+                    if (!this.globalRuleProfile || typeof this.globalRuleProfile !== 'object') {
+                        this.globalRuleProfile = {};
+                    }
+                    if (!this.globalRuleProfile.anchorSemantics || typeof this.globalRuleProfile.anchorSemantics !== 'object') {
+                        this.globalRuleProfile.anchorSemantics = {};
+                    }
+                    this.globalRuleProfile.anchorSemantics[normalizedToken] = {
+                        amountDistribute: sanitizedDefault.amountDistribute,
+                        enabled: false
+                    };
+                }
+            } else if (this.globalRuleProfile && this.globalRuleProfile.anchorSemantics) {
+                delete this.globalRuleProfile.anchorSemantics[normalizedToken];
+                if (Object.keys(this.globalRuleProfile.anchorSemantics).length === 0) {
+                    delete this.globalRuleProfile.anchorSemantics;
+                }
+            }
+            if (this.isRuleProfileEmpty(this.globalRuleProfile)) {
+                this.globalRuleProfile = {};
+            }
+            this.persistAttributeConfig();
+            return;
+        }
+
+        const clientId = this.normalizeRuleClientId(options && options.clientId ? options.clientId : '');
+        if (!clientId) return;
+        const profile = this.clientRuleProfiles[clientId];
+        if (!profile || !profile.anchorSemantics) return;
+        delete profile.anchorSemantics[normalizedToken];
+        if (Object.keys(profile.anchorSemantics).length === 0) {
+            delete profile.anchorSemantics;
+        }
+        if (this.isRuleProfileEmpty(profile)) {
+            delete this.clientRuleProfiles[clientId];
+        }
+        this.persistAttributeConfig();
+    }
+
+    setAttributeCombinePolicy(policy, options = {}) {
+        const normalizedPolicy = String(policy || '').trim();
+        if (!this.getAllowedAttributeCombinePolicyValues().includes(normalizedPolicy)) {
+            throw new Error('属性叠加策略无效');
+        }
+        const scope = options && options.scope === 'client' ? 'client' : 'global';
+        this.updateRuleProfile(
+            scope,
+            { attributeCombinePolicy: normalizedPolicy },
+            { clientId: options && options.clientId ? options.clientId : '' }
+        );
+        this.persistAttributeConfig();
+        return normalizedPolicy;
+    }
+
+    setAnchorParseMode(mode, options = {}) {
+        const normalizedMode = String(mode || '').trim();
+        if (!this.getAllowedAnchorParseModeValues().includes(normalizedMode)) {
+            throw new Error('解析模式无效');
+        }
+        const scope = options && options.scope === 'client' ? 'client' : 'global';
+        this.updateRuleProfile(
+            scope,
+            { anchorParseMode: normalizedMode },
+            { clientId: options && options.clientId ? options.clientId : '' }
+        );
+        this.persistAttributeConfig();
+        return normalizedMode;
+    }
+
+    setDefaultOdds(odds, options = {}) {
+        const normalizedOdds = this.normalizeOddsValue(odds);
+        if (!Number.isFinite(normalizedOdds)) {
+            throw new Error('默认赔率无效，请输入大于0的数字');
+        }
+        const scope = options && options.scope === 'client' ? 'client' : 'global';
+        this.updateRuleProfile(
+            scope,
+            { defaultOdds: normalizedOdds },
+            { clientId: options && options.clientId ? options.clientId : '' }
+        );
+        this.persistAttributeConfig();
+        this.ODDS = this.getEffectiveDefaultOdds('');
+        return normalizedOdds;
+    }
+
+    clearDefaultOdds(options = {}) {
+        const scope = options && options.scope === 'client' ? 'client' : 'global';
+        if (scope === 'global') {
+            if (this.globalRuleProfile && Object.prototype.hasOwnProperty.call(this.globalRuleProfile, 'defaultOdds')) {
+                delete this.globalRuleProfile.defaultOdds;
+            }
+            if (this.isRuleProfileEmpty(this.globalRuleProfile)) {
+                this.globalRuleProfile = {};
+            }
+            this.persistAttributeConfig();
+            this.ODDS = this.getEffectiveDefaultOdds('');
+            return;
+        }
+
+        const clientId = this.normalizeRuleClientId(options && options.clientId ? options.clientId : '');
+        if (!clientId) {
+            throw new Error('请先选择客户后再恢复默认赔率');
+        }
+        const profile = this.clientRuleProfiles[clientId];
+        if (!profile) return;
+        if (Object.prototype.hasOwnProperty.call(profile, 'defaultOdds')) {
+            delete profile.defaultOdds;
+        }
+        if (this.isRuleProfileEmpty(profile)) {
+            delete this.clientRuleProfiles[clientId];
+        }
+        this.persistAttributeConfig();
+    }
+
+    clearAttributeCombinePolicy(options = {}) {
+        const scope = options && options.scope === 'client' ? 'client' : 'global';
+        if (scope === 'global') {
+            if (this.globalRuleProfile && Object.prototype.hasOwnProperty.call(this.globalRuleProfile, 'attributeCombinePolicy')) {
+                delete this.globalRuleProfile.attributeCombinePolicy;
+            }
+            if (this.isRuleProfileEmpty(this.globalRuleProfile)) {
+                this.globalRuleProfile = {};
+            }
+            this.persistAttributeConfig();
+            return;
+        }
+
+        const clientId = this.normalizeRuleClientId(options && options.clientId ? options.clientId : '');
+        if (!clientId) {
+            throw new Error('请先选择网友后再恢复默认');
+        }
+        const profile = this.clientRuleProfiles[clientId];
+        if (!profile) return;
+        if (Object.prototype.hasOwnProperty.call(profile, 'attributeCombinePolicy')) {
+            delete profile.attributeCombinePolicy;
+        }
+        if (this.isRuleProfileEmpty(profile)) {
+            delete this.clientRuleProfiles[clientId];
+        }
+        this.persistAttributeConfig();
+    }
+
+    clearAnchorParseMode(options = {}) {
+        const scope = options && options.scope === 'client' ? 'client' : 'global';
+        if (scope === 'global') {
+            if (this.globalRuleProfile && Object.prototype.hasOwnProperty.call(this.globalRuleProfile, 'anchorParseMode')) {
+                delete this.globalRuleProfile.anchorParseMode;
+            }
+            if (this.isRuleProfileEmpty(this.globalRuleProfile)) {
+                this.globalRuleProfile = {};
+            }
+            this.persistAttributeConfig();
+            return;
+        }
+
+        const clientId = this.normalizeRuleClientId(options && options.clientId ? options.clientId : '');
+        if (!clientId) {
+            throw new Error('请先选择网友后再恢复默认');
+        }
+        const profile = this.clientRuleProfiles[clientId];
+        if (!profile) return;
+        if (Object.prototype.hasOwnProperty.call(profile, 'anchorParseMode')) {
+            delete profile.anchorParseMode;
+        }
+        if (this.isRuleProfileEmpty(profile)) {
+            delete this.clientRuleProfiles[clientId];
+        }
+        this.persistAttributeConfig();
+    }
+
+    getEffectiveAttributeCombinePolicy(clientId = '') {
+        return this.getEffectiveRuleProfile(clientId).attributeCombinePolicy || 'intersection_then_union_fallback';
+    }
+
+    getEffectiveAnchorParseMode(clientId = '') {
+        const mode = this.getEffectiveRuleProfile(clientId).anchorParseMode;
+        return this.getAllowedAnchorParseModeValues().includes(mode) ? mode : 'strict';
+    }
+
+    getEffectiveAnchorOdds(anchorToken, clientId = '') {
+        const profile = this.getEffectiveRuleProfile(clientId);
+        const defaultOdds = this.normalizeOddsValue(profile.defaultOdds, this.SYSTEM_DEFAULT_ODDS);
+        const token = this.normalizeAnchorAliasToken(anchorToken);
+        const rule = token && profile.anchorSemantics ? profile.anchorSemantics[token] : null;
+        const overrideOdds = this.normalizeOddsValue(rule && rule.odds);
+        return Number.isFinite(overrideOdds) ? overrideOdds : defaultOdds;
+    }
+
+    resetAnchorRules(scope = 'global', options = {}) {
+        const normalizedScope = scope === 'client' ? 'client' : 'global';
+        if (normalizedScope === 'global') {
+            if (this.globalRuleProfile && this.globalRuleProfile.anchorSemantics) {
+                delete this.globalRuleProfile.anchorSemantics;
+            }
+            this.persistAttributeConfig();
+            return;
+        }
+        const clientId = this.normalizeRuleClientId(options && options.clientId ? options.clientId : '');
+        if (!clientId || !this.clientRuleProfiles[clientId]) return;
+        if (this.clientRuleProfiles[clientId].anchorSemantics) {
+            delete this.clientRuleProfiles[clientId].anchorSemantics;
+        }
+        if (this.isRuleProfileEmpty(this.clientRuleProfiles[clientId])) {
+            delete this.clientRuleProfiles[clientId];
+        }
+        this.persistAttributeConfig();
+    }
+
+    resetClientRules(clientId) {
+        this.resetRuleProfile('client', { clientId });
+        this.persistAttributeConfig();
+    }
+
+    upsertAnchorAlias(token, mode, options = {}) {
+        const mapped = this.normalizeLegacyAliasMode(mode);
+        if (!mapped) {
+            throw new Error('词义类型无效');
+        }
+        if (mapped === 'ignore') {
+            return this.upsertAnchorRule(token, 'per_number', {
+                ...options,
+                enabled: false
+            });
+        }
+        return this.upsertAnchorRule(token, mapped, {
+            ...options,
+            enabled: true
+        });
+    }
+
+    removeAnchorAlias(token, options = {}) {
+        this.removeAnchorRule(token, options);
+    }
+
+    resetAnchorAliases(options = {}) {
+        const scope = options && options.scope === 'client' ? 'client' : 'global';
+        this.resetAnchorRules(scope, options);
+    }
+
+    getActiveAnchorAliasMap() {
+        const active = {};
+        const anchorSemantics = this.getActiveRuleProfile().anchorSemantics || {};
+        Object.entries(anchorSemantics).forEach(([token, rule]) => {
+            if (!rule || rule.enabled === false) return;
+            const distribute = this.normalizeAmountDistributeValue(rule.amountDistribute);
+            if (!distribute) return;
+            active[token] = distribute;
+        });
+        return active;
+    }
+
+    getMergedAnchorAliasMap(clientId = '') {
+        const profile = arguments.length === 0
+            ? this.getActiveRuleProfile()
+            : this.getEffectiveRuleProfile(clientId);
+        return this.exportLegacyAnchorAliasMap(profile.anchorSemantics || {});
+    }
+
+    getAnchorAliasRows(options = {}) {
+        const clientId = this.normalizeRuleClientId(options && options.clientId ? options.clientId : '');
+        const effective = this.getEffectiveRuleProfile(clientId);
+        const systemAnchors = this.getSystemRuleProfile().anchorSemantics || {};
+        const globalAnchors = (this.getResolvedGlobalRuleProfile().anchorSemantics) || {};
+        const clientAnchors = clientId && this.clientRuleProfiles[clientId]
+            ? (this.clientRuleProfiles[clientId].anchorSemantics || {})
+            : {};
+
+        const tokenSet = new Set([
+            ...Object.keys(systemAnchors),
+            ...Object.keys(globalAnchors),
+            ...Object.keys(clientAnchors)
+        ]);
+
+        const rows = Array.from(tokenSet).map(token => {
+            const effectiveRule = effective.anchorSemantics[token] || null;
+            const source = Object.prototype.hasOwnProperty.call(clientAnchors, token)
+                ? 'client'
+                : (Object.prototype.hasOwnProperty.call(globalAnchors, token) ? 'global' : 'system');
+            const defaultRule = systemAnchors[token] || null;
+            const scopedRule = source === 'client'
+                ? clientAnchors[token]
+                : (source === 'global' ? globalAnchors[token] : systemAnchors[token]);
+            const scopedOdds = this.normalizeOddsValue(scopedRule && scopedRule.odds);
+            const effectiveOdds = this.normalizeOddsValue(effectiveRule && effectiveRule.odds, effective.defaultOdds);
+            return {
+                token,
+                mode: effectiveRule && effectiveRule.amountDistribute ? effectiveRule.amountDistribute : 'per_number',
+                source,
+                active: !!(effectiveRule && effectiveRule.enabled !== false),
+                defaultMode: defaultRule && defaultRule.amountDistribute ? defaultRule.amountDistribute : null,
+                odds: Number.isFinite(effectiveOdds) ? effectiveOdds : this.SYSTEM_DEFAULT_ODDS,
+                customOdds: Number.isFinite(scopedOdds),
+                scopedOdds: Number.isFinite(scopedOdds) ? scopedOdds : null,
+                defaultOdds: this.normalizeOddsValue(effective.defaultOdds, this.SYSTEM_DEFAULT_ODDS),
+                clientId: source === 'client' ? clientId : ''
+            };
+        });
+
+        rows.sort((a, b) => {
+            const sourceOrder = { client: 0, global: 1, system: 2 };
+            if (sourceOrder[a.source] !== sourceOrder[b.source]) {
+                return sourceOrder[a.source] - sourceOrder[b.source];
+            }
+            if (a.token.length !== b.token.length) {
+                return b.token.length - a.token.length;
+            }
+            return a.token.localeCompare(b.token, 'zh-Hans-CN');
+        });
+        return rows;
+    }
+
+    containsConfiguredAnchor(text) {
+        const raw = String(text || '');
+        if (!raw.trim()) return false;
+        const amountRegex = this.buildAmountAnchorRegex();
+        amountRegex.lastIndex = 0;
+        return amountRegex.test(raw);
+    }
+
+    escapeRegex(text) {
+        return String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    buildAnchorTokenPattern() {
+        const tokens = Object.keys(this.getActiveAnchorAliasMap())
+            .filter(Boolean)
+            .sort((a, b) => b.length - a.length);
+        if (tokens.length === 0) {
+            return '各|买';
+        }
+        return tokens.map(token => this.escapeRegex(token)).join('|');
+    }
+
+    buildAmountAnchorRegex() {
+        const amountPattern = '[0-9０-９]+(?:[.．。][0-9０-９]+)?|[零〇一二两三四五六七八九十百千万]+';
+        const anchorPattern = this.buildAnchorTokenPattern();
+        const betweenPattern = '[\\s,，.．。:：;；~～\\-—_=+/\\\\#*\'"$￥¥!！?？]*';
+        return new RegExp(
+            `(${anchorPattern})${betweenPattern}(${amountPattern})\\s*(?:米|元|块|蚊|井|斤|注|码|碼)?(?:[#*\`'"$￥¥,，。:：;；~～!！?？]*)`,
+            'g'
+        );
     }
 
     normalizeAttributeNameKey(name) {
@@ -353,24 +1276,35 @@ class MessageProcessor {
     }
 
     // 解析消息（支持多行、生肖、金额继承）
-    parseMessage(message) {
-        try {
-            const normalizedMessage = this.normalizeMessage(message);
-            const trimmedMessage = normalizedMessage.trim();
-            if (!trimmedMessage) {
-                throw new Error('消息不能为空');
+    parseMessage(message, options = {}) {
+        const clientId = this.normalizeRuleClientId(options && options.clientId ? options.clientId : '');
+        return this.withRuleContext(clientId, () => {
+            try {
+                const normalizedMessage = this.normalizeMessage(message);
+                if (!String(normalizedMessage || '').trim()) {
+                    throw new Error('消息不能为空');
+                }
+                const entries = this.parseEntries(normalizedMessage);
+                if (entries.length === 0) {
+                    throw new Error('未找到可识别的消息内容');
+                }
+                const canonicalMessage = this.buildCanonicalMessage(entries) || String(normalizedMessage || '').trim();
+                return {
+                    entries,
+                    original: canonicalMessage,
+                    raw: normalizedMessage
+                };
+            } catch (error) {
+                const wrapped = new Error(`消息解析失败: ${error.message}`);
+                if (error && error.code) {
+                    wrapped.code = error.code;
+                }
+                if (error && error.ambiguity) {
+                    wrapped.ambiguity = error.ambiguity;
+                }
+                throw wrapped;
             }
-            const entries = this.parseEntries(trimmedMessage);
-            if (entries.length === 0) {
-                throw new Error('未找到可识别的消息内容');
-            }
-            return {
-                entries,
-                original: trimmedMessage
-            };
-        } catch (error) {
-            throw new Error(`消息解析失败: ${error.message}`);
-        }
+        });
     }
 
     normalizeMessage(message) {
@@ -380,6 +1314,14 @@ class MessageProcessor {
             .replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 65248))
             // 全角空格转半角空格
             .replace(/\u3000/g, ' ')
+            // OCR 常见异体字归一
+            .replace(/號/g, '号')
+            .replace(/免/g, '兔')
+            .replace(/個/g, '个')
+            .replace(/買/g, '买')
+            .replace(/數/g, '数')
+            .replace(/每\s*个/g, '每个')
+            .replace(/各\s*个/g, '各个')
             // 中文波浪与特殊连字符统一
             .replace(/[﹣－]/g, '-')
             .replace(/[～〜]/g, '～')
@@ -389,36 +1331,71 @@ class MessageProcessor {
     }
 
     parseEntries(message) {
-        const lines = message
-            .split(/\n+/)
-            .map(line => line.trim())
-            .filter(Boolean);
+        const lines = String(message || '')
+            .replace(/\r/g, '')
+            .split('\n');
 
         const entries = [];
         const pendingSegments = [];
-        let currentRegion = 'new_ao';
+        let currentRegion = this.getDefaultRegionKey();
+        let nextSegmentNo = 1;
 
-        lines.forEach((line, lineIndex) => {
-            const amountRegex = /各(?:号)?[\u4e00-\u9fa5A-Za-z:：\s]*?([0-9０-９]+|[零〇一二两三四五六七八九十百千万]+)\s*(?:米|元|块|蚊)?/g;
+        lines.forEach((rawLine, lineIndex) => {
+            const sourceLine = String(rawLine || '');
+            const trimmedSourceLine = sourceLine.trim();
+            if (!trimmedSourceLine) {
+                // 空白行不参与下注解析，但必须保留真实行号用于报错定位。
+                return;
+            }
+            const activeMode = this.getEffectiveAnchorParseMode(this.activeRuleClientId);
+            const line = activeMode === 'loose'
+                ? this.rewriteImplicitAmountLine(trimmedSourceLine)
+                : trimmedSourceLine;
+            const currentLineNo = lineIndex + 1;
+            const amountRegex = this.buildAmountAnchorRegex();
             let lastCursor = 0;
             let match = null;
             let hasAmountAnchor = false;
             let lineHasRegionMarker = false;
+            const appendSplitSegments = (splitResult) => {
+                splitResult.segments.forEach(segment => {
+                    pendingSegments.push({
+                        ...segment,
+                        segmentNo: nextSegmentNo
+                    });
+                    nextSegmentNo += 1;
+                });
+                currentRegion = splitResult.currentRegion;
+                if (splitResult.containsRegionMarker) {
+                    lineHasRegionMarker = true;
+                }
+            };
 
             while ((match = amountRegex.exec(line)) !== null) {
                 hasAmountAnchor = true;
                 const beforeAmount = line.slice(lastCursor, match.index).trim();
                 if (beforeAmount) {
-                    const splitResult = this.splitTextByRegion(beforeAmount, currentRegion, lineIndex + 1);
-                    pendingSegments.push(...splitResult.segments);
-                    currentRegion = splitResult.currentRegion;
-                    if (splitResult.containsRegionMarker) {
-                        lineHasRegionMarker = true;
-                    }
+                    const splitResult = this.splitTextByRegion(beforeAmount, currentRegion, currentLineNo);
+                    appendSplitSegments(splitResult);
                 }
 
-                const amount = this.parseFlexibleAmount(match[1]);
-                const parsedEntries = this.buildEntriesFromPendingSegments(pendingSegments, amount, lineIndex + 1);
+                const anchorToken = match[1];
+                const amount = this.parseFlexibleAmount(match[2]);
+                const detachedEntries = this.resolveCrossLineAnchorAmbiguity(
+                    pendingSegments,
+                    currentLineNo,
+                    anchorToken,
+                    amount
+                );
+                if (detachedEntries.length > 0) {
+                    entries.push(...detachedEntries);
+                }
+                const parsedEntries = this.buildEntriesFromPendingSegments(
+                    pendingSegments,
+                    amount,
+                    currentLineNo,
+                    anchorToken
+                );
                 entries.push(...parsedEntries);
                 pendingSegments.length = 0;
 
@@ -426,95 +1403,476 @@ class MessageProcessor {
             }
 
             if (!hasAmountAnchor) {
-                const looseAmount = this.tryParseLooseAmountLine(line);
-                if (looseAmount.matched) {
-                    if (pendingSegments.length === 0) {
-                        throw new Error(`第 ${lineIndex + 1} 行是金额行但前面没有可绑定的号码`);
-                    }
-                    const parsedEntries = this.buildEntriesFromPendingSegments(
-                        pendingSegments,
-                        looseAmount.amount,
-                        lineIndex + 1
-                    );
-                    entries.push(...parsedEntries);
-                    pendingSegments.length = 0;
+                // 兼容摘要行：如“合计100/总计一百”，不参与下注解析。
+                if (pendingSegments.length === 0 && this.isSummaryLine(line)) {
                     return;
                 }
 
-                if (/[米元块蚊]/.test(line)) {
-                    const lineNumbers = this.parseNumbersFromText(line);
-                    if (lineNumbers.length >= 2) {
-                        throw new Error(`第 ${lineIndex + 1} 行格式有歧义: "${line}"，包含单位但未使用“各”`);
-                    }
+                if (this.containsAmountUnitWithoutAnchor(line)) {
+                    throw new Error(`第 ${currentLineNo} 行包含金额但缺少“各/各号/买”标记`);
                 }
             }
 
             const tail = line.slice(lastCursor).trim();
             if (tail) {
-                const splitResult = this.splitTextByRegion(tail, currentRegion, lineIndex + 1);
-                pendingSegments.push(...splitResult.segments);
-                currentRegion = splitResult.currentRegion;
-                if (splitResult.containsRegionMarker) {
-                    lineHasRegionMarker = true;
-                }
+                const splitResult = this.splitTextByRegion(tail, currentRegion, currentLineNo);
+                appendSplitSegments(splitResult);
             }
+            this.compactPendingSegments(pendingSegments);
 
             if (!hasAmountAnchor && pendingSegments.length === 0 && !lineHasRegionMarker) {
-                throw new Error(`第 ${lineIndex + 1} 行格式无法识别`);
+                throw new Error(`第 ${currentLineNo} 行格式无法识别`);
             }
         });
 
+        this.compactPendingSegments(pendingSegments);
         if (pendingSegments.length > 0) {
             const firstPending = pendingSegments[0];
             const lineText = String(firstPending.text || '').slice(0, 30);
-            throw new Error(`第 ${firstPending.lineNo || '?'} 行存在未绑定金额: ${lineText}，请在后面补充“各XX”`);
+            throw new Error(`第 ${firstPending.lineNo || '?'} 行存在未绑定数值: ${lineText}，请在后面补充“各/各号/买/各肖/各数+数值”`);
         }
 
         return entries;
     }
 
-    tryParseLooseAmountLine(line) {
-        const normalized = String(line || '').trim();
-        if (!normalized) {
-            return { matched: false, amount: NaN };
+    parseImplicitStandaloneSegment(segment) {
+        const rawText = String(segment && segment.text ? segment.text : '').trim();
+        if (!rawText) return null;
+        if (this.containsConfiguredAnchor(rawText)) return null;
+
+        const rewritten = this.rewriteImplicitAmountLine(rawText);
+        if (!rewritten || rewritten === rawText || !this.containsConfiguredAnchor(rewritten)) {
+            return null;
         }
-        const matched = normalized.match(/^([0-9０-９]+|[零〇一二两三四五六七八九十百千万]+)\s*(?:米|元|块|蚊)\s*$/);
-        if (!matched) {
-            return { matched: false, amount: NaN };
-        }
-        const amount = this.parseFlexibleAmount(matched[1]);
-        return { matched: true, amount };
+
+        const amountRegex = this.buildAmountAnchorRegex();
+        const match = amountRegex.exec(rewritten);
+        if (!match) return null;
+
+        const beforeAmount = rewritten.slice(0, match.index).trim();
+        const afterAmount = rewritten.slice(match.index + match[0].length).trim();
+        if (!beforeAmount || afterAmount) return null;
+
+        const amount = this.parseFlexibleAmount(match[2]);
+        const anchorToken = match[1];
+        const pseudoPending = [{
+            text: beforeAmount,
+            regionKey: segment.regionKey || this.getDefaultRegionKey(),
+            lineNo: segment.lineNo || null,
+            segmentNo: segment.segmentNo || null
+        }];
+        const entries = this.buildEntriesFromPendingSegments(
+            pseudoPending,
+            amount,
+            segment.lineNo || null,
+            anchorToken
+        );
+        if (!Array.isArray(entries) || entries.length === 0) return null;
+        return {
+            rewritten,
+            entries
+        };
     }
 
-    buildEntriesFromPendingSegments(pendingSegments, amount, lineNo) {
-        if (!Number.isFinite(amount) || amount <= 0) {
-            throw new Error(`第 ${lineNo} 行金额无效`);
+    resolveCrossLineAnchorAmbiguity(pendingSegments, currentLineNo, anchorToken, amount) {
+        if (!Array.isArray(pendingSegments) || pendingSegments.length === 0) return [];
+
+        const previousLineSegments = pendingSegments.filter(segment => {
+            const lineNo = parseInt(segment && segment.lineNo, 10);
+            return Number.isInteger(lineNo) && lineNo < currentLineNo;
+        });
+        if (previousLineSegments.length === 0) return [];
+
+        const ambiguityPolicy = String(this.getActiveRuleProfile().ambiguityPolicy || 'confirm').trim();
+        if (ambiguityPolicy === 'auto') {
+            return [];
         }
 
-        const regionNumberMap = new Map();
-        pendingSegments.forEach(segment => {
-            const numbers = this.extractNumbers(segment.text || '');
-            if (numbers.length === 0) return;
-            if (!regionNumberMap.has(segment.regionKey)) {
-                regionNumberMap.set(segment.regionKey, new Set());
+        const detachedEntries = [];
+        for (const segment of previousLineSegments) {
+            let implicitParsed = null;
+            try {
+                implicitParsed = this.parseImplicitStandaloneSegment(segment);
+            } catch (error) {
+                implicitParsed = null;
             }
-            const numberSet = regionNumberMap.get(segment.regionKey);
-            numbers.forEach(num => numberSet.add(num));
+            if (!implicitParsed) continue;
+
+            if (ambiguityPolicy === 'error') {
+                throw new Error(`第 ${segment.lineNo || '?'} 行“${segment.text}”存在跨行歧义，请补充锚点后再提交`);
+            }
+
+            const standalonePreview = implicitParsed.entries
+                .map(item => this.buildCanonicalEntryText(item))
+                .filter(Boolean)
+                .join(' / ');
+            const amountText = this.formatAmount(amount);
+            const segmentText = String(segment.text || '').trim();
+            const segmentLineNo = parseInt(segment.lineNo, 10) || null;
+            let mergePreview = '';
+            let mergeRewrite = '';
+            try {
+                const mergedCandidates = this.buildEntriesFromPendingSegments(
+                    [{
+                        text: segmentText,
+                        regionKey: segment.regionKey || this.getDefaultRegionKey(),
+                        lineNo: segment.lineNo || currentLineNo,
+                        segmentNo: segment.segmentNo || null
+                    }],
+                    amount,
+                    currentLineNo,
+                    anchorToken
+                );
+                mergePreview = mergedCandidates
+                    .map(item => this.buildCanonicalEntryText(item))
+                    .filter(Boolean)
+                    .join(' / ');
+                const mergeNumbers = [];
+                mergedCandidates.forEach(item => {
+                    (item.numbers || []).forEach(num => {
+                        if (this.validateNumber(num)) {
+                            mergeNumbers.push(this.formatNumber(num));
+                        }
+                    });
+                });
+                if (mergeNumbers.length > 0) {
+                    mergeRewrite = mergeNumbers.join('.');
+                }
+            } catch (error) {
+                mergePreview = '';
+                mergeRewrite = '';
+            }
+            const ambiguityError = new Error(`第 ${segment.lineNo || '?'} 行“${segment.text}”存在跨行歧义，请先选择解释方案`);
+            ambiguityError.code = 'CROSS_LINE_AMBIGUITY';
+            ambiguityError.ambiguity = {
+                type: 'cross_line_anchor',
+                segmentLineNo,
+                currentLineNo,
+                segmentText,
+                currentAnchorToken: anchorToken,
+                currentAmount: amountText,
+                options: [
+                    {
+                        id: 'standalone',
+                        title: `方案1：第 ${segment.lineNo || '?'} 行独立下注`,
+                        preview: `第 ${segment.lineNo || '?'} 行 => ${standalonePreview || implicitParsed.rewritten}\n第 ${currentLineNo} 行 => 保持原写法继续解析`,
+                        replacements: segmentLineNo
+                            ? [{ lineNo: segmentLineNo, text: implicitParsed.rewritten }]
+                            : []
+                    },
+                    {
+                        id: 'merge',
+                        title: `方案2：第 ${segment.lineNo || '?'} 行并入第 ${currentLineNo} 行锚点`,
+                        preview: `第 ${segment.lineNo || '?'} 行 => ${mergePreview || `${segmentText} + ${anchorToken}${amountText}`}\n第 ${currentLineNo} 行 => 保持原写法继续解析`,
+                        replacements: segmentLineNo
+                            ? [{ lineNo: segmentLineNo, text: mergeRewrite || segmentText.replace(/-/g, '.') }]
+                            : []
+                    }
+                ]
+            };
+            throw ambiguityError;
+        }
+
+        return detachedEntries;
+    }
+
+    rewriteImplicitAmountLine(line) {
+        const raw = String(line || '').trim();
+        if (!raw) return '';
+        if (this.containsConfiguredAnchor(raw)) return raw;
+
+        const match = raw.match(/^(.*?)([0-9０-９]+(?:[.．。][0-9０-９]+)?|[零〇一二两三四五六七八九十百千万]+)\s*([米元块蚊井斤注码碼#*`'"$￥¥,，。:：;；~～!！?？]*)$/);
+        if (!match) return raw;
+
+        let prefix = this.normalizeImplicitPrefix(match[1]);
+        if (!prefix) return raw;
+        const amountToken = match[2];
+        const suffix = match[3] || '';
+
+        const explicitPrefixNumbers = this.safeExtractExplicitNumbers(prefix);
+        const amountValue = this.safeParseAmountCandidate(amountToken);
+        const hasAmountSuffixHint = /[米元块蚊井斤#*￥¥]/.test(suffix);
+        const hasAnchorHint = /[号肖数]$/.test(prefix);
+
+        if (!hasAmountSuffixHint && !hasAnchorHint) {
+            if (explicitPrefixNumbers.length > 1 && Number.isFinite(amountValue) && amountValue <= 49) {
+                return raw;
+            }
+        }
+
+        let anchorToken = '各';
+        if (/号$/.test(prefix)) {
+            anchorToken = '各号';
+            prefix = prefix.slice(0, -1);
+        } else if (/肖$/.test(prefix)) {
+            anchorToken = '各肖';
+            prefix = prefix.slice(0, -1);
+        } else if (/数$/.test(prefix)) {
+            anchorToken = '各数';
+            prefix = prefix.slice(0, -1);
+        }
+
+        prefix = this.normalizeImplicitPrefix(prefix);
+        if (!prefix || !this.hasPotentialBetTargets(prefix)) {
+            return raw;
+        }
+
+        return `${prefix}${anchorToken}${amountToken}`;
+    }
+
+    normalizeImplicitPrefix(text) {
+        return String(text || '')
+            .replace(/^[,，。；;:：~～\-—./\\+=*#`'"$￥¥\s]+/g, '')
+            .replace(/[,，。；;:：~～\-—./\\+=*#`'"$￥¥\s]+$/g, '')
+            .trim();
+    }
+
+    safeParseAmountCandidate(token) {
+        try {
+            return this.parseFlexibleAmount(token);
+        } catch (error) {
+            return NaN;
+        }
+    }
+
+    safeExtractExplicitNumbers(text) {
+        try {
+            return this.extractExplicitNumbers(text);
+        } catch (error) {
+            return [];
+        }
+    }
+
+    hasPotentialBetTargets(text) {
+        const normalized = this.normalizeSegmentText(text);
+        if (!normalized) return false;
+
+        const withoutRegion = normalized.replace(this.getRegionMarkerRegex(true), '');
+        const candidate = withoutRegion || normalized;
+        if (!candidate.trim()) return false;
+
+        if (this.safeExtractExplicitNumbers(candidate).length > 0) {
+            return true;
+        }
+        if (this.extractAnimalTokens(candidate).length > 0) {
+            return true;
+        }
+        return this.extractStructuredTokenMatches(candidate).length > 0;
+    }
+
+    compactPendingSegments(pendingSegments) {
+        if (!Array.isArray(pendingSegments) || pendingSegments.length === 0) return;
+        const compacted = pendingSegments.filter(segment => !this.isIgnorableResidualSegment(segment && segment.text));
+        pendingSegments.length = 0;
+        pendingSegments.push(...compacted);
+    }
+
+    isIgnorableResidualSegment(text) {
+        const compact = String(text || '').replace(/\s+/g, '');
+        if (!compact) return true;
+        if (this.getRegionMarkerRegex().test(compact)) return false;
+        if (/[0-9０-９零〇一二两三四五六七八九十百千万]/.test(compact)) return false;
+        if (this.extractAnimalTokens(compact).length > 0) return false;
+        if (this.extractStructuredTokenMatches(compact).length > 0) return false;
+        const ignoredTokens = Object.entries(this.getMergedAnchorAliasMap())
+            .filter(([, mode]) => mode === 'ignore')
+            .map(([token]) => token)
+            .sort((a, b) => b.length - a.length);
+        let normalized = compact;
+        ignoredTokens.forEach(token => {
+            if (!token) return;
+            normalized = normalized.split(token).join('');
         });
 
-        if (regionNumberMap.size === 0) {
-            throw new Error(`第 ${lineNo} 行未找到有效号码`);
+        const stripped = normalized.replace(/[号碼码各买肖数子每个注米元块蚊井斤#*`'"$￥¥.,，。:：;；~～\-—_=+\/\\!！?？]/g, '');
+        return stripped.length === 0;
+    }
+
+    containsAmountUnitWithoutAnchor(line) {
+        const normalized = String(line || '').trim();
+        if (!normalized) return false;
+        if (this.containsConfiguredAnchor(normalized)) return false;
+        return /(?:[0-9０-９]+(?:[.．。][0-9０-９]+)?|[零〇一二两三四五六七八九十百千万]+)\s*(?:米|元|块|蚊|井|斤|注|码|碼)/.test(normalized);
+    }
+
+    isSummaryLine(line) {
+        const normalized = String(line || '')
+            .replace(/[，。；;,.]/g, '')
+            .replace(/\s+/g, '')
+            .trim();
+        if (!normalized) return true;
+        return /^(合计|总计|累计|共|总)[:：=]?[0-9０-９零〇一二两三四五六七八九十百千万]+(?:米|元|块|蚊)?$/.test(normalized);
+    }
+
+    resolveAnchorRule(anchorToken) {
+        const normalized = this.normalizeAnchorAliasToken(anchorToken);
+        const activeClientId = this.normalizeRuleClientId(this.activeRuleClientId || '');
+        const systemAnchors = (this.getSystemRuleProfile() || {}).anchorSemantics || {};
+        const globalAnchors = (this.getResolvedGlobalRuleProfile() || {}).anchorSemantics || {};
+        const clientAnchors = activeClientId && this.clientRuleProfiles && this.clientRuleProfiles[activeClientId]
+            ? (this.clientRuleProfiles[activeClientId].anchorSemantics || {})
+            : {};
+        const source = Object.prototype.hasOwnProperty.call(clientAnchors, normalized)
+            ? 'client'
+            : (Object.prototype.hasOwnProperty.call(globalAnchors, normalized)
+                ? 'global'
+                : (Object.prototype.hasOwnProperty.call(systemAnchors, normalized) ? 'system' : 'inferred'));
+        const activeAnchors = (this.getActiveRuleProfile() || {}).anchorSemantics || {};
+        const configuredRule = activeAnchors[normalized];
+        const defaultOdds = this.getActiveDefaultOdds();
+        if (configuredRule && configuredRule.enabled === false) {
+            return {
+                token: normalized,
+                source,
+                mode: 'ignore',
+                odds: defaultOdds,
+                hasCustomOdds: Number.isFinite(this.normalizeOddsValue(configuredRule.odds)),
+                defaultOdds
+            };
+        }
+        let mode = 'per_number';
+        if (configuredRule) {
+            const configuredMode = this.normalizeAmountDistributeValue(configuredRule.amountDistribute);
+            if (configuredMode) {
+                mode = configuredMode;
+            }
+        } else if (normalized.includes('肖')) {
+            mode = 'per_target_equal_split';
+        }
+        const oddsOverride = this.normalizeOddsValue(configuredRule && configuredRule.odds);
+        return {
+            token: normalized,
+            source,
+            mode,
+            odds: Number.isFinite(oddsOverride) ? oddsOverride : defaultOdds,
+            hasCustomOdds: Number.isFinite(oddsOverride),
+            defaultOdds
+        };
+    }
+
+    resolveAnchorMode(anchorToken) {
+        return this.resolveAnchorRule(anchorToken).mode;
+    }
+
+    buildEntriesFromPendingSegments(pendingSegments, amount, lineNo, anchorToken = '各') {
+        const displayLineNo = Number.isInteger(parseInt(lineNo, 10)) ? parseInt(lineNo, 10) : '?';
+        if (!Number.isFinite(amount) || amount <= 0) {
+            throw new Error(`第 ${displayLineNo} 行数值无效`);
         }
 
-        return Array.from(regionNumberMap.entries()).map(([regionKey, numberSet]) => ({
-            regionKey,
-            amount,
-            numbers: Array.from(numberSet)
-        }));
+        const anchorRule = this.resolveAnchorRule(anchorToken);
+        const anchorMode = this.normalizeAmountDistributeValue(anchorRule.mode) || 'per_number';
+        const normalizedAnchorToken = this.normalizeAnchorAliasToken(anchorToken);
+        if (anchorMode === 'undetermined') {
+            const activeClientId = this.normalizeRuleClientId(this.activeRuleClientId || '');
+            const preferredScope = anchorRule.source === 'client' && activeClientId ? 'client' : 'global';
+            const ambiguityError = new Error(`第 ${displayLineNo} 行锚点词「${normalizedAnchorToken || anchorToken}」分配策略未确定，请先选择策略`);
+            ambiguityError.code = 'UNDETERMINED_ANCHOR_MODE';
+            ambiguityError.ambiguity = {
+                type: 'anchor_mode_undetermined',
+                lineNo: displayLineNo,
+                anchorToken: normalizedAnchorToken || String(anchorToken || '').trim(),
+                source: anchorRule.source || 'global',
+                scope: preferredScope,
+                clientId: preferredScope === 'client' ? activeClientId : '',
+                amount: this.formatAmount(amount),
+                options: [
+                    {
+                        id: 'per_number',
+                        title: '方案1：每个号码下注金额',
+                        preview: '同一锚点命中的每个号码都按该金额计。例：猴蛇狗各10 => 每个命中号码都是10。'
+                    },
+                    {
+                        id: 'per_target_equal_split',
+                        title: '方案2：每个目标组下注金额（组内平分）',
+                        preview: '每个目标组先拿到金额，再均分到该组号码。例：猴蛇狗各肖10 => 每个肖各10，组内平分。'
+                    },
+                    {
+                        id: 'per_entry_equal_split',
+                        title: '方案3：本段总金额平分到全部号码',
+                        preview: '该段金额作为总额，平分到全部命中号码。例：猴蛇狗平摊10 => 全部命中号平分10。'
+                    }
+                ]
+            };
+            throw ambiguityError;
+        }
+        const odds = this.normalizeOddsValue(anchorRule.odds, this.getActiveDefaultOdds());
+        const builtEntries = [];
+        pendingSegments.forEach(segment => {
+            let segmentEntries = [];
+            try {
+                segmentEntries = this.buildEntriesFromSegment(segment, amount, anchorMode, lineNo);
+            } catch (error) {
+                const text = error && error.message ? String(error.message) : '格式无法识别';
+                if (/^第\s*\d+\s*行/.test(text)) {
+                    throw error;
+                }
+                throw new Error(`第 ${segment.lineNo || lineNo} 行${text}`);
+            }
+            segmentEntries.forEach(item => {
+                builtEntries.push({
+                    regionKey: segment.regionKey,
+                    amount: item.amount,
+                    numbers: item.numbers,
+                    lineNo: segment.lineNo || lineNo,
+                    segmentNo: segment.segmentNo || null,
+                    anchorToken: normalizedAnchorToken,
+                    anchorMode,
+                    odds
+                });
+            });
+        });
+
+        if (builtEntries.length === 0) {
+            throw new Error(`第 ${displayLineNo} 行未找到有效号码`);
+        }
+
+        return builtEntries;
+    }
+
+    buildEntriesFromSegment(segment, amount, anchorMode, lineNo) {
+        const text = String(segment && segment.text ? segment.text : '').trim();
+        if (!text) return [];
+
+        const normalizedMode = this.normalizeAmountDistributeValue(anchorMode) || 'per_number';
+
+        if (normalizedMode === 'per_target_equal_split') {
+            const groups = this.extractTargetGroups(text);
+            if (groups.length === 0) {
+                throw new Error(`第 ${lineNo} 行“各肖/每肖”前未找到可识别目标`);
+            }
+            return groups.map(group => ({
+                numbers: group,
+                amount: amount / group.length
+            }));
+        }
+
+        const numbers = this.extractNumbers(text, {
+            preserveDuplicates: normalizedMode === 'per_number'
+        });
+        if (numbers.length === 0) return [];
+        if (normalizedMode === 'per_entry_equal_split') {
+            return [{
+                numbers,
+                amount: amount / numbers.length
+            }];
+        }
+        return [{
+            numbers,
+            amount
+        }];
+    }
+
+    getRegionMarkerRegex(global = false) {
+        // 单字地区词仅在“像地区的位置”生效：行首/分隔符后 + 分隔符/数字/行尾前。
+        // 这样可避免“老虎”“新单”等普通词被误识别为地区标记。
+        const singleTokenPattern = '(?:(?<=^)|(?<=[\\s:：,，.。;；\\-—/~～]))(?:老|新|香|港|奥|澳)(?=[\\s:：,，.。;；\\-—/~～0-9０-９]|$)';
+        const pattern = `(老奥|新奥|澳门|香港|${singleTokenPattern})`;
+        return new RegExp(pattern, global ? 'g' : '');
     }
 
     splitTextByRegion(text, initialRegion = 'new_ao', lineNo = null) {
-        const markerRegex = /(老奥|新奥|澳门|香港|香|港|奥|澳)/g;
+        const markerRegex = this.getRegionMarkerRegex(true);
         const segments = [];
         let currentRegion = initialRegion || 'new_ao';
         let containsRegionMarker = false;
@@ -523,7 +1881,7 @@ class MessageProcessor {
 
         while ((match = markerRegex.exec(text)) !== null) {
             containsRegionMarker = true;
-            const left = text.slice(cursor, match.index).trim();
+            const left = this.normalizeSegmentText(text.slice(cursor, match.index));
             if (left) {
                 segments.push({ text: left, regionKey: currentRegion, lineNo });
             }
@@ -531,7 +1889,7 @@ class MessageProcessor {
             cursor = match.index + match[1].length;
         }
 
-        const tail = text.slice(cursor).trim();
+        const tail = this.normalizeSegmentText(text.slice(cursor));
         if (tail) {
             segments.push({ text: tail, regionKey: currentRegion, lineNo });
         }
@@ -539,26 +1897,48 @@ class MessageProcessor {
         return { segments, currentRegion, containsRegionMarker };
     }
 
+    normalizeSegmentText(text) {
+        const raw = String(text || '').trim();
+        if (!raw) return '';
+        const trimmed = raw
+            .replace(/^[,，。；;:：~～\-—#*`'"$￥¥!！?？_=+\s]+/g, '')
+            .replace(/[,，。；;:：~～\-—#*`'"$￥¥!！?？_=+\s]+$/g, '')
+            .trim();
+        if (!trimmed) return '';
+        if (this.isIgnorableResidualSegment(trimmed)) return '';
+        // 纯符号残片（如单独一个“，”）直接忽略。
+        if (!/[\d０-９A-Za-z\u4e00-\u9fa5]/.test(trimmed)) return '';
+        return trimmed;
+    }
+
     resolveRegionFromToken(token, fallback = 'new_ao') {
-        if (token === '老奥') return 'old_ao';
+        if (token === '老奥' || token === '老') return 'old_ao';
         if (token === '香港' || token === '香' || token === '港') return 'hongkong';
-        if (token === '新奥' || token === '澳门' || token === '奥' || token === '澳') return 'new_ao';
+        if (token === '新奥' || token === '澳门' || token === '奥' || token === '澳' || token === '新') return 'new_ao';
         return fallback || 'new_ao';
+    }
+
+    getDefaultRegionKey() {
+        const activeProfile = this.getActiveRuleProfile();
+        const regionPolicy = activeProfile && activeProfile.regionPolicy ? activeProfile.regionPolicy : {};
+        return this.normalizeRegionKey(regionPolicy.defaultRegion, 'new_ao');
     }
 
     parseFlexibleAmount(token) {
         const raw = String(token || '').trim();
         if (!raw) {
-            throw new Error('缺少金额');
+            throw new Error('缺少数值');
         }
 
-        const normalizedDigits = raw.replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 65248));
-        if (/^\d+$/.test(normalizedDigits)) {
-            const amount = parseInt(normalizedDigits, 10);
+        const normalizedDigits = raw
+            .replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 65248))
+            .replace(/[．。]/g, '.');
+        if (/^\d+(?:\.\d+)?$/.test(normalizedDigits)) {
+            const amount = parseFloat(normalizedDigits);
             if (Number.isFinite(amount) && amount > 0) {
                 return amount;
             }
-            throw new Error(`无效金额: ${token}`);
+            throw new Error(`无效数值: ${token}`);
         }
 
         const chineseNumber = normalizedDigits.replace(/[^零〇一二两三四五六七八九十百千万]/g, '');
@@ -566,7 +1946,7 @@ class MessageProcessor {
         if (Number.isFinite(parsedChinese) && parsedChinese > 0) {
             return parsedChinese;
         }
-        throw new Error(`无效金额: ${token}`);
+        throw new Error(`无效数值: ${token}`);
     }
 
     chineseToNumber(chinese) {
@@ -621,65 +2001,201 @@ class MessageProcessor {
         return total + section + number;
     }
 
-    extractNumbers(text) {
-        const numbers = [];
-        const numberSet = new Set();
+    extractNumbers(text, options = {}) {
+        const preserveDuplicates = !!options.preserveDuplicates;
+        return this.extractNumbersByPolicy(text, {
+            preserveDuplicates,
+            combinePolicy: this.getActiveRuleProfile().attributeCombinePolicy || 'intersection_then_union_fallback'
+        });
+    }
 
-        const numberStrings = text
-            .split(/[\s.,，。:：\-—/~～]+/)
-            .map(s => s.trim())
-            .filter(Boolean);
+    extractNumbersByPolicy(text, options = {}) {
+        const preserveDuplicates = !!options.preserveDuplicates;
+        const combinePolicyRaw = String(options.combinePolicy || this.getActiveRuleProfile().attributeCombinePolicy || 'intersection_then_union_fallback').trim();
+        const combinePolicy = this.getAllowedAttributeCombinePolicyValues().includes(combinePolicyRaw)
+            ? combinePolicyRaw
+            : 'intersection_then_union_fallback';
 
-        numberStrings.forEach(numStr => {
-            if (!/^\d+$/.test(numStr)) return;
-            const num = parseInt(numStr, 10);
-            if (!this.validateNumber(num)) {
-                throw new Error(`无效的数字: ${numStr}`);
-            }
-            if (!numberSet.has(num)) {
-                numberSet.add(num);
-                numbers.push(num);
+        const explicitNumbers = this.extractExplicitNumbers(text);
+        const tokenMatches = this.extractStructuredTokenMatches(text);
+
+        const components = [];
+        const explicitUnique = Array.from(new Set(explicitNumbers));
+        if (explicitUnique.length > 0) {
+            components.push(explicitUnique);
+        }
+        tokenMatches.forEach(item => {
+            if (Array.isArray(item.numbers) && item.numbers.length > 0) {
+                components.push(Array.from(new Set(item.numbers)));
             }
         });
 
-        const attrMap = this.getAttributeMap();
-        const attrKeys = Object.keys(attrMap).sort((a, b) => b.length - a.length);
-        const cleaned = text.replace(/[\s.,，。:：\-—/~～]/g, '');
-        let i = 0;
-
-        while (i < cleaned.length) {
-            const ch = cleaned[i];
-
-            if (this.animalMap[ch]) {
-                this.animalMap[ch].forEach(num => {
-                    if (!numberSet.has(num)) {
-                        numberSet.add(num);
-                        numbers.push(num);
-                    }
+        if (components.length === 0) return [];
+        if (components.length === 1) {
+            if (preserveDuplicates && explicitNumbers.length > 0) {
+                const withTokens = explicitNumbers.slice();
+                const mergedSet = new Set(withTokens);
+                components[0].forEach(num => {
+                    if (!mergedSet.has(num)) withTokens.push(num);
                 });
-                i += 1;
-                continue;
+                return withTokens;
             }
-
-            let matched = false;
-            for (const key of attrKeys) {
-                if (cleaned.startsWith(key, i)) {
-                    attrMap[key].forEach(num => {
-                        if (!numberSet.has(num)) {
-                            numberSet.add(num);
-                            numbers.push(num);
-                        }
-                    });
-                    i += key.length;
-                    matched = true;
-                    break;
-                }
-            }
-
-            if (!matched) i += 1;
+            return components[0].slice();
         }
 
+        const mergeUnion = () => {
+            const merged = [];
+            const mergedSet = new Set();
+            components.forEach(component => {
+                component.forEach(num => {
+                    if (mergedSet.has(num)) return;
+                    mergedSet.add(num);
+                    merged.push(num);
+                });
+            });
+            return merged;
+        };
+
+        const mergeIntersection = () => {
+            let merged = components[0].slice();
+            for (let i = 1; i < components.length; i += 1) {
+                const nextSet = new Set(components[i]);
+                merged = merged.filter(num => nextSet.has(num));
+            }
+            return merged;
+        };
+
+        if (combinePolicy === 'union') {
+            return mergeUnion();
+        }
+        if (combinePolicy === 'intersection') {
+            return mergeIntersection();
+        }
+        if (combinePolicy === 'confirm') {
+            const intersection = mergeIntersection();
+            const union = mergeUnion();
+            if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+                const chooseIntersection = window.confirm('该段同时命中多个属性词。点击“确定”按交集，点击“取消”按并集。');
+                return chooseIntersection ? intersection : union;
+            }
+            throw new Error('该网友“属性词叠加策略”为确认模式，请先确认本段按交集还是并集');
+        }
+
+        const intersection = mergeIntersection();
+        if (intersection.length > 0) {
+            return intersection;
+        }
+        return mergeUnion();
+    }
+
+    extractTargetGroups(text) {
+        const groups = [];
+        const tokenMatches = this.extractStructuredTokenMatches(text);
+        const tokenNumberSet = new Set();
+        tokenMatches.forEach(item => {
+            const numbers = Array.isArray(item.numbers)
+                ? Array.from(new Set(item.numbers.filter(num => this.validateNumber(num))))
+                : [];
+            if (numbers.length > 0) {
+                groups.push(numbers);
+                numbers.forEach(num => tokenNumberSet.add(num));
+            }
+        });
+
+        const explicitNumbers = this.extractExplicitNumbers(text);
+        explicitNumbers.forEach(num => {
+            if (!this.validateNumber(num)) return;
+            // 避免“1门/2尾”里的数字重复算成独立目标。
+            if (tokenNumberSet.has(num)) return;
+            groups.push([num]);
+        });
+
+        return groups;
+    }
+
+    extractAnimalTokens(text) {
+        const compact = String(text || '').replace(/[^鼠牛虎兔龙蛇马羊猴鸡狗猪]/g, '');
+        return compact ? compact.split('') : [];
+    }
+
+    extractExplicitNumbers(text) {
+        const normalized = String(text || '')
+            .replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 65248));
+        const runs = normalized.match(/\d+/g) || [];
+        const numbers = [];
+        runs.forEach(run => {
+            numbers.push(...this.decodeDigitRun(run));
+        });
         return numbers;
+    }
+
+    decodeDigitRun(run) {
+        const token = String(run || '').trim();
+        if (!token) return [];
+
+        if (token.length <= 2) {
+            const num = parseInt(token, 10);
+            if (!this.validateNumber(num)) {
+                throw new Error(`无效的数字: ${token}`);
+            }
+            return [num];
+        }
+
+        if (token.length % 2 !== 0) {
+            throw new Error(`号码输入不完整: ${token}`);
+        }
+
+        const numbers = [];
+        for (let i = 0; i < token.length; i += 2) {
+            const pair = token.slice(i, i + 2);
+            const num = parseInt(pair, 10);
+            if (!this.validateNumber(num)) {
+                throw new Error(`无效的数字: ${pair}`);
+            }
+            numbers.push(num);
+        }
+        return numbers;
+    }
+
+    extractStructuredTokenMatches(text) {
+        const attrMap = this.getAttributeMap();
+        const attrKeys = Object.keys(attrMap).sort((a, b) => b.length - a.length);
+        const compact = String(text || '')
+            .replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 65248))
+            .replace(/[^0-9A-Za-z\u4e00-\u9fa5]/g, '');
+        const matches = [];
+        let i = 0;
+
+        while (i < compact.length) {
+            let matched = false;
+            for (const key of attrKeys) {
+                if (!compact.startsWith(key, i)) continue;
+                const rawNumbers = Array.isArray(attrMap[key]) ? attrMap[key] : [];
+                const numbers = [];
+                const numberSet = new Set();
+                rawNumbers.forEach(num => {
+                    if (!this.validateNumber(num) || numberSet.has(num)) return;
+                    numberSet.add(num);
+                    numbers.push(num);
+                });
+                if (numbers.length > 0) {
+                    matches.push({ key, numbers });
+                }
+                i += key.length;
+                matched = true;
+                break;
+            }
+
+            if (matched) continue;
+
+            const ch = compact[i];
+            if (this.animalMap[ch]) {
+                matches.push({ key: ch, numbers: this.animalMap[ch].slice() });
+            }
+            i += 1;
+        }
+
+        return matches;
     }
 
     // 解析数字列表
@@ -703,9 +2219,10 @@ class MessageProcessor {
 
     // 解析金额
     parseAmount(amountPart) {
+        const anchorPattern = this.buildAnchorTokenPattern();
         const normalized = amountPart
             .trim()
-            .replace(/^各(?:号)?/u, '')
+            .replace(new RegExp(`^(?:${anchorPattern})`, 'u'), '')
             .trim();
         return this.parseFlexibleAmount(normalized);
     }
@@ -730,10 +2247,66 @@ class MessageProcessor {
         return number < 10 ? `0${number}` : `${number}`;
     }
 
+    formatAmount(amount) {
+        const value = Number(amount);
+        if (!Number.isFinite(value)) return String(amount);
+        if (Number.isInteger(value)) return `${value}`;
+        return value.toFixed(4).replace(/\.?0+$/, '');
+    }
+
+    getRegionPrefixByKey(regionKey, options = {}) {
+        const activeProfile = this.getActiveRuleProfile();
+        const regionPolicy = activeProfile && activeProfile.regionPolicy ? activeProfile.regionPolicy : {};
+        const canonicalAlwaysShow = typeof options.canonicalAlwaysShowRegion === 'boolean'
+            ? options.canonicalAlwaysShowRegion
+            : regionPolicy.canonicalAlwaysShowRegion !== false;
+        const normalizedRegion = this.normalizeRegionKey(regionKey, this.getDefaultRegionKey());
+        if (normalizedRegion === 'old_ao') return '老奥';
+        if (normalizedRegion === 'hongkong') return '香港';
+        return canonicalAlwaysShow ? '新奥' : '';
+    }
+
+    buildCanonicalEntryText(entry) {
+        const numbers = Array.isArray(entry && entry.numbers)
+            ? entry.numbers
+                .map(num => parseInt(num, 10))
+                .filter(num => this.validateNumber(num))
+            : [];
+        if (numbers.length === 0) return '';
+        const regionPrefix = this.getRegionPrefixByKey(entry.regionKey || 'new_ao');
+        const numberText = numbers.map(num => this.formatNumber(num)).join('.');
+        return `${regionPrefix}${numberText}各${this.formatAmount(entry.amount)}`;
+    }
+
+    buildCanonicalMessage(entries) {
+        if (!Array.isArray(entries) || entries.length === 0) return '';
+        return entries
+            .map(entry => this.buildCanonicalEntryText(entry))
+            .filter(Boolean)
+            .join('\n');
+    }
+
     // 处理消息并更新用户数据
-    processMessageForUser(message, userName) {
+    processMessageForUser(message, userName, options = {}) {
         try {
-            const parsedMessage = this.parseMessage(message);
+            const clientId = this.normalizeRuleClientId(options && options.clientId ? options.clientId : userName);
+            const parsedMessage = this.parseMessage(message, { clientId });
+            const providedOriginalMessage = options && Object.prototype.hasOwnProperty.call(options, 'originalMessage')
+                ? String(options.originalMessage == null ? '' : options.originalMessage)
+                : '';
+            const normalizedProvidedOriginalMessage = providedOriginalMessage
+                .replace(/\r\n/g, '\n')
+                .replace(/\r/g, '\n');
+            const fallbackOriginalMessage = String(message || '')
+                .replace(/\r\n/g, '\n')
+                .replace(/\r/g, '\n');
+            const originalMessageForStorage = normalizedProvidedOriginalMessage.trim()
+                ? normalizedProvidedOriginalMessage
+                : (parsedMessage && typeof parsedMessage.raw === 'string' && parsedMessage.raw.trim()
+                    ? parsedMessage.raw
+                    : (parsedMessage && typeof parsedMessage.original === 'string' && parsedMessage.original.trim()
+                        ? parsedMessage.original
+                        : fallbackOriginalMessage));
             const allUsers = userManager.getAllUsers ? userManager.getAllUsers() : {};
             if (!allUsers || !allUsers[userName]) {
                 throw new Error('用户不存在');
@@ -741,6 +2314,47 @@ class MessageProcessor {
 
             let totalAdded = 0;
             const touchedRegionKeys = new Set();
+            const defaultOdds = this.getEffectiveDefaultOdds(clientId);
+            const ensureRegionPayoutData = (regionData) => {
+                if (!regionData || !Array.isArray(regionData.data)) return null;
+                if (!Array.isArray(regionData.payoutData)) {
+                    const seededOdds = this.normalizeOddsValue(defaultOdds, this.SYSTEM_DEFAULT_ODDS);
+                    regionData.payoutData = regionData.data.map(item => ({
+                        number: item.number,
+                        text: item.text,
+                        value: (Number(item.value) || 0) * seededOdds
+                    }));
+                }
+                const payoutMap = new Map();
+                regionData.payoutData.forEach(item => {
+                    if (!item || typeof item.number !== 'string') return;
+                    const value = Number(item.value);
+                    payoutMap.set(item.number, {
+                        number: item.number,
+                        text: item.text,
+                        value: Number.isFinite(value) ? value : 0
+                    });
+                });
+                regionData.data.forEach(item => {
+                    if (!item || typeof item.number !== 'string') return;
+                    if (!payoutMap.has(item.number)) {
+                        payoutMap.set(item.number, {
+                            number: item.number,
+                            text: item.text,
+                            value: 0
+                        });
+                    }
+                });
+                regionData.payoutData = regionData.data.map(item => {
+                    const base = payoutMap.get(item.number);
+                    return {
+                        number: item.number,
+                        text: item.text,
+                        value: base ? base.value : 0
+                    };
+                });
+                return regionData.payoutData;
+            };
             parsedMessage.entries.forEach(entry => {
                 const regionKey = entry.regionKey || (userManager.getActiveRegion ? userManager.getActiveRegion() : 'new_ao');
                 const userData = userManager.getUserRegionData
@@ -750,12 +2364,20 @@ class MessageProcessor {
                     throw new Error(`地区数据不存在: ${regionKey}`);
                 }
                 touchedRegionKeys.add(regionKey);
+                const payoutData = ensureRegionPayoutData(userData);
+                const entryOdds = this.normalizeOddsValue(entry.odds, defaultOdds);
                 entry.numbers.forEach(number => {
                     const formattedNumber = this.formatNumber(number);
                     const dataItem = userData.data.find(item => item.number === formattedNumber);
+                    const payoutItem = Array.isArray(payoutData)
+                        ? payoutData.find(item => item.number === formattedNumber)
+                        : null;
                     if (dataItem) {
                         dataItem.value += entry.amount;
                         totalAdded += entry.amount;
+                    }
+                    if (payoutItem) {
+                        payoutItem.value += entry.amount * entryOdds;
                     }
                 });
             });
@@ -765,7 +2387,7 @@ class MessageProcessor {
                     ? userManager.getUserRegionData(userName, regionKey)
                     : userManager.getUserData(userName);
                 if (!userData) return;
-                userData.originalData.push(parsedMessage.original);
+                userData.originalData.push(originalMessageForStorage);
                 userData.totalCount = userData.data.reduce((sum, item) => sum + item.value, 0);
             });
 
@@ -789,42 +2411,72 @@ class MessageProcessor {
                 newTotal
             };
         } catch (error) {
-            return {
+            const response = {
                 success: false,
                 message: error.message
             };
+            if (error && error.code) {
+                response.code = error.code;
+            }
+            if (error && error.ambiguity) {
+                response.ambiguity = error.ambiguity;
+            }
+            return response;
         }
     }
 
     // 预览消息解析结果
-    previewMessage(message) {
+    previewMessage(message, options = {}) {
         try {
-            const parsedMessage = this.parseMessage(message);
-            const resultEntries = parsedMessage.entries.map(entry => ({
-                numbers: entry.numbers.map(num => ({
-                    number: this.formatNumber(num),
-                    animal: this.getAnimalByNumber(num),
-                })),
-                regionKey: entry.regionKey || 'new_ao',
-                regionLabel: this.getRegionLabelByKey(entry.regionKey || 'new_ao'),
-                amount: entry.amount,
-                totalAmount: entry.numbers.length * entry.amount,
-            }));
-            const totalAmount = resultEntries.reduce((sum, entry) => sum + entry.totalAmount, 0);
+            const clientId = this.normalizeRuleClientId(options && options.clientId ? options.clientId : '');
+            return this.withRuleContext(clientId, () => {
+                const parsedMessage = this.parseMessage(message, { clientId });
+                const resultEntries = parsedMessage.entries.map(entry => ({
+                    numbers: entry.numbers.map(num => ({
+                        number: this.formatNumber(num),
+                        animal: this.getAnimalByNumber(num),
+                    })),
+                    regionKey: entry.regionKey || this.getDefaultRegionKey(),
+                    regionLabel: this.getRegionLabelByKey(entry.regionKey || this.getDefaultRegionKey()),
+                    amount: entry.amount,
+                    odds: this.normalizeOddsValue(entry.odds, this.getEffectiveDefaultOdds(clientId)),
+                    lineNo: entry.lineNo || null,
+                    segmentNo: entry.segmentNo || null,
+                    anchorToken: String(entry.anchorToken || '').trim(),
+                    anchorMode: String(entry.anchorMode || 'per_number').trim(),
+                    canonical: this.buildCanonicalEntryText(entry),
+                    totalAmount: entry.numbers.length * entry.amount,
+                    totalPayout: entry.numbers.length * entry.amount * this.normalizeOddsValue(entry.odds, this.getEffectiveDefaultOdds(clientId)),
+                }));
+                const totalAmount = resultEntries.reduce((sum, entry) => sum + entry.totalAmount, 0);
+                const totalPayout = resultEntries.reduce((sum, entry) => {
+                    const value = Number(entry && entry.totalPayout);
+                    return Number.isFinite(value) ? sum + value : sum;
+                }, 0);
 
-            return {
-                success: true,
-                result: {
-                    entries: resultEntries,
-                    totalAmount,
-                    original: parsedMessage.original,
-                }
-            };
+                return {
+                    success: true,
+                    result: {
+                        entries: resultEntries,
+                        totalAmount,
+                        totalPayout,
+                        original: parsedMessage.original,
+                        canonicalMessage: parsedMessage.original,
+                    }
+                };
+            });
         } catch (error) {
-            return {
+            const response = {
                 success: false,
                 error: error.message
             };
+            if (error && error.code) {
+                response.code = error.code;
+            }
+            if (error && error.ambiguity) {
+                response.ambiguity = error.ambiguity;
+            }
+            return response;
         }
     }
 
@@ -838,22 +2490,31 @@ class MessageProcessor {
         let html = '<div style="margin: 10px 0;">';
         html += '<h4>解析结果:</h4>';
         html += '<div style="background: #f8f9fa; padding: 10px; border-radius: 5px;">';
+        if (result.canonicalMessage) {
+            html += `<div style="margin-bottom:8px;padding:6px 8px;background:#eef6ff;border:1px solid #c7ddff;border-radius:4px;">标准格式：${result.canonicalMessage.replace(/\n/g, ' / ')}</div>`;
+        }
 
         result.entries.forEach((entry, index) => {
+            const amountText = this.formatAmount(entry.amount);
+            const segmentNo = entry.segmentNo || (index + 1);
+            const lineLabel = entry.lineNo ? `，第 ${entry.lineNo} 行` : '';
             html += `<div style="margin: 8px 0; padding: 6px; border: 1px solid #ddd; border-radius: 4px;">`;
-            html += `<div style="font-size: 12px; color: #666;">第 ${index + 1} 段，地区 ${entry.regionLabel}，各 ${entry.amount}</div>`;
+            html += `<div style="font-size: 12px; color: #666;">第 ${segmentNo} 段${lineLabel}，地区 ${entry.regionLabel}，每码 ${amountText}</div>`;
+            if (entry.canonical) {
+                html += `<div style="font-size: 12px; color: #0f4c81; margin-top: 2px;">标准段: ${entry.canonical}</div>`;
+            }
             entry.numbers.forEach(item => {
                 html += `<div style="margin: 4px 0;">`;
                 html += `<span style="font-weight: bold;">${item.number}</span> `;
                 html += `<span style="color: #666;">${item.animal}</span> `;
-                html += `<span style="color: #28a745;">+${entry.amount}</span>`;
+                html += `<span style="color: #28a745;">+${amountText}</span>`;
                 html += '</div>';
             });
             html += '</div>';
         });
         
         html += '<hr style="margin: 10px 0;">';
-        html += `<div style="font-weight: bold; color: #007bff;">总金额: ${result.totalAmount}</div>`;
+        html += `<div style="font-weight: bold; color: #007bff;">总数: ${this.formatAmount(result.totalAmount)}</div>`;
         html += '</div>';
         html += '</div>';
 

@@ -87,6 +87,14 @@ class UserModel {
       }
     }
 
+    if (Array.isArray(regionData.payoutData)) {
+      for (const item of regionData.payoutData) {
+        if (!this.validateDataItem(item)) {
+          return false;
+        }
+      }
+    }
+
     for (const originalData of regionData.originalData) {
       if (typeof originalData !== 'string') {
         return false;
@@ -298,9 +306,120 @@ class UserModel {
   }
 
   sanitizeAttributeConfig(config) {
+    const normalizeAnchorToken = (rawToken) => String(rawToken || '').replace(/\s+/g, '').replace(/[：:]+$/g, '').trim();
+    const normalizeAmountDistribute = (rawValue) => {
+      const value = String(rawValue || '').trim();
+      if (['per_number', 'per_target_equal_split', 'per_entry_equal_split', 'undetermined'].includes(value)) return value;
+      if (value === 'combo_number') return 'per_number';
+      if (value === 'per_animal') return 'per_target_equal_split';
+      return '';
+    };
+    const normalizeLegacyAliasMode = (rawMode) => {
+      const mode = String(rawMode || '').trim();
+      if (mode === 'ignore') return 'ignore';
+      if (mode === 'per_number') return 'per_number';
+      if (mode === 'combo_number') return 'per_number';
+      if (mode === 'per_animal') return 'per_target_equal_split';
+      const normalized = normalizeAmountDistribute(mode);
+      return normalized || '';
+    };
+    const normalizeOdds = (rawOdds) => {
+      const parsed = Number(rawOdds);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+      return NaN;
+    };
+    const sanitizeAnchorSemantics = (rawSemantics) => {
+      const safeAnchors = {};
+      if (!rawSemantics || typeof rawSemantics !== 'object') return safeAnchors;
+      Object.entries(rawSemantics).forEach(([rawToken, rawRule]) => {
+        const token = normalizeAnchorToken(rawToken);
+        if (!token || token.length > 12) return;
+        if (!/[\u4e00-\u9fa5A-Za-z]/.test(token)) return;
+        if (!rawRule || typeof rawRule !== 'object') return;
+        const amountDistribute = normalizeAmountDistribute(rawRule.amountDistribute);
+        if (!amountDistribute) return;
+        const rule = {
+          amountDistribute,
+          enabled: rawRule.enabled !== false
+        };
+        const odds = normalizeOdds(rawRule.odds);
+        if (Number.isFinite(odds)) {
+          rule.odds = odds;
+        }
+        if (typeof rawRule.notes === 'string' && rawRule.notes.trim()) {
+          rule.notes = rawRule.notes.trim().slice(0, 80);
+        }
+        safeAnchors[token] = rule;
+      });
+      return safeAnchors;
+    };
+    const sanitizeRuleProfile = (rawProfile) => {
+      const profile = rawProfile && typeof rawProfile === 'object' ? rawProfile : {};
+      const safeProfile = {};
+
+      const defaultOdds = normalizeOdds(profile.defaultOdds);
+      if (Number.isFinite(defaultOdds)) {
+        safeProfile.defaultOdds = defaultOdds;
+      }
+
+      const anchors = sanitizeAnchorSemantics(profile.anchorSemantics);
+      if (Object.keys(anchors).length > 0) {
+        safeProfile.anchorSemantics = anchors;
+      }
+
+      const combinePolicy = String(profile.attributeCombinePolicy || '').trim();
+      if (['intersection', 'union', 'intersection_then_union_fallback', 'confirm'].includes(combinePolicy)) {
+        safeProfile.attributeCombinePolicy = combinePolicy;
+      }
+
+      const ambiguityPolicy = String(profile.ambiguityPolicy || '').trim();
+      if (['confirm', 'auto', 'error'].includes(ambiguityPolicy)) {
+        safeProfile.ambiguityPolicy = ambiguityPolicy;
+      }
+
+      const anchorParseMode = String(profile.anchorParseMode || '').trim();
+      if (['strict', 'loose'].includes(anchorParseMode)) {
+        safeProfile.anchorParseMode = anchorParseMode;
+      }
+
+      if (profile.symbolPolicy && typeof profile.symbolPolicy === 'object') {
+        const symbolPolicy = {};
+        Object.entries(profile.symbolPolicy).forEach(([rawSymbol, rawPolicy]) => {
+          const symbol = String(rawSymbol || '').trim();
+          const policy = String(rawPolicy || '').trim();
+          if (!symbol || symbol.length > 3) return;
+          if (!['noise', 'unit', 'marker', 'error'].includes(policy)) return;
+          symbolPolicy[symbol] = policy;
+        });
+        if (Object.keys(symbolPolicy).length > 0) {
+          safeProfile.symbolPolicy = symbolPolicy;
+        }
+      }
+
+      if (profile.regionPolicy && typeof profile.regionPolicy === 'object') {
+        const regionPolicy = {};
+        const defaultRegion = String(profile.regionPolicy.defaultRegion || '').trim();
+        if (['new_ao', 'old_ao', 'hongkong'].includes(defaultRegion)) {
+          regionPolicy.defaultRegion = defaultRegion;
+        }
+        if (typeof profile.regionPolicy.canonicalAlwaysShowRegion === 'boolean') {
+          regionPolicy.canonicalAlwaysShowRegion = profile.regionPolicy.canonicalAlwaysShowRegion;
+        }
+        if (Object.keys(regionPolicy).length > 0) {
+          safeProfile.regionPolicy = regionPolicy;
+        }
+      }
+
+      return safeProfile;
+    };
+    const isRuleProfileEmpty = (profile) => !profile || Object.keys(profile).length === 0;
+
     const safe = {
       overrides: {},
-      hidden: []
+      hidden: [],
+      anchorAliases: {},
+      globalRules: {},
+      clientRules: {}
     };
     if (!config || typeof config !== 'object') return safe;
 
@@ -317,20 +436,87 @@ class UserModel {
     if (Array.isArray(config.hidden)) {
       safe.hidden = Array.from(new Set(config.hidden.filter(v => typeof v === 'string' && v.trim())));
     }
+
+    const anchorAliasesFromInput = {};
+    if (config.anchorAliases && typeof config.anchorAliases === 'object') {
+      Object.entries(config.anchorAliases).forEach(([rawToken, rawMode]) => {
+        const token = normalizeAnchorToken(rawToken);
+        const mode = String(rawMode || '').trim();
+        if (!token) return;
+        if (token.length > 12) return;
+        if (!/[\u4e00-\u9fa5A-Za-z]/.test(token)) return;
+        if (!['per_number', 'combo_number', 'per_animal', 'ignore'].includes(mode)) return;
+        anchorAliasesFromInput[token] = mode;
+      });
+    }
+
+    safe.anchorAliases = anchorAliasesFromInput;
+
+    if (config.globalRules && typeof config.globalRules === 'object') {
+      safe.globalRules = sanitizeRuleProfile(config.globalRules);
+    }
+
+    if (config.clientRules && typeof config.clientRules === 'object') {
+      Object.entries(config.clientRules).forEach(([rawClientId, rawProfile]) => {
+        const clientId = String(rawClientId || '').trim();
+        if (!clientId) return;
+        const sanitizedProfile = sanitizeRuleProfile(rawProfile);
+        if (isRuleProfileEmpty(sanitizedProfile)) return;
+        safe.clientRules[clientId] = sanitizedProfile;
+      });
+    }
+
+    if (Object.keys(safe.globalRules).length === 0 && Object.keys(anchorAliasesFromInput).length > 0) {
+      const anchorSemantics = {};
+      Object.entries(anchorAliasesFromInput).forEach(([token, mode]) => {
+        const mapped = normalizeLegacyAliasMode(mode);
+        if (!mapped) return;
+        if (mapped === 'ignore') {
+          anchorSemantics[token] = { amountDistribute: 'per_number', enabled: false };
+          return;
+        }
+        anchorSemantics[token] = { amountDistribute: mapped, enabled: true };
+      });
+      if (Object.keys(anchorSemantics).length > 0) {
+        safe.globalRules = { anchorSemantics };
+      }
+    }
+
+    if (Object.keys(safe.anchorAliases).length === 0 && safe.globalRules.anchorSemantics && typeof safe.globalRules.anchorSemantics === 'object') {
+      Object.entries(safe.globalRules.anchorSemantics).forEach(([token, rule]) => {
+        if (!rule || typeof rule !== 'object') return;
+        if (rule.enabled === false) {
+          safe.anchorAliases[token] = 'ignore';
+          return;
+        }
+        const distribute = normalizeAmountDistribute(rule.amountDistribute);
+        if (!distribute) return;
+        if (distribute === 'per_target_equal_split') {
+          safe.anchorAliases[token] = 'per_animal';
+          return;
+        }
+        if (distribute === 'per_entry_equal_split') {
+          safe.anchorAliases[token] = 'combo_number';
+          return;
+        }
+        safe.anchorAliases[token] = 'per_number';
+      });
+    }
+
     return safe;
   }
 
   loadAttributeConfig() {
     try {
       if (!fs.existsSync(this.attributeConfigPath)) {
-        return { overrides: {}, hidden: [] };
+        return { overrides: {}, hidden: [], anchorAliases: {}, globalRules: {}, clientRules: {} };
       }
       const raw = fs.readFileSync(this.attributeConfigPath, 'utf-8');
       const parsed = JSON.parse(raw);
       return this.sanitizeAttributeConfig(parsed);
     } catch (error) {
       console.error('加载属性配置失败:', error);
-      return { overrides: {}, hidden: [] };
+      return { overrides: {}, hidden: [], anchorAliases: {}, globalRules: {}, clientRules: {} };
     }
   }
 

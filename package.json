@@ -25,9 +25,17 @@
     "dist:mac": "electron-builder --mac dmg",
     "postinstall": "electron-builder install-app-deps",
     "license:list-usb": "node scripts/license-tools.js list-usb",
+    "license:machine-fingerprint": "node scripts/license-tools.js machine-fingerprint",
     "license:issue": "node scripts/license-tools.js issue-license",
+    "license:issue-offline": "node scripts/license-tools.js issue-offline",
     "license:issue-to-usb": "node scripts/license-tools.js issue-to-usb",
-    "license:wizard": "node scripts/license-tools.js issue-wizard"
+    "license:wizard": "node scripts/license-tools.js issue-wizard",
+    "license:studio": "electron scripts/license-studio/main.js",
+    "license:studio:dist": "electron-builder --config scripts/license-studio/builder.config.json",
+    "license:studio:dist:dir": "electron-builder --config scripts/license-studio/builder.config.json --dir",
+    "license:studio:dist:mac": "electron-builder --config scripts/license-studio/builder.config.json --mac zip",
+    "license:studio:dist:mac:dmg": "electron-builder --config scripts/license-studio/builder.config.json --mac dmg",
+    "license:studio:dist:win": "electron-builder --config scripts/license-studio/builder.config.json --win nsis"
   },
   "build": {
     "appId": "com.messagecounter.app",
@@ -50,7 +58,6 @@
       ],
       "icon": "public/icon.icns",
       "identity": null
-
     },
     "win": {
       "target": [
@@ -74,7 +81,7 @@
         "from": "keys/",
         "to": "keys",
         "filter": [
-          "*.pem"
+          "license-public.pem"
         ]
       },
       {

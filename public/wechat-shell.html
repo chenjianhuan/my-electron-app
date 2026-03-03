@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MessageCounter - 微信聊天记录统计</title>
+  <link rel="stylesheet" href="./wechat-shell.css">
+</head>
+<body>
+  <header class="wechat-topbar">
+    <div class="wechat-topbar-main">
+      <p class="wechat-kicker">微信聊天记录统计</p>
+      <h1>记录 · 统计 · 导出</h1>
+      <p class="wechat-subtitle">手动粘贴或导入文件，确认后加密入库并支持 CSV 导出</p>
+    </div>
+    <div class="wechat-topbar-actions">
+      <span class="security-badge">已加密存储</span>
+      <button id="createSessionBtn" class="solid-button" type="button">新建会话</button>
+      <button id="openAddMessageBtn" class="solid-button" type="button">新增消息</button>
+      <button id="openPasteBtn" class="solid-button" type="button">粘贴记录</button>
+      <button id="openImportBtn" class="solid-button" type="button">导入文件</button>
+      <button id="openChatSettingsBtn" class="ghost-button" type="button">聊天样式</button>
+      <button id="exportCsvBtn" class="ghost-button" type="button">导出 CSV</button>
+      <button id="openSecurityBtn" class="ghost-button" type="button">安全设置</button>
+      <button id="backToAuthBtn" class="ghost-button" type="button">退出到密码页</button>
+    </div>
+  </header>
+
+  <section class="status-bar">
+    <span id="statusMessage">正在加载微信模块数据...</span>
+  </section>
+
+  <main class="wechat-main">
+    <aside class="panel panel-sessions">
+      <div class="panel-head">
+        <h2>会话列表</h2>
+      </div>
+      <div class="panel-body panel-body-sessions">
+        <label class="input-label" for="sessionSearchInput">搜索会话</label>
+        <input id="sessionSearchInput" class="text-input" type="text" placeholder="输入会话名筛选">
+        <ul id="sessionList" class="session-list"></ul>
+        <div id="sessionEmpty" class="empty-state" hidden>暂无会话，请先点击“新建会话”。</div>
+      </div>
+    </aside>
+
+    <section class="panel panel-center">
+      <div class="panel-head panel-head-tabs">
+        <div class="tabs" role="tablist" aria-label="微信模块主视图">
+          <button id="tabRecords" type="button" class="tab active" data-tab="records" role="tab" aria-selected="true">原始记录</button>
+          <button id="tabPreview" type="button" class="tab" data-tab="preview" role="tab" aria-selected="false">结构化预览</button>
+          <button id="tabStats" type="button" class="tab" data-tab="stats" role="tab" aria-selected="false">统计结果</button>
+        </div>
+      </div>
+
+      <div class="panel-body panel-body-center">
+        <section id="viewRecords" class="tab-view active" data-view="records">
+          <div class="filter-bar">
+            <div class="filter-fields">
+              <label class="input-label" for="filterStartAt">开始时间</label>
+              <input id="filterStartAt" class="text-input" type="datetime-local">
+            </div>
+            <div class="filter-fields">
+              <label class="input-label" for="filterEndAt">结束时间</label>
+              <input id="filterEndAt" class="text-input" type="datetime-local">
+            </div>
+            <div class="filter-actions">
+              <button id="quickLast7Btn" class="ghost-button filter-button" type="button">近7天</button>
+              <button id="quickLast30Btn" class="ghost-button filter-button" type="button">近30天</button>
+              <button id="applyFilterBtn" class="solid-button filter-button" type="button">应用筛选</button>
+              <button id="clearFilterBtn" class="ghost-button filter-button" type="button">清空</button>
+            </div>
+          </div>
+          <div class="record-toolbar">
+            <span id="recordCountLabel">共 0 条消息</span>
+            <div class="record-toolbar-actions">
+              <div class="view-switch">
+                <button id="recordModeChatBtn" class="view-switch-btn active" type="button">聊天视图</button>
+                <button id="recordModeTableBtn" class="view-switch-btn" type="button">表格视图</button>
+              </div>
+              <span id="clipboardStatusBadge" class="clipboard-badge">监听复制：关闭</span>
+            </div>
+          </div>
+          <div id="recordsChatWrap" class="chat-wrap">
+            <div id="chatTimeline" class="chat-timeline"></div>
+          </div>
+          <div id="recordsTableWrap" class="table-wrap" hidden>
+            <table class="data-table" aria-label="消息列表">
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>发送者</th>
+                  <th>内容</th>
+                  <th>来源</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="recordsTableBody"></tbody>
+            </table>
+          </div>
+          <div id="recordsEmpty" class="empty-state" hidden>当前会话暂无消息，可通过“粘贴记录”或“导入文件”添加。</div>
+        </section>
+
+        <section id="viewPreview" class="tab-view" data-view="preview" hidden>
+          <div class="preview-head">
+            <div>
+              <h3>待入库预览</h3>
+              <p id="previewSummary">暂无预览数据</p>
+            </div>
+            <button id="commitPreviewBtn" type="button" class="solid-button" disabled>确认入库</button>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table" aria-label="预览消息列表">
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>发送者</th>
+                  <th>内容</th>
+                  <th>来源</th>
+                </tr>
+              </thead>
+              <tbody id="previewTableBody"></tbody>
+            </table>
+          </div>
+          <ul id="previewErrors" class="error-list"></ul>
+        </section>
+
+        <section id="viewStats" class="tab-view" data-view="stats" hidden>
+          <div class="stats-cards">
+            <article><span>消息总数</span><strong id="statsTotalMessages">0</strong></article>
+            <article><span>联系人数</span><strong id="statsTotalSenders">0</strong></article>
+            <article><span>活跃天数</span><strong id="statsActiveDays">0</strong></article>
+            <article><span>日均消息</span><strong id="statsAverageDaily">0</strong></article>
+          </div>
+          <div class="chart-grid">
+            <section>
+              <h3>日期趋势图（Top 14）</h3>
+              <div id="trendChart" class="bar-chart"></div>
+            </section>
+            <section>
+              <h3>联系人分布图（Top 10）</h3>
+              <div id="senderChart" class="bar-chart"></div>
+            </section>
+          </div>
+          <div class="stats-grid">
+            <section>
+              <h3>日期趋势（Top 14）</h3>
+              <ul id="trendList" class="stats-list"></ul>
+            </section>
+            <section>
+              <h3>联系人 Top 10</h3>
+              <ul id="senderTopList" class="stats-list"></ul>
+            </section>
+            <section>
+              <h3>关键词 Top 20</h3>
+              <ul id="keywordTopList" class="stats-list"></ul>
+            </section>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <aside class="panel panel-summary">
+      <div class="panel-head">
+        <h2>实时摘要</h2>
+      </div>
+      <div class="panel-body metrics">
+        <div><span>当前会话</span><strong id="summarySessionName">-</strong></div>
+        <div><span>会话消息数</span><strong id="summarySessionCount">0</strong></div>
+        <div><span>统计消息数</span><strong id="summaryTotalMessages">0</strong></div>
+        <div><span>联系人数</span><strong id="summaryTotalSenders">0</strong></div>
+        <div><span>活跃天数</span><strong id="summaryActiveDays">0</strong></div>
+        <div><span>待入库消息</span><strong id="summaryPendingCount">0</strong></div>
+      </div>
+    </aside>
+  </main>
+
+  <div id="sessionModal" class="modal" hidden>
+    <div class="modal-content">
+      <div class="modal-head">
+        <h3>新建会话</h3>
+        <button class="modal-close" data-close-modal="sessionModal" type="button">×</button>
+      </div>
+      <div class="modal-body">
+        <label class="input-label" for="sessionNameInput">会话名称</label>
+        <input id="sessionNameInput" class="text-input" type="text" placeholder="例如：2026-02 售后群">
+      </div>
+      <div class="modal-actions">
+        <button id="saveSessionBtn" class="solid-button" type="button">创建</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="pasteModal" class="modal" hidden>
+    <div class="modal-content modal-wide">
+      <div class="modal-head">
+        <h3>粘贴聊天记录</h3>
+        <button class="modal-close" data-close-modal="pasteModal" type="button">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="field-grid">
+          <div>
+            <label class="input-label" for="pasteSessionSelect">目标会话</label>
+            <select id="pasteSessionSelect" class="select-input"></select>
+          </div>
+          <div>
+            <label class="input-label" for="pasteSourceInput">来源标签</label>
+            <input id="pasteSourceInput" class="text-input" type="text" value="paste" placeholder="例如：manual">
+          </div>
+        </div>
+        <label class="input-label" for="pasteTextarea">聊天文本</label>
+        <textarea id="pasteTextarea" class="text-area" rows="10" placeholder="示例：\n2026-02-25 10:01 张三: 今天发货\n李四: 收到"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button id="parsePasteBtn" class="ghost-button" type="button">解析预览</button>
+        <button id="confirmPasteBtn" class="solid-button" type="button">确认入库</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="addMessageModal" class="modal" hidden>
+    <div class="modal-content">
+      <div class="modal-head">
+        <h3>新增消息</h3>
+        <button class="modal-close" data-close-modal="addMessageModal" type="button">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="field-grid">
+          <div>
+            <label class="input-label" for="addMessageSessionSelect">目标会话</label>
+            <select id="addMessageSessionSelect" class="select-input"></select>
+          </div>
+          <div>
+            <label class="input-label" for="addMessageTimestamp">时间</label>
+            <input id="addMessageTimestamp" class="text-input" type="datetime-local">
+          </div>
+          <div>
+            <label class="input-label" for="addMessageSender">发送者</label>
+            <input id="addMessageSender" class="text-input" type="text" placeholder="例如：张三">
+          </div>
+          <div>
+            <label class="input-label" for="addMessageSource">来源标签</label>
+            <input id="addMessageSource" class="text-input" type="text" value="manual_add" placeholder="例如：manual_add">
+          </div>
+        </div>
+        <label class="input-label" for="addMessageContent">消息内容</label>
+        <textarea id="addMessageContent" class="text-area" rows="7" placeholder="输入一条消息内容"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button id="saveAddMessageBtn" class="solid-button" type="button">保存消息</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="importModal" class="modal" hidden>
+    <div class="modal-content modal-wide">
+      <div class="modal-head">
+        <h3>导入文件（txt/csv/json）</h3>
+        <button class="modal-close" data-close-modal="importModal" type="button">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="field-grid">
+          <div>
+            <label class="input-label" for="importSessionSelect">目标会话</label>
+            <select id="importSessionSelect" class="select-input"></select>
+          </div>
+          <div>
+            <label class="input-label" for="importFileInput">选择文件</label>
+            <input id="importFileInput" class="file-input" type="file" accept=".txt,.csv,.json,text/plain,text/csv,application/json">
+          </div>
+        </div>
+
+        <div id="importMappingBox" class="mapping-box" hidden>
+          <h4>字段映射</h4>
+          <div class="field-grid">
+            <div>
+              <label class="input-label" for="importMapTime">时间字段</label>
+              <select id="importMapTime" class="select-input"></select>
+            </div>
+            <div>
+              <label class="input-label" for="importMapSender">发送者字段</label>
+              <select id="importMapSender" class="select-input"></select>
+            </div>
+            <div>
+              <label class="input-label" for="importMapContent">内容字段</label>
+              <select id="importMapContent" class="select-input"></select>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="previewImportBtn" class="ghost-button" type="button">生成预览</button>
+        <button id="confirmImportBtn" class="solid-button" type="button">确认导入</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="editMessageModal" class="modal" hidden>
+    <div class="modal-content modal-wide">
+      <div class="modal-head">
+        <h3>编辑消息</h3>
+        <button class="modal-close" data-close-modal="editMessageModal" type="button">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="field-grid">
+          <div>
+            <label class="input-label" for="editMessageSender">发送者</label>
+            <input id="editMessageSender" class="text-input" type="text" placeholder="发送者名称">
+          </div>
+          <div>
+            <label class="input-label" for="editMessageTimestamp">时间</label>
+            <input id="editMessageTimestamp" class="text-input" type="datetime-local">
+          </div>
+        </div>
+        <label class="input-label" for="editMessageContent">内容</label>
+        <textarea id="editMessageContent" class="text-area" rows="8" placeholder="消息内容"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button id="saveEditMessageBtn" class="solid-button" type="button">保存修改</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="exportModal" class="modal" hidden>
+    <div class="modal-content">
+      <div class="modal-head">
+        <h3>导出 CSV</h3>
+        <button class="modal-close" data-close-modal="exportModal" type="button">×</button>
+      </div>
+      <div class="modal-body">
+        <label class="input-label" for="exportRangeSelect">导出范围</label>
+        <select id="exportRangeSelect" class="select-input">
+          <option value="current_session">当前会话（不带筛选）</option>
+          <option value="current_filter">当前筛选结果</option>
+          <option value="all_data">全部会话数据</option>
+        </select>
+
+        <label class="input-label" for="exportFileNameInput">文件名（可选）</label>
+        <input id="exportFileNameInput" class="text-input" type="text" placeholder="例如：客服周报_2026W08">
+
+        <fieldset class="checkbox-group">
+          <legend>导出字段</legend>
+          <label><input id="fieldTimestamp" type="checkbox" checked> 时间</label>
+          <label><input id="fieldSender" type="checkbox" checked> 发送者</label>
+          <label><input id="fieldContent" type="checkbox" checked> 内容</label>
+          <label><input id="fieldSessionName" type="checkbox" checked> 会话</label>
+          <label><input id="fieldSource" type="checkbox" checked> 来源</label>
+          <label><input id="fieldKeywordTags" type="checkbox"> 关键词标签</label>
+        </fieldset>
+      </div>
+      <div class="modal-actions">
+        <button id="confirmExportBtn" class="solid-button" type="button">开始导出</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="securityModal" class="modal" hidden>
+    <div class="modal-content">
+      <div class="modal-head">
+        <h3>安全设置</h3>
+        <button class="modal-close" data-close-modal="securityModal" type="button">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="security-grid">
+          <div><span>加密算法</span><strong id="securityAlgorithm">-</strong></div>
+          <div><span>数据文件大小</span><strong id="securityFileSize">-</strong></div>
+          <div><span>会话数量</span><strong id="securitySessionCount">0</strong></div>
+          <div><span>消息数量</span><strong id="securityMessageCount">0</strong></div>
+          <div><span>最近更新</span><strong id="securityUpdatedAt">-</strong></div>
+        </div>
+        <div class="danger-zone">
+          <p>清空后不可恢复。请输入 <code>DELETE</code> 以确认清空微信模块数据。</p>
+          <input id="clearConfirmInput" class="text-input" type="text" placeholder="输入 DELETE">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="clearAllDataBtn" class="danger-button" type="button">清空微信数据</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="chatSettingsModal" class="modal" hidden>
+    <div class="modal-content modal-wide">
+      <div class="modal-head">
+        <h3>聊天样式与监听设置</h3>
+        <button class="modal-close" data-close-modal="chatSettingsModal" type="button">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="field-grid">
+          <div class="chat-side-card">
+            <h4>左侧（对方）</h4>
+            <div class="avatar-preview-wrap">
+              <img id="chatLeftAvatarPreview" class="avatar-preview" alt="左侧头像预览">
+              <span id="chatLeftAvatarFallback" class="avatar-fallback">对</span>
+            </div>
+            <label class="input-label" for="chatLeftNameInput">昵称</label>
+            <input id="chatLeftNameInput" class="text-input" type="text" placeholder="例如：客户">
+            <label class="input-label" for="chatLeftAvatarInput">头像图片</label>
+            <input id="chatLeftAvatarInput" class="file-input" type="file" accept="image/*">
+            <button id="clearChatLeftAvatarBtn" class="ghost-button" type="button">清除头像</button>
+          </div>
+          <div class="chat-side-card">
+            <h4>右侧（我）</h4>
+            <div class="avatar-preview-wrap">
+              <img id="chatRightAvatarPreview" class="avatar-preview" alt="右侧头像预览">
+              <span id="chatRightAvatarFallback" class="avatar-fallback">我</span>
+            </div>
+            <label class="input-label" for="chatRightNameInput">昵称</label>
+            <input id="chatRightNameInput" class="text-input" type="text" placeholder="例如：我">
+            <label class="input-label" for="chatRightAvatarInput">头像图片</label>
+            <input id="chatRightAvatarInput" class="file-input" type="file" accept="image/*">
+            <button id="clearChatRightAvatarBtn" class="ghost-button" type="button">清除头像</button>
+          </div>
+        </div>
+
+        <div class="setting-list">
+          <label class="setting-item">
+            <input id="clipboardEnabledToggle" type="checkbox" checked>
+            <span>自动监听复制（打开页面后自动监听剪贴板）</span>
+          </label>
+          <label class="setting-item">
+            <input id="clipboardAutoCommitToggle" type="checkbox">
+            <span>复制识别后自动入库（不再停留预览）</span>
+          </label>
+        </div>
+
+        <label class="input-label" for="chatDefaultViewSelect">默认记录视图</label>
+        <select id="chatDefaultViewSelect" class="select-input">
+          <option value="chat">聊天视图</option>
+          <option value="table">表格视图</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button id="saveChatSettingsBtn" class="solid-button" type="button">保存设置</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="./wechat-shell.js"></script>
+</body>
+</html>

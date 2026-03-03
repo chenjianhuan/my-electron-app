@@ -3,11 +3,15 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { normalizeTier, normalizeBillingCycle, getPlanDefinition } = require('./PlanCatalog');
 
 const LICENSE_FILE_NAME = 'license.dat';
+const LOCAL_LICENSE_FILE_NAME = '.messagecounter-license.dat';
 const DEFAULT_GRACE_DAYS = 3;
 const ROLLBACK_TOLERANCE_MS = 5 * 60 * 1000;
 const POLL_INTERVAL_MS = 3000;
+const LICENSE_SOURCE_USB = 'usb';
+const LICENSE_SOURCE_OFFLINE = 'offline';
 
 class LicenseGuard {
   constructor(options) {
@@ -15,6 +19,7 @@ class LicenseGuard {
     this.onRevoked = options.onRevoked;
     this.onStatusChange = options.onStatusChange;
     this.publicKey = this.loadPublicKey(options.publicKeyPath);
+    this.machineFingerprint = this.buildMachineFingerprint();
     this.timer = null;
     this.lastStatus = null;
     this.lastTrustedTimePath = path.join(this.app.getPath('userData'), 'license-clock.json');
@@ -86,22 +91,18 @@ class LicenseGuard {
   }
 
   checkAuthorization() {
-    const drives = this.listRemovableDrives();
-    if (!drives.length) {
-      return this.unauthorizedStatus('未检测到授权U盘');
-    }
-
-    let bestReason = '未找到授权文件';
-    for (const drive of drives) {
-      const licensePath = path.join(drive.mountPath, LICENSE_FILE_NAME);
-      if (!fs.existsSync(licensePath)) {
-        continue;
-      }
+    const candidates = this.buildLicenseCandidates();
+    let bestReason = '未检测到授权文件（U盘或离线）';
+    let foundLicenseFile = false;
+    for (const candidate of candidates) {
+      if (!candidate || !candidate.licensePath) continue;
+      if (!fs.existsSync(candidate.licensePath)) continue;
+      foundLicenseFile = true;
 
       try {
-        const fileContent = fs.readFileSync(licensePath, 'utf8');
+        const fileContent = fs.readFileSync(candidate.licensePath, 'utf8');
         const verified = this.verifyLicenseFile(fileContent);
-        const status = this.evaluatePayload(verified.payload, drive, licensePath);
+        const status = this.evaluatePayload(verified.payload, candidate);
         if (status.authorized) {
           return status;
         }
@@ -111,7 +112,80 @@ class LicenseGuard {
       }
     }
 
+    if (!foundLicenseFile) {
+      return this.unauthorizedStatus('未检测到授权文件（U盘或离线）');
+    }
     return this.unauthorizedStatus(bestReason);
+  }
+
+  buildLicenseCandidates() {
+    return [
+      ...this.buildUsbLicenseCandidates(),
+      ...this.buildLocalLicenseCandidates(),
+    ];
+  }
+
+  buildUsbLicenseCandidates() {
+    const drives = this.listRemovableDrives();
+    return drives.map(drive => ({
+      source: LICENSE_SOURCE_USB,
+      sourceLabel: this.getSourceLabel(LICENSE_SOURCE_USB),
+      drive,
+      licensePath: path.join(drive.mountPath, LICENSE_FILE_NAME),
+    }));
+  }
+
+  buildLocalLicenseCandidates() {
+    return this.resolveLocalLicensePaths().map(licensePath => ({
+      source: LICENSE_SOURCE_OFFLINE,
+      sourceLabel: this.getSourceLabel(LICENSE_SOURCE_OFFLINE),
+      drive: null,
+      licensePath,
+    }));
+  }
+
+  resolveLocalLicensePaths() {
+    const paths = [];
+    const seen = new Set();
+    const pushPath = candidatePath => {
+      if (!candidatePath) return;
+      const normalized = this.normalizeLicensePath(candidatePath);
+      if (!normalized || seen.has(normalized)) return;
+      seen.add(normalized);
+      paths.push(normalized);
+    };
+
+    if (process.env.LICENSE_FILE_PATH) {
+      pushPath(process.env.LICENSE_FILE_PATH);
+    }
+    pushPath(path.join(this.app.getPath('userData'), LICENSE_FILE_NAME));
+    pushPath(path.join(this.app.getPath('appData'), 'messagecounter', LICENSE_FILE_NAME));
+    pushPath(path.join(this.app.getPath('home'), LOCAL_LICENSE_FILE_NAME));
+    if (this.app.isPackaged) {
+      pushPath(path.join(path.dirname(process.execPath), LICENSE_FILE_NAME));
+    } else {
+      pushPath(path.join(this.app.getAppPath(), LICENSE_FILE_NAME));
+    }
+
+    return paths;
+  }
+
+  normalizeLicensePath(candidatePath) {
+    const resolved = path.resolve(candidatePath);
+    try {
+      if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
+        return path.join(resolved, LICENSE_FILE_NAME);
+      }
+    } catch (error) {
+      // Fallback to the raw path when stat fails.
+    }
+    return resolved;
+  }
+
+  getSourceLabel(source) {
+    if (source === LICENSE_SOURCE_USB) return 'U盘授权';
+    if (source === LICENSE_SOURCE_OFFLINE) return '离线授权';
+    return '未知来源';
   }
 
   verifyLicenseFile(content) {
@@ -146,20 +220,31 @@ class LicenseGuard {
     return { payload };
   }
 
-  evaluatePayload(payload, drive, licensePath) {
+  evaluatePayload(payload, candidate) {
     if (!payload || typeof payload !== 'object') {
       return this.unauthorizedStatus('授权内容为空');
     }
-    if (!payload.customerId || !payload.usbFingerprint || !payload.expireAt) {
+    if (!payload.customerId || !payload.expireAt) {
       return this.unauthorizedStatus('授权内容字段缺失');
     }
-    if (payload.plan && payload.plan !== 'yearly') {
-      return this.unauthorizedStatus('授权套餐不是年费模式');
+
+    const bindingCheck = this.validateBinding(payload, candidate);
+    if (!bindingCheck.ok) {
+      return this.unauthorizedStatus(bindingCheck.reason);
     }
 
-    const expectedFingerprint = String(payload.usbFingerprint);
-    if (expectedFingerprint !== drive.fingerprint) {
-      return this.unauthorizedStatus('U盘不匹配');
+    // 兼容历史 license: 旧版本无 tier 字段，默认按 Pro 处理。
+    const rawTier = payload.tier || payload.edition || 'pro';
+    const tier = normalizeTier(rawTier, '');
+    if (!tier) {
+      return this.unauthorizedStatus(`授权套餐无效: ${rawTier || '-'}`);
+    }
+    const planDef = getPlanDefinition(tier);
+
+    const rawBillingCycle = payload.billingCycle || payload.plan || 'lifetime';
+    const billingCycle = normalizeBillingCycle(rawBillingCycle, '');
+    if (!billingCycle) {
+      return this.unauthorizedStatus(`计费周期无效: ${rawBillingCycle || '-'}`);
     }
 
     const now = Date.now();
@@ -192,9 +277,55 @@ class LicenseGuard {
       expireAt: payload.expireAt,
       graceDays,
       remainingDays,
-      licensePath,
-      usbMountPath: drive.mountPath,
-      reason: inGrace ? `处于宽限期，剩余 ${remainingDays} 天` : '授权有效',
+      tier,
+      tierName: planDef.name,
+      billingCycle,
+      licensePath: candidate.licensePath,
+      licenseSource: bindingCheck.source,
+      licenseSourceLabel: bindingCheck.sourceLabel,
+      bindType: bindingCheck.bindType,
+      usbMountPath: candidate.drive ? candidate.drive.mountPath : '',
+      machineFingerprint: this.machineFingerprint,
+      reason: inGrace
+        ? `${planDef.name} ${bindingCheck.sourceLabel}处于宽限期，剩余 ${remainingDays} 天`
+        : `${planDef.name} ${bindingCheck.sourceLabel}有效`,
+    };
+  }
+
+  validateBinding(payload, candidate) {
+    const hasUsbFingerprint = Boolean(payload.usbFingerprint);
+    const hasMachineFingerprint = Boolean(payload.machineFingerprint);
+    if (!hasUsbFingerprint && !hasMachineFingerprint) {
+      return { ok: false, reason: '授权内容缺少绑定指纹' };
+    }
+
+    if (hasUsbFingerprint) {
+      const expectedFingerprint = String(payload.usbFingerprint);
+      if (!candidate.drive || !candidate.drive.fingerprint) {
+        return { ok: false, reason: '授权要求U盘绑定，请插入对应授权U盘' };
+      }
+      if (expectedFingerprint !== candidate.drive.fingerprint) {
+        return { ok: false, reason: 'U盘不匹配' };
+      }
+    }
+
+    if (hasMachineFingerprint) {
+      const expectedMachineFingerprint = String(payload.machineFingerprint);
+      if (expectedMachineFingerprint !== this.machineFingerprint) {
+        return { ok: false, reason: '机器指纹不匹配' };
+      }
+    }
+
+    const bindType = hasUsbFingerprint && hasMachineFingerprint
+      ? 'usb+machine'
+      : (hasUsbFingerprint ? 'usb' : 'machine');
+    const source = candidate.source || (hasUsbFingerprint ? LICENSE_SOURCE_USB : LICENSE_SOURCE_OFFLINE);
+
+    return {
+      ok: true,
+      source,
+      sourceLabel: this.getSourceLabel(source),
+      bindType,
     };
   }
 
@@ -216,14 +347,20 @@ class LicenseGuard {
 
   persistTrustedTime(ts) {
     const payload = JSON.stringify({ lastTrustedTs: ts }, null, 2);
-    fs.writeFileSync(this.lastTrustedTimePath, payload, 'utf8');
+    try {
+      fs.writeFileSync(this.lastTrustedTimePath, payload, 'utf8');
+    } catch (error) {
+      // Ignore persistence errors to avoid false negatives caused by file permissions.
+    }
   }
 
-  unauthorizedStatus(reason) {
+  unauthorizedStatus(reason, extra = {}) {
     return {
       authorized: false,
       mode: 'blocked',
       reason,
+      machineFingerprint: this.machineFingerprint,
+      ...extra,
     };
   }
 
@@ -334,6 +471,39 @@ class LicenseGuard {
 
   hashFingerprint(input) {
     return crypto.createHash('sha256').update(input).digest('hex');
+  }
+
+  buildMachineFingerprint() {
+    const machineId = this.getPlatformMachineId();
+    const parts = [
+      process.platform,
+      os.arch(),
+      machineId || os.hostname(),
+    ].filter(Boolean);
+    return this.hashFingerprint(parts.join('|'));
+  }
+
+  getPlatformMachineId() {
+    try {
+      if (process.platform === 'darwin') {
+        const text = execFileSync('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice'], { encoding: 'utf8', timeout: 3000 });
+        const match = text.match(/"IOPlatformUUID"\s=\s"([^"]+)"/);
+        return match ? match[1] : '';
+      }
+      if (process.platform === 'win32') {
+        const ps = '(Get-CimInstance Win32_ComputerSystemProduct).UUID';
+        return execFileSync('powershell', ['-NoProfile', '-Command', ps], { encoding: 'utf8', timeout: 3000 }).trim();
+      }
+      if (process.platform === 'linux') {
+        const machineIdPath = '/etc/machine-id';
+        if (fs.existsSync(machineIdPath)) {
+          return fs.readFileSync(machineIdPath, 'utf8').trim();
+        }
+      }
+    } catch (error) {
+      return '';
+    }
+    return '';
   }
 }
 
