@@ -13,14 +13,12 @@
             <button onclick="handleSummary()">所有客户汇总</button>
             <button onclick="copyClientData()">复制客户统计</button>
             <button onclick="exportClientDataDocument()">导出统计文档</button>
+            <button onclick="openHedgeReportModal()">吃单上报</button>
             <button onclick="clearUserData()">清空客户数据</button>
         </div>
         <div class="top-menu-meta">
-            <span id="appVersionBadge" class="app-version-badge">v-</span>
-            <button onclick="openPlanModal()">套餐与升级</button>
             <span id="planBadge" class="plan-badge">套餐: -</span>
-            <button onclick="openLicenseModal()">授权管理</button>
-            <button onclick="openAboutModal()">关于软件</button>
+            <button onclick="openSettingsModal()">设置</button>
         </div>
     </div>
 
@@ -126,7 +124,18 @@
 
                 <section class="right-column right-column-original">
                     <div class="right-column-head panel-head">
-                        <h3 id="originalDataTitle">原始数据列表</h3>
+                        <div class="original-data-head">
+                            <h3 id="originalDataTitle">原始数据列表</h3>
+                            <div class="original-data-search-row">
+                                <input
+                                    id="originalDataSearchInput"
+                                    class="original-data-search"
+                                    type="text"
+                                    placeholder="搜索原始消息（命中高亮）"
+                                    oninput="handleOriginalDataSearchInput(this.value)"
+                                >
+                            </div>
+                        </div>
                     </div>
                     <div class="right-column-body">
                         <div class="original-data">
@@ -440,6 +449,99 @@
             <div class="modal-buttons">
                 <button class="confirm-button" onclick="userManager.saveEditedOriginalData()">保存</button>
                 <button class="cancel-button" onclick="userManager.closeEditOriginalModal()">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="settingsModal" class="modal settings-modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeSettingsModal()">&times;</span>
+            <h2>设置中心</h2>
+            <div class="settings-list">
+                <div class="settings-item">
+                    <div class="settings-item-main">
+                        <div class="settings-item-title">修改密码</div>
+                        <div class="settings-item-desc">修改“六合彩统计”模块访问密码。</div>
+                    </div>
+                    <button class="edit-button" type="button" onclick="openPasswordChangeModal()">修改</button>
+                </div>
+                <div class="settings-item">
+                    <div class="settings-item-main">
+                        <div class="settings-item-title">版本号</div>
+                        <div class="settings-item-desc">当前软件版本。</div>
+                    </div>
+                    <div id="settingsVersionValue" class="settings-item-value">v-</div>
+                </div>
+                <div class="settings-item">
+                    <div class="settings-item-main">
+                        <div class="settings-item-title">套餐升级</div>
+                        <div class="settings-item-desc">查看当前套餐能力与升级流程。</div>
+                    </div>
+                    <button class="edit-button" type="button" onclick="openPlanModalFromSettings()">打开</button>
+                </div>
+                <div class="settings-item">
+                    <div class="settings-item-main">
+                        <div class="settings-item-title">授权管理</div>
+                        <div class="settings-item-desc">查看授权状态并手动刷新。</div>
+                    </div>
+                    <button class="edit-button" type="button" onclick="openLicenseModalFromSettings()">打开</button>
+                </div>
+                <div class="settings-item">
+                    <div class="settings-item-main">
+                        <div class="settings-item-title">关于软件</div>
+                        <div class="settings-item-desc">查看软件定位、合规提示与免责边界。</div>
+                    </div>
+                    <button class="edit-button" type="button" onclick="openAboutModalFromSettings()">打开</button>
+                </div>
+            </div>
+            <div class="modal-buttons">
+                <button class="cancel-button" onclick="closeSettingsModal()">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="passwordChangeModal" class="modal settings-modal">
+        <div class="modal-content settings-password-content">
+            <span class="close" onclick="closePasswordChangeModal()">&times;</span>
+            <h2>修改密码</h2>
+            <div class="settings-form-grid">
+                <label for="passwordCurrentInput">当前密码</label>
+                <input id="passwordCurrentInput" type="password" autocomplete="current-password" placeholder="请输入当前密码">
+
+                <label for="passwordNextInput">新密码</label>
+                <input id="passwordNextInput" type="password" autocomplete="new-password" placeholder="请输入新密码（至少4位）">
+
+                <label for="passwordConfirmInput">确认新密码</label>
+                <input id="passwordConfirmInput" type="password" autocomplete="new-password" placeholder="请再次输入新密码">
+            </div>
+            <div id="passwordChangeStatus" class="settings-inline-status"></div>
+            <div class="modal-buttons">
+                <button class="confirm-button" type="button" onclick="submitPasswordChange()">保存</button>
+                <button class="cancel-button" type="button" onclick="closePasswordChangeModal()">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="hedgeReportModal" class="modal hedge-report-modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeHedgeReportModal()">&times;</span>
+            <h2>吃单上报</h2>
+            <div class="hedge-report-toolbar">
+                <div id="hedgeReportScope" class="hedge-report-scope">范围：-</div>
+                <div class="hedge-report-odds">默认赔率：<span id="hedgeReportOdds">-</span></div>
+                <label class="hedge-report-loss-input">
+                    最多可亏损
+                    <input id="hedgeMaxLossInput" type="number" min="0" step="0.01" placeholder="例如 5000">
+                </label>
+                <button class="edit-button" type="button" onclick="calculateHedgeReport()">计算并生成</button>
+                <button class="edit-button" type="button" onclick="copyHedgeReportMessage()">复制上报消息</button>
+            </div>
+            <div id="hedgeReportSummary" class="hedge-report-summary">请输入“最多可亏损”后点击“计算并生成”。</div>
+            <div id="hedgeReportRows" class="hedge-report-rows"></div>
+            <label class="hedge-report-message-label" for="hedgeReportMessage">上报消息</label>
+            <textarea id="hedgeReportMessage" rows="5" readonly placeholder="计算后自动生成"></textarea>
+            <div class="modal-buttons">
+                <button class="cancel-button" onclick="closeHedgeReportModal()">关闭</button>
             </div>
         </div>
     </div>

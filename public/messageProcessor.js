@@ -2314,6 +2314,7 @@ class MessageProcessor {
 
             let totalAdded = 0;
             const touchedRegionKeys = new Set();
+            const orderTotalsByRegion = new Map();
             const defaultOdds = this.getEffectiveDefaultOdds(clientId);
             const ensureRegionPayoutData = (regionData) => {
                 if (!regionData || !Array.isArray(regionData.data)) return null;
@@ -2375,6 +2376,10 @@ class MessageProcessor {
                     if (dataItem) {
                         dataItem.value += entry.amount;
                         totalAdded += entry.amount;
+                        orderTotalsByRegion.set(
+                            regionKey,
+                            (Number(orderTotalsByRegion.get(regionKey)) || 0) + entry.amount
+                        );
                     }
                     if (payoutItem) {
                         payoutItem.value += entry.amount * entryOdds;
@@ -2387,7 +2392,10 @@ class MessageProcessor {
                     ? userManager.getUserRegionData(userName, regionKey)
                     : userManager.getUserData(userName);
                 if (!userData) return;
-                userData.originalData.push(originalMessageForStorage);
+                userData.originalData.push({
+                    message: originalMessageForStorage,
+                    totalAmount: Number(orderTotalsByRegion.get(regionKey)) || 0,
+                });
                 userData.totalCount = userData.data.reduce((sum, item) => sum + item.value, 0);
             });
 

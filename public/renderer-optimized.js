@@ -44,6 +44,7 @@ let dashboardSaveState = 'saved';
 let dashboardSaveError = '';
 let ambiguityChoiceState = null;
 let blockedUpgradeAutoShown = false;
+let trialRuntimeWarningDismissed = false;
 let regionWinningNumbers = {
     new_ao: '',
     old_ao: '',
@@ -84,6 +85,8 @@ const REGION_WINNING_NUMBERS_KEY = 'regionWinningNumbers.v1';
 const TELEGRAM_SUPPORT_USERNAME = '@Wffftttp';
 const TELEGRAM_SUPPORT_LINK = 'https://t.me/Wffftttp';
 const TELEGRAM_SUPPORT_QR_PATH = './telegram-braydon-qr.svg?v=20260225';
+const SETTINGS_PASSWORD_MODULE_ID = 'lottery';
+const HEDGE_MAX_LOSS_KEY = 'hedgeMaxLoss.v1';
 const ANCHOR_MODE_LABELS = {
     per_number: '每个号码下注金额',
     per_target_equal_split: '每个目标组下注金额（组内平分）',
@@ -305,9 +308,14 @@ async function initAppVersion() {
     if (!ipcRenderer || typeof ipcRenderer.invoke !== 'function') return;
     try {
         const version = await ipcRenderer.invoke('app:get-version');
+        const versionText = version ? `v${version}` : 'v-';
         const badge = document.getElementById('appVersionBadge');
         if (badge) {
-            badge.textContent = version ? `v${version}` : 'v-';
+            badge.textContent = versionText;
+        }
+        const settingsVersion = document.getElementById('settingsVersionValue');
+        if (settingsVersion) {
+            settingsVersion.textContent = versionText;
         }
     } catch (error) {
         // ignore
@@ -349,6 +357,7 @@ function applyAppAccessStatus(status) {
     const trialWarning = document.getElementById('trialRuntimeWarning');
     if (trialWarning && status && status.mode !== 'trial') {
         trialWarning.remove();
+        trialRuntimeWarningDismissed = false;
     }
 
     if (!status) return;
@@ -360,7 +369,7 @@ function applyAppAccessStatus(status) {
     if (status.mode !== 'blocked') {
         blockedUpgradeAutoShown = false;
     }
-    if (status.mode === 'trial' && status.trial) {
+    if (status.mode === 'trial' && status.trial && !trialRuntimeWarningDismissed) {
         showTrialRuntimeWarning(status.trial.remainingDays || 0, status.trial.endAt);
     }
 }
@@ -724,6 +733,7 @@ function renderPlanModal() {
     const cycle = normalizeBillingCycle(context.billingCycle, 'lifetime');
     const cycleLabel = formatBillingCycleLabel(cycle);
     const currentPrice = formatCurrencyPrice(context.prices[cycle] || context.prices.lifetime, context.currency);
+    const isTrialMode = !!(appAccessStatus && appAccessStatus.mode === 'trial');
 
     if (appAccessStatus && appAccessStatus.mode === 'blocked') {
         const blockedReason = String(
@@ -738,8 +748,8 @@ function renderPlanModal() {
         );
         const fingerprintText = machineFingerprint ? ` 本机指纹：${machineFingerprint}` : '';
         banner.textContent = `当前授权不可用（${blockedReason}），请联系升级并导入授权文件。${fingerprintText}`;
-    } else if (appAccessStatus && appAccessStatus.mode === 'trial') {
-        banner.textContent = `当前为试用模式，已开放 ${context.name} 能力。试用到期后请购买 Plus 或 Pro 授权。`;
+    } else if (isTrialMode) {
+        banner.textContent = `当前为试用模式，已开放 ${context.name} 能力（可在 Plus / Pro 间自由切换）。试用到期后请购买 Plus 或 Pro 授权。`;
     } else {
         banner.textContent = `当前套餐：${context.name}（${cycleLabel}，${currentPrice}）`;
     }
@@ -751,6 +761,11 @@ function renderPlanModal() {
         const featureHtml = (plan.features || [])
             .map(item => `<li>${escapeHtml(item)}</li>`)
             .join('');
+        const trialActionHtml = isTrialMode
+            ? (selected
+                ? `<div class="plan-card-actions"><span class="plan-card-state">当前试用套餐</span></div>`
+                : `<div class="plan-card-actions"><button class="edit-button plan-switch-btn" type="button" onclick="switchTrialPlanTier('${escapeHtml(plan.key)}')">切换到 ${escapeHtml(plan.name)}</button></div>`)
+            : '';
         return `
             <section class="plan-card ${selected ? 'current' : ''}">
                 <div class="plan-card-header">
@@ -759,6 +774,7 @@ function renderPlanModal() {
                 </div>
                 <p class="plan-card-desc">${escapeHtml(plan.description || '')}</p>
                 <ul class="plan-card-features">${featureHtml}</ul>
+                ${trialActionHtml}
             </section>
         `;
     }).join('');
@@ -791,6 +807,48 @@ function renderPlanModal() {
     cards.innerHTML = `${planCards}${contactCard}`;
 }
 
+async function switchTrialPlanTier(nextTier) {
+    const targetTier = normalizePlanTier(nextTier, '');
+    if (!targetTier) {
+        showError('切换失败', '套餐参数无效');
+        return;
+    }
+    if (!appAccessStatus || appAccessStatus.mode !== 'trial') {
+        showError('切换失败', '当前非试用模式，不能切换套餐');
+        return;
+    }
+    if (!ipcRenderer || typeof ipcRenderer.invoke !== 'function') {
+        showError('切换失败', 'IPC 不可用，请重启应用');
+        return;
+    }
+
+    try {
+        const result = await ipcRenderer.invoke('plan:switch-trial-tier', { tier: targetTier });
+        if (!result || !result.ok) {
+            showError('切换失败', (result && result.reason) || '请重试');
+            return;
+        }
+        if (result.status) {
+            applyAppAccessStatus(result.status);
+        } else {
+            currentPlanContext = resolvePlanContext(appAccessStatus || {});
+            renderPlanBadge();
+            renderPlanModal();
+            syncPlanCapabilityUI();
+        }
+
+        const targetPlan = getPlanByTier(targetTier);
+        const targetName = targetPlan ? targetPlan.name : targetTier.toUpperCase();
+        if (result.changed === false) {
+            showSuccess(`当前已是 ${targetName}`);
+        } else {
+            showSuccess(`已切换到 ${targetName}`);
+        }
+    } catch (error) {
+        showError('切换失败', error && error.message ? error.message : '请重试');
+    }
+}
+
 function openPlanModal() {
     const modal = document.getElementById('planModal');
     if (!modal) return;
@@ -802,6 +860,131 @@ function closePlanModal() {
     const modal = document.getElementById('planModal');
     if (!modal) return;
     modal.style.display = 'none';
+}
+
+function openSettingsModal() {
+    const modal = document.getElementById('settingsModal');
+    if (!modal) return;
+    const settingsVersion = document.getElementById('settingsVersionValue');
+    if (settingsVersion && !settingsVersion.textContent) {
+        settingsVersion.textContent = 'v-';
+    }
+    modal.style.display = 'block';
+}
+
+function closeSettingsModal() {
+    const modal = document.getElementById('settingsModal');
+    if (!modal) return;
+    modal.style.display = 'none';
+}
+
+function openPlanModalFromSettings() {
+    closeSettingsModal();
+    openPlanModal();
+}
+
+function openLicenseModalFromSettings() {
+    closeSettingsModal();
+    openLicenseModal();
+}
+
+function openAboutModalFromSettings() {
+    closeSettingsModal();
+    openAboutModal();
+}
+
+function clearPasswordChangeForm() {
+    const ids = ['passwordCurrentInput', 'passwordNextInput', 'passwordConfirmInput'];
+    ids.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.value = '';
+        }
+    });
+    setPasswordChangeStatus('', '');
+}
+
+function setPasswordChangeStatus(message, type = 'info') {
+    const status = document.getElementById('passwordChangeStatus');
+    if (!status) return;
+    status.textContent = message || '';
+    status.className = 'settings-inline-status';
+    if (type === 'success') {
+        status.classList.add('is-success');
+    } else if (type === 'error') {
+        status.classList.add('is-error');
+    }
+}
+
+function openPasswordChangeModal() {
+    const modal = document.getElementById('passwordChangeModal');
+    if (!modal) return;
+    clearPasswordChangeForm();
+    modal.style.display = 'block';
+    const currentInput = document.getElementById('passwordCurrentInput');
+    if (currentInput) {
+        currentInput.focus();
+    }
+}
+
+function closePasswordChangeModal() {
+    const modal = document.getElementById('passwordChangeModal');
+    if (!modal) return;
+    modal.style.display = 'none';
+}
+
+async function submitPasswordChange() {
+    const currentInput = document.getElementById('passwordCurrentInput');
+    const nextInput = document.getElementById('passwordNextInput');
+    const confirmInput = document.getElementById('passwordConfirmInput');
+    const currentPassword = currentInput ? String(currentInput.value || '').trim() : '';
+    const nextPassword = nextInput ? String(nextInput.value || '').trim() : '';
+    const confirmPassword = confirmInput ? String(confirmInput.value || '').trim() : '';
+
+    if (!currentPassword) {
+        setPasswordChangeStatus('请输入当前密码。', 'error');
+        return;
+    }
+    if (!nextPassword) {
+        setPasswordChangeStatus('请输入新密码。', 'error');
+        return;
+    }
+    if (nextPassword.length < 4) {
+        setPasswordChangeStatus('新密码至少 4 位。', 'error');
+        return;
+    }
+    if (nextPassword !== confirmPassword) {
+        setPasswordChangeStatus('两次输入的新密码不一致。', 'error');
+        return;
+    }
+    if (currentPassword === nextPassword) {
+        setPasswordChangeStatus('新密码不能与当前密码相同。', 'error');
+        return;
+    }
+    if (!ipcRenderer || typeof ipcRenderer.invoke !== 'function') {
+        setPasswordChangeStatus('当前环境不支持修改密码。', 'error');
+        return;
+    }
+
+    setPasswordChangeStatus('正在保存密码...', 'info');
+    try {
+        const result = await ipcRenderer.invoke('module-auth:update-password', {
+            moduleId: SETTINGS_PASSWORD_MODULE_ID,
+            currentPassword,
+            nextPassword,
+        });
+        if (!result || !result.ok) {
+            const reason = result && result.reason ? result.reason : '密码修改失败';
+            setPasswordChangeStatus(reason, 'error');
+            return;
+        }
+        setPasswordChangeStatus(result.reason || '密码修改成功。', 'success');
+        if (currentInput) currentInput.value = '';
+        if (nextInput) nextInput.value = '';
+        if (confirmInput) confirmInput.value = '';
+    } catch (error) {
+        setPasswordChangeStatus(`密码修改失败: ${error.message}`, 'error');
+    }
 }
 
 function syncPlanCapabilityUI() {
@@ -944,6 +1127,7 @@ function showGraceWarning(remainingDays) {
 }
 
 function showTrialRuntimeWarning(remainingDays, endAt) {
+    if (trialRuntimeWarningDismissed) return;
     const id = 'trialRuntimeWarning';
     const existing = document.getElementById(id);
     if (existing) {
@@ -961,13 +1145,38 @@ function showTrialRuntimeWarning(remainingDays, endAt) {
         color: #78350f;
         border: 1px solid #facc15;
         border-radius: 8px;
-        padding: 8px 12px;
+        padding: 8px 34px 8px 12px;
         font-weight: 700;
         box-shadow: 0 8px 20px rgba(0,0,0,0.18);
         z-index: 10001;
     `;
     const endText = endAt ? `，到期时间：${formatTime(endAt)}` : '';
     warning.textContent = `当前为试用模式，剩余 ${remainingDays} 天${endText}`;
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.setAttribute('aria-label', '关闭试用提示');
+    closeBtn.textContent = '×';
+    closeBtn.style.cssText = `
+        position: absolute;
+        right: 8px;
+        top: 4px;
+        width: 22px;
+        height: 22px;
+        border-radius: 999px;
+        border: 1px solid rgba(120, 53, 15, 0.35);
+        background: rgba(255,255,255,0.55);
+        color: #78350f;
+        font-size: 14px;
+        line-height: 1;
+        cursor: pointer;
+        padding: 0;
+    `;
+    closeBtn.onclick = () => {
+        trialRuntimeWarningDismissed = true;
+        warning.remove();
+    };
+    warning.appendChild(closeBtn);
     document.body.appendChild(warning);
 }
 
@@ -6793,11 +7002,31 @@ function addUser() {
 // 处理汇总
 function handleSummary() {
     try {
+        const sortedUsers = userManager && typeof userManager.getSortedUsers === 'function'
+            ? userManager.getSortedUsers()
+            : [];
+        if (!sortedUsers.length) {
+            showError('汇总失败', '当前没有客户可汇总');
+            return;
+        }
+        if (userManager && typeof userManager.setMultiSelectEnabled === 'function') {
+            userManager.setMultiSelectEnabled(true);
+        }
+        if (userManager && typeof userManager.setSelectedUsers === 'function') {
+            userManager.setSelectedUsers(sortedUsers);
+        }
         userManager.setSummaryMode(true);
         console.log('进入汇总模式');
     } catch (error) {
         showError('汇总失败', error.message);
     }
+}
+
+function handleOriginalDataSearchInput(value) {
+    if (!window.userManager || typeof window.userManager.setOriginalDataSearchKeyword !== 'function') {
+        return;
+    }
+    window.userManager.setOriginalDataSearchKeyword(value);
 }
 
 // 清空用户数据
@@ -8205,7 +8434,8 @@ function mergeLotteryScopeData(manager, scopedUsers, viewRegions) {
                     userName,
                     regionKey,
                     regionLabel: getRegionLabel(regionKey),
-                    message: extractOriginalText(message)
+                    message: extractOriginalText(message),
+                    originalEntry: message
                 });
             });
         });
@@ -8219,6 +8449,367 @@ function mergeLotteryScopeData(manager, scopedUsers, viewRegions) {
             .map(([userName, amount]) => ({ userName, amount: Number(amount) || 0 }))
             .sort((a, b) => b.amount - a.amount)
     };
+}
+
+function getHedgeRegionMessagePrefix(regionKey) {
+    if (regionKey === 'old_ao') return '老奥';
+    if (regionKey === 'hongkong') return '香港';
+    return '新奥';
+}
+
+function roundUpAmount(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num <= 0) return 0;
+    return Math.ceil(num - 1e-12);
+}
+
+function collectHedgeScopeByRegion(scopeData) {
+    const manager = window.userManager;
+    if (!manager) {
+        return { regionRows: [], totalStake: 0 };
+    }
+
+    const scopedUsers = Array.isArray(scopeData && scopeData.users) ? scopeData.users : [];
+    const viewRegions = Array.isArray(scopeData && scopeData.viewRegions) && scopeData.viewRegions.length > 0
+        ? scopeData.viewRegions
+        : ['new_ao'];
+    const regionRows = [];
+    let totalStake = 0;
+
+    viewRegions.forEach((regionKey) => {
+        const numberMap = new Map();
+        let regionTotalStake = 0;
+        scopedUsers.forEach((userName) => {
+            const regionData = typeof manager.getUserRegionData === 'function'
+                ? manager.getUserRegionData(userName, regionKey)
+                : null;
+            if (!regionData || !Array.isArray(regionData.data)) return;
+
+            if (typeof manager.ensureRegionPayoutData === 'function') {
+                manager.ensureRegionPayoutData(regionData);
+            }
+            const regionStake = Number(regionData.totalCount);
+            regionTotalStake += Number.isFinite(regionStake)
+                ? regionStake
+                : regionData.data.reduce((sum, item) => sum + (Number(item && item.value) || 0), 0);
+
+            (regionData.data || []).forEach((item) => {
+                const number = String(item && item.number ? item.number : '').padStart(2, '0');
+                if (!number) return;
+                if (!numberMap.has(number)) {
+                    numberMap.set(number, {
+                        number,
+                        text: String((item && item.text) || ''),
+                        stake: 0,
+                        payout: 0,
+                    });
+                }
+                const row = numberMap.get(number);
+                row.stake += Number(item && item.value) || 0;
+            });
+            (regionData.payoutData || []).forEach((item) => {
+                const number = String(item && item.number ? item.number : '').padStart(2, '0');
+                if (!number) return;
+                if (!numberMap.has(number)) {
+                    numberMap.set(number, {
+                        number,
+                        text: String((item && item.text) || ''),
+                        stake: 0,
+                        payout: 0,
+                    });
+                }
+                const row = numberMap.get(number);
+                row.payout += Number(item && item.value) || 0;
+            });
+        });
+
+        const numbers = Array.from(numberMap.values())
+            .filter((row) => (Number(row.stake) || 0) > 0)
+            .sort((a, b) => (Number(a.number) || 0) - (Number(b.number) || 0));
+        if (!numbers.length && !(regionTotalStake > 0)) {
+            return;
+        }
+        const regionLabel = manager && typeof manager.getRegionLabel === 'function'
+            ? manager.getRegionLabel(regionKey)
+            : getHedgeRegionMessagePrefix(regionKey);
+
+        regionRows.push({
+            regionKey,
+            regionLabel,
+            totalStake: regionTotalStake,
+            numbers,
+        });
+        totalStake += regionTotalStake;
+    });
+
+    return { regionRows, totalStake };
+}
+
+function buildHedgeSuggestions(regionScope, maxLoss, odds) {
+    const lossLimit = Number(maxLoss);
+    const safeOdds = Number(odds);
+    const unitImprove = safeOdds - 1;
+    if (!(lossLimit >= 0) || !Number.isFinite(unitImprove) || unitImprove <= 0) {
+        return [];
+    }
+
+    const suggestions = [];
+    (regionScope && Array.isArray(regionScope.regionRows) ? regionScope.regionRows : []).forEach((regionRow) => {
+        const regionTotalStake = Number(regionRow && regionRow.totalStake) || 0;
+        (regionRow && Array.isArray(regionRow.numbers) ? regionRow.numbers : []).forEach((row) => {
+            const payout = Number(row && row.payout) || 0;
+            const currentPnl = regionTotalStake - payout;
+            if (currentPnl >= -lossLimit) return;
+            const needImprove = (-lossLimit) - currentPnl;
+            const hedgeAmount = roundUpAmount(needImprove / unitImprove);
+            if (!(hedgeAmount > 0)) return;
+            suggestions.push({
+                regionKey: regionRow.regionKey,
+                regionLabel: regionRow.regionLabel,
+                number: String(row.number || '').padStart(2, '0'),
+                text: String(row.text || ''),
+                stake: Number(row.stake) || 0,
+                payout,
+                currentPnl,
+                hedgeAmount,
+            });
+        });
+    });
+
+    const regionOrder = { new_ao: 0, old_ao: 1, hongkong: 2 };
+    return suggestions.sort((a, b) => {
+        if (a.regionKey !== b.regionKey) {
+            return (regionOrder[a.regionKey] ?? 99) - (regionOrder[b.regionKey] ?? 99);
+        }
+        return (Number(a.number) || 0) - (Number(b.number) || 0);
+    });
+}
+
+function buildHedgeReportMessage(suggestions = []) {
+    if (!Array.isArray(suggestions) || suggestions.length === 0) return '';
+
+    const regionMap = new Map();
+    suggestions.forEach((row) => {
+        const regionKey = String(row && row.regionKey ? row.regionKey : 'new_ao');
+        const amount = Number(row && row.hedgeAmount) || 0;
+        const amountKey = formatNumericAmount(amount);
+        if (!regionMap.has(regionKey)) {
+            regionMap.set(regionKey, new Map());
+        }
+        const amountMap = regionMap.get(regionKey);
+        if (!amountMap.has(amountKey)) {
+            amountMap.set(amountKey, []);
+        }
+        amountMap.get(amountKey).push(String(row && row.number ? row.number : '').padStart(2, '0'));
+    });
+
+    const regionOrder = ['new_ao', 'old_ao', 'hongkong'];
+    const lines = [];
+    regionOrder.forEach((regionKey) => {
+        if (!regionMap.has(regionKey)) return;
+        const amountMap = regionMap.get(regionKey);
+        const entries = Array.from(amountMap.entries())
+            .map(([amountText, numbers]) => ({
+                amountText,
+                amountValue: Number(amountText) || 0,
+                numbers: Array.from(new Set(numbers))
+                    .filter(Boolean)
+                    .sort((a, b) => (Number(a) || 0) - (Number(b) || 0)),
+            }))
+            .sort((a, b) => b.amountValue - a.amountValue);
+
+        entries.forEach((entry) => {
+            if (!entry.numbers.length) return;
+            lines.push(`${getHedgeRegionMessagePrefix(regionKey)}${entry.numbers.join('-')}各${entry.amountText}`);
+        });
+    });
+
+    return lines.join('\n');
+}
+
+function renderHedgeReportRows(suggestions = []) {
+    const rowsWrap = document.getElementById('hedgeReportRows');
+    if (!rowsWrap) return;
+    if (!Array.isArray(suggestions) || suggestions.length === 0) {
+        rowsWrap.innerHTML = '<div class="virtual-empty">当前范围在该阈值下无需抛单。</div>';
+        return;
+    }
+
+    const bodyRows = suggestions.map((row) => `
+        <tr>
+            <td>${escapeHtml(row.regionLabel || '-')}</td>
+            <td>${escapeHtml(row.number || '-')}</td>
+            <td>${escapeHtml(formatNumericAmount(row.stake))}</td>
+            <td>${escapeHtml(formatNumericAmount(row.payout))}</td>
+            <td class="is-negative">${escapeHtml(formatSignedAmount(row.currentPnl))}</td>
+            <td class="is-hedge">${escapeHtml(formatNumericAmount(row.hedgeAmount))}</td>
+        </tr>
+    `).join('');
+
+    rowsWrap.innerHTML = `
+        <table class="hedge-report-table">
+            <thead>
+                <tr>
+                    <th>盘口</th>
+                    <th>号码</th>
+                    <th>当前总注</th>
+                    <th>当前派彩</th>
+                    <th>当前盈亏</th>
+                    <th>建议抛量</th>
+                </tr>
+            </thead>
+            <tbody>${bodyRows}</tbody>
+        </table>
+    `;
+}
+
+function openHedgeReportModal() {
+    const modal = document.getElementById('hedgeReportModal');
+    if (!modal) return;
+
+    const oddsEl = document.getElementById('hedgeReportOdds');
+    if (oddsEl) {
+        oddsEl.textContent = formatNumericAmount(getRegionPnlOdds());
+    }
+
+    const scopeTextEl = document.getElementById('hedgeReportScope');
+    const scopeResult = collectCurrentLotteryScopeData();
+    if (scopeTextEl) {
+        if (scopeResult.ok) {
+            const scope = scopeResult.scopeData;
+            const usersLabel = scope.inSummaryMode
+                ? '所有客户汇总'
+                : (Array.isArray(scope.users) ? scope.users.join('、') : '-');
+            const regionsLabel = Array.isArray(scope.viewRegionLabels) ? scope.viewRegionLabels.join('、') : '-';
+            scopeTextEl.textContent = `范围：${usersLabel}｜盘口：${regionsLabel}`;
+        } else {
+            scopeTextEl.textContent = `范围：${scopeResult.reason || '-'}`;
+        }
+    }
+
+    const lossInput = document.getElementById('hedgeMaxLossInput');
+    if (lossInput) {
+        try {
+            const saved = String(localStorage.getItem(HEDGE_MAX_LOSS_KEY) || '');
+            if (saved && !Number.isNaN(Number(saved))) {
+                lossInput.value = saved;
+            }
+        } catch (error) {
+            // ignore
+        }
+    }
+
+    const summary = document.getElementById('hedgeReportSummary');
+    if (summary) {
+        summary.textContent = '请输入“最多可亏损”后点击“计算并生成”。';
+    }
+    renderHedgeReportRows([]);
+    const message = document.getElementById('hedgeReportMessage');
+    if (message) {
+        message.value = '';
+    }
+
+    modal.style.display = 'block';
+}
+
+function closeHedgeReportModal() {
+    const modal = document.getElementById('hedgeReportModal');
+    if (!modal) return;
+    modal.style.display = 'none';
+}
+
+function calculateHedgeReport() {
+    const summary = document.getElementById('hedgeReportSummary');
+    const messageEl = document.getElementById('hedgeReportMessage');
+    const lossInput = document.getElementById('hedgeMaxLossInput');
+    const rawLoss = lossInput ? String(lossInput.value || '').trim() : '';
+    const maxLoss = Number(rawLoss);
+
+    if (!Number.isFinite(maxLoss) || maxLoss < 0) {
+        if (summary) summary.textContent = '最多可亏损请输入大于等于 0 的数字。';
+        renderHedgeReportRows([]);
+        if (messageEl) messageEl.value = '';
+        return;
+    }
+
+    try {
+        localStorage.setItem(HEDGE_MAX_LOSS_KEY, String(maxLoss));
+    } catch (error) {
+        // ignore
+    }
+
+    const scopeResult = collectCurrentLotteryScopeData();
+    if (!scopeResult.ok) {
+        if (summary) summary.textContent = scopeResult.reason || '无法读取当前范围数据。';
+        renderHedgeReportRows([]);
+        if (messageEl) messageEl.value = '';
+        return;
+    }
+
+    const scope = scopeResult.scopeData;
+    const regionScope = collectHedgeScopeByRegion(scope);
+    if (!(regionScope.totalStake > 0)) {
+        if (summary) summary.textContent = '当前范围没有总注数据，无需上报。';
+        renderHedgeReportRows([]);
+        if (messageEl) messageEl.value = '';
+        return;
+    }
+
+    const odds = getRegionPnlOdds();
+    if (!Number.isFinite(odds) || odds <= 1) {
+        if (summary) summary.textContent = '当前默认赔率无效，无法计算抛量。';
+        renderHedgeReportRows([]);
+        if (messageEl) messageEl.value = '';
+        return;
+    }
+
+    const suggestions = buildHedgeSuggestions(regionScope, maxLoss, odds);
+    const message = buildHedgeReportMessage(suggestions);
+    const totalHedgeAmount = suggestions.reduce((sum, row) => sum + (Number(row.hedgeAmount) || 0), 0);
+    const minPnl = suggestions.reduce((min, row) => {
+        const value = Number(row.currentPnl);
+        if (!Number.isFinite(value)) return min;
+        return value < min ? value : min;
+    }, Number.POSITIVE_INFINITY);
+
+    if (summary) {
+        if (!suggestions.length) {
+            summary.textContent = `阈值 -${formatNumericAmount(maxLoss)} 下无需抛单。`;
+        } else {
+            const worstText = Number.isFinite(minPnl) ? formatSignedAmount(minPnl) : '-';
+            summary.textContent = `命中 ${suggestions.length} 个风险号码，建议总抛量 ${formatNumericAmount(totalHedgeAmount)}。当前最差盈亏 ${worstText}，目标不低于 -${formatNumericAmount(maxLoss)}。`;
+        }
+    }
+    renderHedgeReportRows(suggestions);
+    if (messageEl) {
+        messageEl.value = message;
+    }
+}
+
+function copyHedgeReportMessage() {
+    const messageEl = document.getElementById('hedgeReportMessage');
+    const text = messageEl ? String(messageEl.value || '').trim() : '';
+    if (!text) {
+        showError('复制失败', '请先计算并生成上报消息');
+        return;
+    }
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => {
+            showSuccess('上报消息已复制');
+        }).catch(() => {
+            showError('复制失败', '请重试');
+        });
+        return;
+    }
+
+    const area = document.createElement('textarea');
+    area.value = text;
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand('copy');
+    document.body.removeChild(area);
+    showSuccess('上报消息已复制');
 }
 
 function buildGroupedByValueRows(data = []) {
@@ -8242,12 +8833,196 @@ function buildGroupedByValueRows(data = []) {
         }));
 }
 
+function getExportOriginalStoredTotal(entry) {
+    if (!entry || typeof entry !== 'object') return null;
+    const candidates = ['totalAmount', 'orderTotal', 'total', 'sum'];
+    for (const key of candidates) {
+        const value = Number(entry[key]);
+        if (Number.isFinite(value) && value >= 0) {
+            return value;
+        }
+    }
+    return null;
+}
+
+function getExportRegionLabel(regionKey = '') {
+    if (window.userManager && typeof window.userManager.getRegionLabel === 'function') {
+        return window.userManager.getRegionLabel(regionKey);
+    }
+    return getHedgeRegionMessagePrefix(regionKey);
+}
+
+function collectExportWinningConfigs(viewRegions = []) {
+    const fallback = ['new_ao', 'old_ao', 'hongkong'];
+    const regionKeys = Array.from(new Set(
+        (Array.isArray(viewRegions) && viewRegions.length > 0 ? viewRegions : fallback)
+            .map(key => String(key || '').trim())
+            .filter(Boolean)
+    ));
+
+    const result = {};
+    regionKeys.forEach((regionKey) => {
+        const raw = normalizeRegionWinningInput(regionWinningNumbers[regionKey] || '');
+        const parsed = parseRegionWinningNumber(raw);
+        result[regionKey] = {
+            regionKey,
+            regionLabel: getExportRegionLabel(regionKey),
+            raw,
+            number: parsed.number,
+            numberText: parsed.number === null ? '' : String(parsed.number).padStart(2, '0'),
+            error: parsed.error || ''
+        };
+    });
+    return result;
+}
+
+function computeOriginalRowExportPnl(row, winningConfigs = {}) {
+    const manager = window.userManager;
+    const processor = window.messageProcessor;
+    const regionKey = String(row && row.regionKey ? row.regionKey : 'new_ao');
+    const userName = String(row && row.userName ? row.userName : '');
+    const extractMessage = manager && typeof manager.extractOriginalMessageText === 'function'
+        ? manager.extractOriginalMessageText.bind(manager)
+        : (entry) => {
+            if (typeof entry === 'string') return entry;
+            if (entry && typeof entry === 'object' && typeof entry.message === 'string') return entry.message;
+            if (entry == null) return '';
+            return String(entry);
+        };
+    const rawMessage = extractMessage(row && Object.prototype.hasOwnProperty.call(row, 'message')
+        ? row.message
+        : (row && row.originalEntry));
+
+    const storedTotalFromEntry = getExportOriginalStoredTotal(row && row.originalEntry);
+    const storedTotalFromRow = getExportOriginalStoredTotal(row);
+    let orderTotal = storedTotalFromEntry != null ? storedTotalFromEntry : storedTotalFromRow;
+    const winning = winningConfigs[regionKey] || {
+        numberText: '',
+        error: ''
+    };
+    const hasStoredTotal = Number.isFinite(orderTotal) && orderTotal >= 0;
+    const canUseLegacyTotalCalc = manager && typeof manager.calculateOriginalOrderTotal === 'function';
+    const needParseForPnl = !!winning.numberText;
+    const needParseForTotalFallback = !hasStoredTotal && !canUseLegacyTotalCalc;
+    const shouldParseMessage = needParseForPnl || needParseForTotalFallback;
+
+    let parsedRegionTotal = 0;
+    let hitStake = 0;
+    let payout = 0;
+    let parseError = '';
+
+    if (shouldParseMessage && (!processor || typeof processor.parseMessage !== 'function')) {
+        parseError = '解析器不可用';
+    } else if (shouldParseMessage && String(rawMessage || '').trim()) {
+        try {
+            let fallbackOdds = getRegionPnlOdds();
+            if (typeof processor.getEffectiveDefaultOdds === 'function') {
+                const clientOdds = Number(processor.getEffectiveDefaultOdds(userName));
+                if (Number.isFinite(clientOdds) && clientOdds > 0) {
+                    fallbackOdds = clientOdds;
+                }
+            }
+            const normalizeOdds = (odds) => {
+                if (typeof processor.normalizeOddsValue === 'function') {
+                    const normalized = Number(processor.normalizeOddsValue(odds, fallbackOdds));
+                    if (Number.isFinite(normalized) && normalized > 0) {
+                        return normalized;
+                    }
+                }
+                const numeric = Number(odds);
+                if (Number.isFinite(numeric) && numeric > 0) {
+                    return numeric;
+                }
+                return fallbackOdds;
+            };
+
+            const parsed = processor.parseMessage(rawMessage, { clientId: userName });
+            const targetNumber = winning.numberText || '';
+
+            (parsed && Array.isArray(parsed.entries) ? parsed.entries : []).forEach((entry) => {
+                const entryRegion = String(entry && entry.regionKey ? entry.regionKey : regionKey);
+                if (entryRegion !== regionKey) return;
+                const amount = Number(entry && entry.amount);
+                const sourceNumbers = Array.isArray(entry && entry.numbers) ? entry.numbers : [];
+                const numbers = sourceNumbers
+                    .map(num => parseInt(num, 10))
+                    .filter(num => Number.isInteger(num) && num >= 1 && num <= 49);
+                if (!Number.isFinite(amount) || amount <= 0 || numbers.length <= 0) return;
+
+                parsedRegionTotal += amount * numbers.length;
+
+                if (!targetNumber) return;
+                const hit = numbers.some(num => String(num).padStart(2, '0') === targetNumber);
+                if (!hit) return;
+                hitStake += amount;
+                payout += amount * normalizeOdds(entry.odds);
+            });
+        } catch (error) {
+            parseError = error && error.message ? String(error.message) : '解析失败';
+        }
+    }
+
+    if (!(Number.isFinite(orderTotal) && orderTotal >= 0)) {
+        if (parsedRegionTotal > 0) {
+            orderTotal = parsedRegionTotal;
+        } else if (manager && typeof manager.calculateOriginalOrderTotal === 'function') {
+            const calculated = Number(manager.calculateOriginalOrderTotal(rawMessage, userName, regionKey));
+            if (Number.isFinite(calculated) && calculated >= 0) {
+                orderTotal = calculated;
+            }
+        }
+    }
+    if (!(Number.isFinite(orderTotal) && orderTotal >= 0)) {
+        orderTotal = null;
+    }
+
+    let winLoss = '-';
+    let payoutValue = null;
+    let pnlValue = null;
+    let computable = false;
+
+    if (winning.numberText) {
+        if (parseError) {
+            winLoss = '无法计算';
+        } else {
+            const totalStake = Number.isFinite(orderTotal) ? Number(orderTotal) : parsedRegionTotal;
+            payoutValue = payout;
+            pnlValue = totalStake - payout;
+            winLoss = hitStake > 0 ? '赢' : '输';
+            computable = Number.isFinite(pnlValue);
+        }
+    } else if (winning.error) {
+        winLoss = '中奖号无效';
+    }
+
+    return {
+        orderTotal,
+        hitStake,
+        payout: payoutValue,
+        pnl: pnlValue,
+        winLoss,
+        winningNumber: winning.numberText || '',
+        pnlComputable: computable
+    };
+}
+
 function buildLotteryExportDocument(scopeData, format = 'excel') {
     const data = Array.isArray(scopeData.data) ? scopeData.data : [];
     const originalData = Array.isArray(scopeData.originalData) ? scopeData.originalData : [];
     const users = Array.isArray(scopeData.users) ? scopeData.users : [];
     const userTotals = Array.isArray(scopeData.userTotals) ? scopeData.userTotals : [];
-    const regionLabels = Array.isArray(scopeData.viewRegionLabels) ? scopeData.viewRegionLabels : [];
+    const viewRegions = Array.isArray(scopeData.viewRegions) ? scopeData.viewRegions : [];
+    const regionLabels = Array.isArray(scopeData.viewRegionLabels) ? scopeData.viewRegionLabels : viewRegions;
+    const winningConfigs = collectExportWinningConfigs(viewRegions);
+    const exportOriginalRows = originalData.map((item, index) => {
+        const metrics = computeOriginalRowExportPnl(item, winningConfigs);
+        return {
+            ...item,
+            serialNo: index + 1,
+            regionLabel: item && item.regionLabel ? item.regionLabel : getExportRegionLabel(item && item.regionKey ? item.regionKey : ''),
+            ...metrics
+        };
+    });
 
     const groupedRows = buildGroupedByValueRows(data);
     const sortedDetails = data
@@ -8258,7 +9033,7 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
         ? groupedRows.map((row) => `
             <tr>
                 <td>${escapeHtml(row.numbers.join('.'))}</td>
-                <td style="text-align:right">${escapeHtml(row.value)}</td>
+                <td style="text-align:right">${escapeHtml(formatNumericAmount(row.value))}</td>
                 <td style="text-align:right">${escapeHtml(row.numbers.length)}</td>
             </tr>
         `).join('')
@@ -8269,7 +9044,7 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
             <tr>
                 <td>${escapeHtml(item.number)}</td>
                 <td>${escapeHtml(item.text || '-')}</td>
-                <td style="text-align:right">${escapeHtml(item.value)}</td>
+                <td style="text-align:right">${escapeHtml(formatNumericAmount(item.value))}</td>
             </tr>
         `).join('')
         : '<tr><td colspan="3">暂无数据</td></tr>';
@@ -8278,21 +9053,87 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
         ? userTotals.map((item) => `
             <tr>
                 <td>${escapeHtml(item.userName)}</td>
-                <td style="text-align:right">${escapeHtml(item.amount)}</td>
+                <td style="text-align:right">${escapeHtml(formatNumericAmount(item.amount))}</td>
             </tr>
         `).join('')
         : '<tr><td colspan="2">暂无数据</td></tr>';
 
-    const originalRowsHtml = originalData.length > 0
-        ? originalData.map((item, index) => `
+    const winningSummaryText = (viewRegions.length > 0 ? viewRegions : ['new_ao', 'old_ao', 'hongkong'])
+        .map((regionKey) => {
+            const config = winningConfigs[regionKey];
+            if (!config) return '';
+            if (config.numberText) return `${config.regionLabel}${config.numberText}`;
+            if (config.error) return `${config.regionLabel}无效`;
+            return `${config.regionLabel}未填`;
+        })
+        .filter(Boolean)
+        .join('，') || '-';
+
+    const rowsWithWinning = exportOriginalRows.filter((item) => {
+        const config = winningConfigs[item.regionKey];
+        return !!(config && config.numberText);
+    });
+    const computablePnlRows = rowsWithWinning.filter(item => Number.isFinite(item.pnl));
+    const unresolvedPnlRows = rowsWithWinning.length - computablePnlRows.length;
+    const totalOrderForPnl = computablePnlRows.reduce((sum, item) => sum + (Number(item.orderTotal) || 0), 0);
+    const totalPayoutForPnl = computablePnlRows.reduce((sum, item) => sum + (Number(item.payout) || 0), 0);
+    const totalPnl = computablePnlRows.reduce((sum, item) => sum + (Number(item.pnl) || 0), 0);
+    const hasWinningInput = Object.values(winningConfigs).some(config => !!(config && config.numberText));
+    const hasWinningRows = rowsWithWinning.length > 0;
+    const totalPnlMetaText = hasWinningInput
+        ? (hasWinningRows
+            ? (computablePnlRows.length > 0 ? formatSignedAmount(totalPnl) : '无法计算')
+            : '当前范围无对应盘口数据')
+        : '未填写中奖号';
+    const totalPnlMetaClass = !hasWinningInput || !hasWinningRows || computablePnlRows.length <= 0
+        ? 'muted'
+        : (Math.abs(totalPnl) < 1e-9 ? 'pnl-even' : (totalPnl > 0 ? 'pnl-profit' : 'pnl-loss'));
+    const pnlCoverageMetaText = hasWinningInput
+        ? (hasWinningRows
+            ? `${computablePnlRows.length}/${rowsWithWinning.length}${unresolvedPnlRows > 0 ? `（${unresolvedPnlRows}条未算）` : ''}`
+            : '当前范围无对应盘口数据')
+        : '-';
+
+    const originalRowsHtml = exportOriginalRows.length > 0
+        ? exportOriginalRows.map((item) => {
+            const payout = Number(item.payout);
+            const pnl = Number(item.pnl);
+            const totalText = Number.isFinite(item.orderTotal) ? formatNumericAmount(item.orderTotal) : '-';
+            const payoutText = Number.isFinite(payout) ? formatNumericAmount(payout) : '-';
+            const pnlText = Number.isFinite(pnl) ? formatSignedAmount(pnl) : '-';
+            const pnlClass = Number.isFinite(pnl)
+                ? (Math.abs(pnl) < 1e-9 ? 'pnl-even' : (pnl > 0 ? 'pnl-profit' : 'pnl-loss'))
+                : 'muted';
+            const winLossClass = item.winLoss === '赢'
+                ? 'result-win'
+                : (item.winLoss === '输' ? 'result-loss' : 'muted');
+            return `
             <tr>
-                <td style="text-align:right">${index + 1}</td>
+                <td style="text-align:right">${item.serialNo}</td>
                 <td>${escapeHtml(item.userName || '-')}</td>
                 <td>${escapeHtml(item.regionLabel || item.regionKey || '-')}</td>
+                <td style="text-align:right">${escapeHtml(item.winningNumber || '-')}</td>
+                <td class="${winLossClass}">${escapeHtml(item.winLoss || '-')}</td>
+                <td style="text-align:right">${escapeHtml(totalText)}</td>
+                <td style="text-align:right">${escapeHtml(payoutText)}</td>
+                <td style="text-align:right" class="${pnlClass}">${escapeHtml(pnlText)}</td>
                 <td>${escapeHtml(item.message || '').replace(/\n/g, '<br>')}</td>
             </tr>
-        `).join('')
-        : '<tr><td colspan="4">暂无原始消息</td></tr>';
+        `;
+        }).join('')
+        : '<tr><td colspan="9">暂无原始消息</td></tr>';
+
+    const originalSummaryRowHtml = hasWinningRows
+        ? `
+            <tr class="summary-row">
+                <td colspan="5">盈亏合计（${escapeHtml(`${computablePnlRows.length}/${rowsWithWinning.length}`)}）</td>
+                <td style="text-align:right">${escapeHtml(computablePnlRows.length > 0 ? formatNumericAmount(totalOrderForPnl) : '-')}</td>
+                <td style="text-align:right">${escapeHtml(computablePnlRows.length > 0 ? formatNumericAmount(totalPayoutForPnl) : '-')}</td>
+                <td style="text-align:right" class="${totalPnlMetaClass}">${escapeHtml(computablePnlRows.length > 0 ? formatSignedAmount(totalPnl) : '-')}</td>
+                <td>${escapeHtml(unresolvedPnlRows > 0 ? `${unresolvedPnlRows}条无法计算` : '全部可计算')}</td>
+            </tr>
+        `
+        : '';
 
     const formatLabel = format === 'word' ? 'Word' : 'Excel';
     return `<!DOCTYPE html>
@@ -8308,6 +9149,13 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
     table { width: 100%; border-collapse: collapse; margin-top: 8px; }
     th, td { border: 1px solid #cbd5e1; padding: 6px 8px; font-size: 13px; vertical-align: top; }
     th { background: #f1f5f9; text-align: left; }
+    .summary-row td { background: #f8fafc; font-weight: 700; }
+    .pnl-profit { color: #047857; font-weight: 700; }
+    .pnl-loss { color: #b91c1c; font-weight: 700; }
+    .pnl-even { color: #0f766e; font-weight: 700; }
+    .muted { color: #64748b; }
+    .result-win { color: #15803d; font-weight: 700; }
+    .result-loss { color: #b91c1c; font-weight: 700; }
   </style>
 </head>
 <body>
@@ -8317,6 +9165,9 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
     客户：${escapeHtml(users.join('，') || '-')}<br>
     查看盘口：${escapeHtml(regionLabels.join('、') || '-')}<br>
     总数：${escapeHtml(scopeData.totalCount || 0)}<br>
+    中奖号：${escapeHtml(winningSummaryText)}<br>
+    总盈亏：<span class="${totalPnlMetaClass}">${escapeHtml(totalPnlMetaText)}</span><br>
+    盈亏计算条数：${escapeHtml(pnlCoverageMetaText)}<br>
     导出时间：${escapeHtml(scopeData.exportedAt || new Date().toLocaleString('zh-CN'))}
   </div>
 
@@ -8347,9 +9198,9 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
   <h2>原始消息</h2>
   <table>
     <thead>
-      <tr><th>序号</th><th>客户</th><th>盘口</th><th>内容</th></tr>
+      <tr><th>序号</th><th>客户</th><th>盘口</th><th>中奖号</th><th>输赢</th><th>本条总注</th><th>本条派彩</th><th>本条盈亏</th><th>内容</th></tr>
     </thead>
-    <tbody>${originalRowsHtml}</tbody>
+    <tbody>${originalRowsHtml}${originalSummaryRowHtml}</tbody>
   </table>
 </body>
 </html>`;
@@ -8702,6 +9553,9 @@ window.onclick = function(event) {
     const editOriginalModal = document.getElementById('editOriginalModal');
     const licenseModal = document.getElementById('licenseModal');
     const planModal = document.getElementById('planModal');
+    const hedgeReportModal = document.getElementById('hedgeReportModal');
+    const settingsModal = document.getElementById('settingsModal');
+    const passwordChangeModal = document.getElementById('passwordChangeModal');
     
     if (event.target === modal) {
         if (isAmbiguityChoiceModalOpen()) return;
@@ -8722,11 +9576,21 @@ window.onclick = function(event) {
     if (event.target === planModal) {
         closePlanModal();
     }
+    if (event.target === hedgeReportModal) {
+        closeHedgeReportModal();
+    }
+    if (event.target === settingsModal) {
+        closeSettingsModal();
+    }
+    if (event.target === passwordChangeModal) {
+        closePasswordChangeModal();
+    }
 }
 
 // 导出全局函数
 window.addUser = addUser;
 window.handleSummary = handleSummary;
+window.handleOriginalDataSearchInput = handleOriginalDataSearchInput;
 window.clearUserData = clearUserData;
 window.openModal = openModal;
 window.closeModal = closeModal;
@@ -8771,11 +9635,24 @@ window.toggleAttributeEditMode = toggleAttributeEditMode;
 window.confirmAttributeEdit = confirmAttributeEdit;
 window.cancelAttributeEdit = cancelAttributeEdit;
 window.dismissLegalNotice = dismissLegalNotice;
+window.openHedgeReportModal = openHedgeReportModal;
+window.closeHedgeReportModal = closeHedgeReportModal;
+window.calculateHedgeReport = calculateHedgeReport;
+window.copyHedgeReportMessage = copyHedgeReportMessage;
+window.openSettingsModal = openSettingsModal;
+window.closeSettingsModal = closeSettingsModal;
+window.openPlanModalFromSettings = openPlanModalFromSettings;
+window.openLicenseModalFromSettings = openLicenseModalFromSettings;
+window.openAboutModalFromSettings = openAboutModalFromSettings;
+window.openPasswordChangeModal = openPasswordChangeModal;
+window.closePasswordChangeModal = closePasswordChangeModal;
+window.submitPasswordChange = submitPasswordChange;
 window.openLicenseModal = openLicenseModal;
 window.closeLicenseModal = closeLicenseModal;
 window.refreshLicenseStatus = refreshLicenseStatus;
 window.openPlanModal = openPlanModal;
 window.closePlanModal = closePlanModal;
+window.switchTrialPlanTier = switchTrialPlanTier;
 window.pickOcrImage = pickOcrImage;
 window.runOcrFromSelectedImage = runOcrFromSelectedImage;
 window.clearOcrImage = clearOcrImage;

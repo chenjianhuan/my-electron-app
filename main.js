@@ -29,9 +29,12 @@ let lastClipboardText = '';
 let unlockedModuleId = null;
 let unlockedModuleSecret = '';
 let activeModuleId = MODULE_IDS.AUTH;
+const MODULE_PASSWORD_OVERRIDE_FILE = 'module-password-overrides.json';
+const TRIAL_PLAN_PREFERENCE_FILE = 'trial-plan-preference.json';
+const basePasswordRoutes = buildPasswordRoutesFromEnv(process.env);
 
 const modulePasswordRouter = new ModulePasswordRouter({
-  passwordRoutes: buildPasswordRoutesFromEnv(process.env),
+  passwordRoutes: basePasswordRoutes,
   maxAttempts: Number.parseInt(process.env.MC_PASSWORD_MAX_ATTEMPTS || '', 10),
   lockDurationMs: Number.parseInt(process.env.MC_PASSWORD_LOCK_MS || '', 10),
 });
@@ -123,6 +126,45 @@ function buildAccessPlanContext(options = {}) {
     billingCycle: options.billingCycle || 'lifetime',
     source: options.source || 'license',
   });
+}
+
+function normalizeRuntimePlanTier(value, fallback = 'plus') {
+  const tier = String(value || '').trim().toLowerCase();
+  if (tier === 'plus' || tier === 'pro') return tier;
+  return fallback;
+}
+
+function getTrialPlanPreferencePath() {
+  return path.join(app.getPath('userData'), TRIAL_PLAN_PREFERENCE_FILE);
+}
+
+function readTrialPlanTierPreference() {
+  try {
+    const filePath = getTrialPlanPreferencePath();
+    if (!fs.existsSync(filePath)) {
+      return 'plus';
+    }
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return normalizeRuntimePlanTier(parsed && parsed.tier, 'plus');
+  } catch (error) {
+    return 'plus';
+  }
+}
+
+function saveTrialPlanTierPreference(tier) {
+  try {
+    const nextTier = normalizeRuntimePlanTier(tier, 'plus');
+    const filePath = getTrialPlanPreferencePath();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify({
+      tier: nextTier,
+      updatedAt: new Date().toISOString(),
+    }, null, 2));
+    return true;
+  } catch (error) {
+    console.warn('保存试用套餐偏好失败:', error && error.message ? error.message : error);
+    return false;
+  }
 }
 
 function copyDirectorySync(source, target) {
@@ -221,6 +263,67 @@ function resolvePublicFilePath(fileName) {
     : path.join(__dirname, 'public', fileName);
 }
 
+function resolveModulePasswordOverridePath() {
+  return path.join(app.getPath('userData'), MODULE_PASSWORD_OVERRIDE_FILE);
+}
+
+function buildModulePasswordOverridesForPersist() {
+  const baseMap = new Map(
+    (basePasswordRoutes || []).map((item) => [String(item.moduleId || ''), String(item.password || '')])
+  );
+  return modulePasswordRouter
+    .exportPasswordRoutes()
+    .filter((item) => baseMap.get(String(item.moduleId || '')) !== String(item.password || ''))
+    .map((item) => ({
+      moduleId: String(item.moduleId || ''),
+      password: String(item.password || ''),
+    }));
+}
+
+function saveModulePasswordOverrides() {
+  const filePath = resolveModulePasswordOverridePath();
+  const routes = buildModulePasswordOverridesForPersist();
+  if (!routes.length) {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+    return { ok: true, filePath, count: 0 };
+  }
+
+  const payload = {
+    savedAt: new Date().toISOString(),
+    routes,
+  };
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  return { ok: true, filePath, count: routes.length };
+}
+
+function loadModulePasswordOverrides() {
+  const filePath = resolveModulePasswordOverridePath();
+  if (!fs.existsSync(filePath)) {
+    return { ok: true, filePath, count: 0 };
+  }
+
+  const rawText = fs.readFileSync(filePath, 'utf8');
+  const payload = JSON.parse(rawText || '{}');
+  const routes = Array.isArray(payload && payload.routes) ? payload.routes : [];
+  let count = 0;
+
+  for (const route of routes) {
+    const result = modulePasswordRouter.setModulePassword(
+      route && route.moduleId,
+      route && route.password,
+      { allowCreate: true }
+    );
+    if (result && result.ok) {
+      count += 1;
+    }
+  }
+
+  return { ok: true, filePath, count };
+}
+
 async function loadModulePage(moduleId) {
   const target = MODULE_DEFINITIONS[moduleId];
   if (!target) {
@@ -271,7 +374,7 @@ function createWindow() {
     // 添加窗口图标
     icon: path.join(__dirname, 'public', 'icon.icns'),
     // 添加窗口标题
-    title: 'MessageCounter - 安全入口',
+    title: MODULE_DEFINITIONS[MODULE_IDS.AUTH].title,
     // 添加窗口最小尺寸
     minWidth: adaptiveBounds.minWidth,
     minHeight: adaptiveBounds.minHeight,
@@ -342,6 +445,32 @@ function registerLicenseIpc() {
   ipcMain.handle('plan:get-catalog', () => {
     return getPublicPlanCatalog();
   });
+  ipcMain.handle('plan:switch-trial-tier', (_event, payload) => {
+    const tier = normalizeRuntimePlanTier(payload && payload.tier, '');
+    if (!tier) {
+      return { ok: false, reason: '套餐参数无效' };
+    }
+    if (!appAccessStatus || appAccessStatus.mode !== 'trial') {
+      return { ok: false, reason: '当前非试用模式，不能切换套餐' };
+    }
+
+    const currentTier = normalizeRuntimePlanTier(appAccessStatus.plan && appAccessStatus.plan.tier, 'plus');
+    if (currentTier === tier) {
+      return { ok: true, changed: false, status: appAccessStatus };
+    }
+
+    appAccessStatus.plan = buildAccessPlanContext({
+      tier,
+      billingCycle: 'lifetime',
+      source: 'trial',
+    });
+    saveTrialPlanTierPreference(tier);
+
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('app-access-status-changed', appAccessStatus);
+    }
+    return { ok: true, changed: true, status: appAccessStatus };
+  });
   ipcMain.on('clipboard-monitor:start', () => {
     startClipboardMonitor();
   });
@@ -355,19 +484,35 @@ function registerLicenseIpc() {
       return '';
     }
   });
+  ipcMain.handle('reader:read-book-file', (_event, payload) => {
+    const requestedPath = String((payload && payload.path) || '');
+    const normalizedPath = requestedPath.replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!normalizedPath.startsWith('books/') || normalizedPath.includes('..')) {
+      return { ok: false, reason: '非法文件路径' };
+    }
+    try {
+      const bookPath = resolvePublicFilePath(normalizedPath);
+      const text = fs.readFileSync(bookPath, 'utf8');
+      return { ok: true, text };
+    } catch (error) {
+      return { ok: false, reason: error && error.message ? error.message : '读取文件失败' };
+    }
+  });
 }
 
 function registerModuleRoutingIpc() {
   ipcMain.handle('module-auth:get-state', () => {
     const lockState = modulePasswordRouter.getLockState();
     const showPasswordHint = process.env.MC_SHOW_DEFAULT_PASSWORD_HINT === '1' || !app.isPackaged;
+    const lotteryRoute = modulePasswordRouter.getPasswordRoute(MODULE_IDS.LOTTERY);
+    const wechatRoute = modulePasswordRouter.getPasswordRoute(MODULE_IDS.WECHAT);
     return {
       ...lockState,
       showPasswordHint,
       defaultPasswords: showPasswordHint
         ? {
-          lottery: DEFAULT_PASSWORD_A,
-          wechat: DEFAULT_PASSWORD_B,
+          lottery: (lotteryRoute && lotteryRoute.password) || DEFAULT_PASSWORD_A,
+          wechat: (wechatRoute && wechatRoute.password) || DEFAULT_PASSWORD_B,
         }
         : null,
       routeHints: [
@@ -384,6 +529,38 @@ function registerModuleRoutingIpc() {
       unlockedModuleSecret = String(result.secretKey || (payload && payload.password) || '');
     }
     return result;
+  });
+
+  ipcMain.handle('module-auth:update-password', (_event, payload) => {
+    const moduleId = String((payload && payload.moduleId) || '');
+    if (!MODULE_DEFINITIONS[moduleId] || moduleId === MODULE_IDS.AUTH) {
+      return { ok: false, code: 'INVALID_MODULE', reason: '模块不支持修改密码' };
+    }
+
+    if (activeModuleId !== moduleId || unlockedModuleId !== moduleId) {
+      return { ok: false, code: 'MODULE_NOT_UNLOCKED', reason: '请先使用当前密码进入该模块后再修改密码' };
+    }
+
+    const currentPassword = payload && payload.currentPassword ? String(payload.currentPassword) : '';
+    const nextPassword = payload && payload.nextPassword ? String(payload.nextPassword) : '';
+    const result = modulePasswordRouter.updateModulePassword(moduleId, currentPassword, nextPassword);
+    if (!result || !result.ok) {
+      return result || { ok: false, code: 'UNKNOWN', reason: '密码更新失败' };
+    }
+
+    try {
+      saveModulePasswordOverrides();
+    } catch (error) {
+      modulePasswordRouter.setModulePassword(moduleId, result.previousPassword, { allowCreate: true });
+      return {
+        ok: false,
+        code: 'SAVE_FAILED',
+        reason: `保存失败，已回滚: ${error && error.message ? error.message : String(error)}`,
+      };
+    }
+
+    unlockedModuleSecret = String(result.password || '');
+    return { ok: true, moduleId, reason: '密码修改成功，下次请使用新密码登录。' };
   });
 
   ipcMain.handle('module-router:get-current', () => {
@@ -478,12 +655,13 @@ function setupAccessControl() {
   trialGuard = new TrialGuard({ app, trialDays: 3 });
   const trialStatus = trialGuard.checkTrialAccess();
   if (trialStatus.allowed) {
+    const trialTier = readTrialPlanTierPreference();
     appAccessStatus = {
       mode: 'trial',
       authorized: true,
       trial: trialStatus,
       license: initialLicenseStatus,
-      plan: buildAccessPlanContext({ tier: 'plus', billingCycle: 'lifetime', source: 'trial' }),
+      plan: buildAccessPlanContext({ tier: trialTier, billingCycle: 'lifetime', source: 'trial' }),
     };
     return true;
   }
@@ -506,6 +684,15 @@ if (relaunchFromTempOnWindows()) {
 // 应用准备就绪
 app.whenReady().then(() => {
   try {
+    try {
+      const loadResult = loadModulePasswordOverrides();
+      if (loadResult.count > 0) {
+        console.log(`Loaded ${loadResult.count} module password override(s)`);
+      }
+    } catch (error) {
+      console.error('Failed to load module password overrides:', error);
+    }
+
     registerLicenseIpc();
     registerModuleRoutingIpc();
     if (!setupAccessControl()) {

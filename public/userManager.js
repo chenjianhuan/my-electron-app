@@ -10,6 +10,8 @@ class UserManager {
         this.isSummaryMode = false;
         this.editingOriginal = null;
         this.virtualListStates = {};
+        this.originalOrderTotalCache = new Map();
+        this.originalDataSearchKeyword = '';
     }
 
     getVirtualListKey(container) {
@@ -440,6 +442,169 @@ class UserManager {
         return String(entry).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     }
 
+    escapeHtmlText(value) {
+        return String(value || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    setOriginalDataSearchKeyword(keyword = '') {
+        const next = String(keyword == null ? '' : keyword);
+        if (next === this.originalDataSearchKeyword) return;
+        this.originalDataSearchKeyword = next;
+        this.renderOriginalData();
+    }
+
+    getOriginalDataSearchKeyword() {
+        return this.originalDataSearchKeyword;
+    }
+
+    isOriginalMessageMatched(message, keyword = this.originalDataSearchKeyword) {
+        const raw = this.extractOriginalMessageText(message);
+        const needle = String(keyword || '').trim().toLocaleLowerCase();
+        if (!needle) return false;
+        return raw.toLocaleLowerCase().includes(needle);
+    }
+
+    renderOriginalMessageHighlightHtml(message) {
+        const raw = this.extractOriginalMessageText(message);
+        const keyword = String(this.originalDataSearchKeyword || '').trim();
+        if (!keyword) return this.escapeHtmlText(raw);
+
+        const lowerRaw = raw.toLocaleLowerCase();
+        const lowerKeyword = keyword.toLocaleLowerCase();
+        if (!lowerKeyword) return this.escapeHtmlText(raw);
+
+        let cursor = 0;
+        let html = '';
+        while (cursor < raw.length) {
+            const matchIndex = lowerRaw.indexOf(lowerKeyword, cursor);
+            if (matchIndex < 0) {
+                html += this.escapeHtmlText(raw.slice(cursor));
+                break;
+            }
+            html += this.escapeHtmlText(raw.slice(cursor, matchIndex));
+            html += `<span class="message-text-highlight">${this.escapeHtmlText(raw.slice(matchIndex, matchIndex + keyword.length))}</span>`;
+            cursor = matchIndex + keyword.length;
+        }
+        return html;
+    }
+
+    extractOriginalMessageTotal(entry) {
+        if (!entry || typeof entry !== 'object') return null;
+        const candidates = ['totalAmount', 'orderTotal', 'total', 'sum'];
+        for (const key of candidates) {
+            const value = Number(entry[key]);
+            if (Number.isFinite(value) && value >= 0) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    formatAmountValue(value) {
+        const amount = Number(value);
+        if (!Number.isFinite(amount) || Math.abs(amount) < 1e-9) return '0';
+        if (Number.isInteger(amount)) return `${amount}`;
+        return amount.toFixed(4).replace(/\.?0+$/, '');
+    }
+
+    calculateOriginalOrderTotalLegacy(sourceMessage) {
+        const raw = String(sourceMessage || '');
+        let total = 0;
+
+        const legacyMatches = [...raw.matchAll(/((\d+)[\s.,\-]*)+值[:：]\s*(\d+(?:\.\d+)?)/g)];
+        legacyMatches.forEach((match) => {
+            const numbers = String(match[0] || '').split('值')[0].match(/\d+/g) || [];
+            const amount = Number.parseFloat(match[match.length - 1]);
+            if (!numbers.length || !Number.isFinite(amount) || amount <= 0) return;
+            total += numbers.length * amount;
+        });
+        if (total > 0) return total;
+
+        const modernMatches = [...raw.matchAll(/([\d\s.,\-—，。]+)[～~]\s*各(?:号)?\s*(\d+(?:\.\d+)?)/g)];
+        modernMatches.forEach((match) => {
+            const numbers = String(match[1] || '').match(/\d+/g) || [];
+            const amount = Number.parseFloat(match[2]);
+            if (!numbers.length || !Number.isFinite(amount) || amount <= 0) return;
+            total += numbers.length * amount;
+        });
+        return total;
+    }
+
+    calculateOriginalOrderTotal(sourceMessage, userName, regionKey = this.activeRegion) {
+        const raw = this.extractOriginalMessageText(sourceMessage);
+        if (!raw.trim()) return 0;
+        const targetRegion = regionKey || this.activeRegion;
+        let parseFailed = false;
+
+        if (window.messageProcessor && typeof window.messageProcessor.parseMessage === 'function') {
+            try {
+                const parsed = window.messageProcessor.parseMessage(raw, { clientId: userName });
+                let regionTotal = 0;
+                let allRegionTotal = 0;
+                (parsed.entries || []).forEach((entry) => {
+                    const amount = Number(entry && entry.amount);
+                    const numberCount = Array.isArray(entry && entry.numbers) ? entry.numbers.length : 0;
+                    if (!Number.isFinite(amount) || amount <= 0 || numberCount <= 0) return;
+                    const entryTotal = numberCount * amount;
+                    allRegionTotal += entryTotal;
+                    const entryRegion = entry && entry.regionKey ? entry.regionKey : targetRegion;
+                    if (entryRegion === targetRegion) {
+                        regionTotal += entryTotal;
+                    }
+                });
+                if (regionTotal > 0) {
+                    return regionTotal;
+                }
+                if (allRegionTotal > 0) {
+                    // 兼容历史数据：若当前规则默认盘口变更导致分区不匹配，至少展示该条原始消息的总额。
+                    return allRegionTotal;
+                }
+            } catch (error) {
+                parseFailed = true;
+            }
+        }
+
+        const legacyTotal = this.calculateOriginalOrderTotalLegacy(raw);
+        if (legacyTotal > 0) {
+            return legacyTotal;
+        }
+        if (parseFailed) {
+            return null;
+        }
+        return 0;
+    }
+
+    getOriginalOrderTotalCached(row) {
+        if (!row || typeof row !== 'object') return 0;
+        const storedTotal = this.extractOriginalMessageTotal(row.originalEntry);
+        if (storedTotal != null) {
+            return storedTotal;
+        }
+        const userName = String(row.userName || '');
+        const regionKey = String(row.regionKey || this.activeRegion || '');
+        const index = Number.isInteger(row.index) ? row.index : -1;
+        const message = this.extractOriginalMessageText(row.message);
+        const cacheKey = `${userName}|${regionKey}|${index}|${message}`;
+        if (this.originalOrderTotalCache.has(cacheKey)) {
+            return this.originalOrderTotalCache.get(cacheKey) || 0;
+        }
+
+        const total = this.calculateOriginalOrderTotal(message, userName, regionKey);
+        this.originalOrderTotalCache.set(cacheKey, total);
+        if (this.originalOrderTotalCache.size > 8000) {
+            const first = this.originalOrderTotalCache.keys().next();
+            if (!first.done) {
+                this.originalOrderTotalCache.delete(first.value);
+            }
+        }
+        return total;
+    }
+
     hasOriginalDataAt(regionData, index) {
         return !!(regionData
             && Array.isArray(regionData.originalData)
@@ -451,7 +616,17 @@ class UserManager {
     normalizeUserRecord(userRecord) {
         const normalizeOriginalDataArray = (rawList) => {
             if (!Array.isArray(rawList)) return [];
-            return rawList.map(item => this.extractOriginalMessageText(item));
+            return rawList.map((item) => {
+                const message = this.extractOriginalMessageText(item);
+                if (item && typeof item === 'object') {
+                    const totalAmount = this.extractOriginalMessageTotal(item);
+                    if (totalAmount != null) {
+                        return { message, totalAmount };
+                    }
+                    return { message };
+                }
+                return message;
+            });
         };
 
         const normalizeRegionPayload = (sourceRegion) => {
@@ -737,6 +912,7 @@ class UserManager {
                     originalData.push({
                         userName,
                         index,
+                        originalEntry: message,
                         message: this.extractOriginalMessageText(message),
                         regionKey,
                         regionLabel: this.getRegionLabel(regionKey)
@@ -1202,6 +1378,7 @@ class UserManager {
     renderOriginalData() {
         const originalDataListElement = document.getElementById('originalDataList');
         if (!originalDataListElement) return;
+        this.originalOrderTotalCache.clear();
 
         let rows = [];
         if (this.isSummaryMode) {
@@ -1210,10 +1387,24 @@ class UserManager {
             rows = this.collectSelectedOriginalRows();
         }
 
+        const keyword = String(this.originalDataSearchKeyword || '').trim();
+        if (keyword) {
+            const matchedRows = [];
+            const unmatchedRows = [];
+            rows.forEach((row) => {
+                if (this.isOriginalMessageMatched(row && row.message, keyword)) {
+                    matchedRows.push(row);
+                } else {
+                    unmatchedRows.push(row);
+                }
+            });
+            rows = matchedRows.concat(unmatchedRows);
+        }
+
         this.renderVirtualRows(
             originalDataListElement,
             rows,
-            (row) => this.createOriginalDataRow(row),
+            (row, index) => this.createOriginalDataRow(row, index),
             {
                 estimateItemHeight: 110,
                 getItemEstimate: (row) => this.estimateOriginalRowHeight(row),
@@ -1228,9 +1419,10 @@ class UserManager {
     collectSelectedOriginalRows() {
         const selectedData = this.getSelectedUserData();
         if (!selectedData.users.length) return [];
-        return selectedData.originalData.map(({ userName, index, message, regionKey, regionLabel }) => ({
+        return selectedData.originalData.map(({ userName, index, originalEntry, message, regionKey, regionLabel }) => ({
             userName,
             index,
+            originalEntry,
             message: this.extractOriginalMessageText(message),
             regionKey,
             regionLabel: regionLabel || this.getRegionLabel(regionKey)
@@ -1248,6 +1440,7 @@ class UserManager {
                     rows.push({
                         userName,
                         index,
+                        originalEntry: data,
                         message: this.extractOriginalMessageText(data),
                         regionKey,
                         regionLabel: this.getRegionLabel(regionKey)
@@ -1270,12 +1463,15 @@ class UserManager {
         return Math.max(72, Math.min(1400, estimated));
     }
 
-    createOriginalDataRow(row) {
+    createOriginalDataRow(row, rowIndex = 0) {
         const li = document.createElement('li');
         li.classList.add('original-data-list');
         const regionLabel = row.regionLabel || this.getRegionLabel(row.regionKey);
         const rawMessage = this.extractOriginalMessageText(row.message);
-        const metaText = `${row.userName}（${regionLabel}）`;
+        const serialNo = Number.isInteger(rowIndex) ? (rowIndex + 1) : 0;
+        const orderTotal = this.getOriginalOrderTotalCached(row);
+        const totalText = orderTotal == null ? '未识别' : this.formatAmountValue(orderTotal);
+        const metaText = `${serialNo} ${row.userName}（${regionLabel}）总：${totalText}`;
         const fullMessage = `${metaText}\n${rawMessage}`;
         li.title = fullMessage;
 
@@ -1288,7 +1484,7 @@ class UserManager {
 
         const textSpan = document.createElement('span');
         textSpan.classList.add('message-text');
-        textSpan.textContent = rawMessage;
+        textSpan.innerHTML = this.renderOriginalMessageHighlightHtml(rawMessage);
 
         contentWrap.appendChild(metaSpan);
         contentWrap.appendChild(textSpan);
@@ -1366,7 +1562,10 @@ class UserManager {
             throw new Error('消息不能为空');
         }
 
-        regionData.originalData[index] = message;
+        const totalAmount = this.calculateOriginalOrderTotal(message, userName, regionKey);
+        regionData.originalData[index] = totalAmount == null
+            ? { message }
+            : { message, totalAmount };
         this.recalculateUserData(userName, regionKey);
         this.renderAllSections();
         this.saveUserData();
@@ -1640,6 +1839,10 @@ class UserManager {
 
     setMultiSelectEnabled(enabled) {
         this.isMultiSelectEnabled = !!enabled;
+        const toggle = document.getElementById('multiSelectToggle');
+        if (toggle) {
+            toggle.checked = this.isMultiSelectEnabled;
+        }
         if (!this.isMultiSelectEnabled) {
             const selected = this.getSelectedUsers();
             if (selected.length > 1) {
