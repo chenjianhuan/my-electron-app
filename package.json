@@ -1,8 +1,8 @@
 {
   "name": "messagecounter",
-  "version": "3.0.0",
+  "version": "5.0.1",
   "author": "小张",
-  "description": "插上 U 盘五分钟,解决你一天的统计工作量",
+  "description": "一款支持内置书库与本地 TXT 导入的离线小说阅读器",
   "main": "main.js",
   "dependencies": {
     "antd": "^5.20.5",
@@ -39,7 +39,7 @@
   },
   "build": {
     "appId": "com.messagecounter.app",
-    "productName": "聊天数据管家",
+    "productName": "古典小说阅读器",
     "asar": true,
     "directories": {
       "output": "dist"

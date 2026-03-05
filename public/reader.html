@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BookReader - 小说阅读器</title>
+  <link rel="stylesheet" href="./reader.css">
+</head>
+<body>
+  <div class="bg-shape bg-shape-a" aria-hidden="true"></div>
+  <div class="bg-shape bg-shape-b" aria-hidden="true"></div>
+
+  <div class="app-shell">
+    <aside class="library-panel">
+      <div class="panel-head">
+        <p class="kicker">BookReader</p>
+        <h1>内置书库</h1>
+        <p class="subtitle">支持内置全本阅读与本地 TXT 导入</p>
+      </div>
+
+      <div class="search-dock">
+        <input id="searchInput" type="text" placeholder="搜索书名/作者">
+        <button id="searchBtn" class="ghost-btn" type="button">搜索</button>
+        <p id="searchTip" class="search-tip">在此框输入关键词可筛选书籍。</p>
+      </div>
+
+      <div class="library-actions">
+        <button id="importTxtBtn" class="ghost-btn" type="button">导入 TXT</button>
+        <button id="resetCustomBtn" class="ghost-btn danger" type="button">清空导入</button>
+        <input id="txtFileInput" type="file" accept=".txt,text/plain" hidden>
+      </div>
+
+      <ul id="bookList" class="book-list" aria-label="小说列表"></ul>
+    </aside>
+
+    <main class="reader-panel">
+      <header class="reader-head">
+        <div>
+          <p id="bookMeta" class="book-meta">-</p>
+          <h2 id="bookTitle" class="book-title">-</h2>
+          <p id="bookDesc" class="book-desc">-</p>
+        </div>
+
+        <div class="toolbar">
+          <label class="tool-item" for="themeSelect">
+            主题
+            <select id="themeSelect">
+              <option value="paper">宣纸</option>
+              <option value="sepia">茶墨</option>
+              <option value="night">夜读</option>
+            </select>
+          </label>
+
+          <label class="tool-item" for="fontSizeRange">
+            字号
+            <input id="fontSizeRange" type="range" min="14" max="28" step="1">
+          </label>
+
+          <span id="fontSizeValue" class="size-value">18px</span>
+          <span id="appVersionBadge" class="version-badge">v-</span>
+        </div>
+      </header>
+
+      <section class="chapter-strip-wrap" aria-label="章节导航">
+        <button id="prevChapterBtn" class="chip-btn" type="button">上一章</button>
+        <div id="chapterStrip" class="chapter-strip"></div>
+        <button id="nextChapterBtn" class="chip-btn" type="button">下一章</button>
+      </section>
+
+      <article id="readerContent" class="reader-content" tabindex="0" aria-live="polite"></article>
+    </main>
+  </div>
+
+  <template id="bookCardTemplate">
+    <li class="book-card">
+      <button class="book-card-btn" type="button">
+        <div>
+          <p class="book-card-tag"></p>
+          <h3 class="book-card-title"></h3>
+          <p class="book-card-author"></p>
+        </div>
+        <p class="book-card-desc"></p>
+      </button>
+    </li>
+  </template>
+
+  <template id="chapterChipTemplate">
+    <button class="chapter-chip" type="button"></button>
+  </template>
+
+  <script src="./reader.js"></script>
+</body>
+</html>
