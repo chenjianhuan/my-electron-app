@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const UserModel = require('../models/userModel');
 const OcrService = require('../services/OcrService');
+const AiSemanticService = require('../services/AiSemanticService');
 const WechatModel = require('../models/wechatModel');
 
 function sanitizeExportBaseName(rawName, fallbackName) {
@@ -20,6 +21,7 @@ class MainController {
   constructor(app, options = {}) {
     this.userModel = new UserModel(app);
     this.ocrService = new OcrService(app);
+    this.aiSemanticService = new AiSemanticService(app);
     this.wechatModel = new WechatModel(app, {
       getSecret: typeof options.getWechatSecret === 'function' ? options.getWechatSecret : () => '',
     });
@@ -124,6 +126,40 @@ class MainController {
           success: false,
           source: 'none',
           message: error.message || 'OCR识别失败',
+        };
+      }
+    });
+
+    ipcMain.handle('ai:get-semantic-status', async (_event, payload) => {
+      try {
+        return await this.aiSemanticService.getStatus(payload || {});
+      } catch (error) {
+        return {
+          ok: false,
+          available: false,
+          reason: 'status_failed',
+          message: error.message || '读取本地 AI 状态失败',
+        };
+      }
+    });
+
+    ipcMain.handle('ai:rewrite-message', async (_event, payload) => {
+      try {
+        let safePayload = payload || {};
+        if (typeof payload === 'string') {
+          try {
+            safePayload = JSON.parse(decodeURIComponent(payload));
+          } catch (error) {
+            safePayload = {};
+          }
+        }
+        return await this.aiSemanticService.rewriteMessage(safePayload || {});
+      } catch (error) {
+        return {
+          ok: false,
+          available: false,
+          reason: 'rewrite_failed',
+          message: error.message || '本地 AI 语义修正失败',
         };
       }
     });

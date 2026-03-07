@@ -13,6 +13,14 @@ let isAttributeEditMode = false;
 let attributeSwapSource = null;
 let attributeLongPressTimer = null;
 let speechVoice = null;
+let recognizeSpeechRecognition = null;
+let recognizeSpeechListening = false;
+let recognizeSpeechSupported = false;
+let recognizeSpeechFinalText = '';
+let recognizeSpeechInterimText = '';
+let recognizeSpeechLastError = '';
+let recognizeSpeechDiscardOnEnd = false;
+let recognizeSpeechManualStop = false;
 let currentLicenseStatus = null;
 let licenseLastUpdatedAt = null;
 let appAccessStatus = null;
@@ -21,6 +29,15 @@ let planCatalog = null;
 let selectedOcrImage = null;
 let selectedOcrPreviewUrl = null;
 let ocrCandidateResults = [];
+let localAiSemanticStatus = {
+    checked: false,
+    available: false,
+    reason: 'unknown',
+    message: '本地 AI 语义修正：检测中...',
+    model: '',
+    installHint: ''
+};
+let localAiRewriteBusy = false;
 let recognizeClipboardMonitoring = false;
 let clipboardAssistEnabled = true;
 let lastMessageManualInputAt = 0;
@@ -32,14 +49,19 @@ let recognizeEditContext = null;
 let recognizeAttributePanelVisible = false;
 let recognizeSideGroupState = {
     attributes: true,
-    anchors: false
+    anchors: false,
+    noise: false,
+    amountUnits: false
 };
 let anchorRuleTargetClientId = '';
+let noiseRuleTargetClientId = '';
+let amountUnitTargetClientId = '';
 let anchorGuideState = null;
 let anchorGuideHiddenForSession = false;
 let anchorGuideAutoExpanded = false;
 let anchorGuideFocusTargetIds = [];
 let lastRecognizePreviewError = '';
+let recognizePreviewBlocked = false;
 let dashboardSaveState = 'saved';
 let dashboardSaveError = '';
 let ambiguityChoiceState = null;
@@ -174,6 +196,22 @@ let anchorRuleDrawerState = {
     editClientId: ''
 };
 let anchorRuleDrawerSnapshot = null;
+let noiseRuleEditorState = {
+    editPattern: '',
+    editSource: '',
+    editClientId: '',
+    previewPattern: '',
+    previewSource: '',
+    previewClientId: ''
+};
+let amountUnitEditorState = {
+    editToken: '',
+    editSource: '',
+    editClientId: '',
+    previewToken: '',
+    previewSource: '',
+    previewClientId: ''
+};
 
 const FALLBACK_PLAN_CATALOG = {
     defaultTier: 'plus',
@@ -448,6 +486,11 @@ function applyPlanCatalog(catalog) {
 function setRecognizePreviewError(errorMessage = '') {
     lastRecognizePreviewError = String(errorMessage || '').trim();
     refreshDashboardStatus();
+}
+
+function setRecognizePreviewBlocked(blocked = false) {
+    recognizePreviewBlocked = !!blocked;
+    syncRecognizeModalActionMode();
 }
 
 function getDashboardSaveMeta() {
@@ -1063,6 +1106,10 @@ function escapeHtml(value) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+}
+
+function escapeRegExp(value) {
+    return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 async function initLicenseStatus() {
@@ -1841,6 +1888,7 @@ function clearAttributeSelection() {
         closeModal();
         return;
     }
+    stopRecognizeVoiceInput({ discard: true });
     selectedAttributes.clear();
     renderAttributePicker();
     const messageTextarea = document.getElementById('message');
@@ -2214,7 +2262,9 @@ function ensureAnchorGuideVisibleWhenRecognizeOpen() {
     }
     recognizeSideGroupState = {
         attributes: false,
-        anchors: true
+        anchors: true,
+        noise: false,
+        amountUnits: false
     };
     applyRecognizeSideGroups();
     saveRecognizeSideGroupState();
@@ -2258,6 +2308,109 @@ function getAnchorAliasFilterState() {
     };
 }
 
+function getNoiseRuleFilterState() {
+    const searchInput = document.getElementById('noiseRuleSearch');
+    const sourceInput = document.getElementById('noiseRuleSourceFilter');
+    return {
+        keyword: searchInput ? String(searchInput.value || '').trim().toLowerCase() : '',
+        source: sourceInput ? String(sourceInput.value || 'all').trim() : 'all'
+    };
+}
+
+function getAmountUnitFilterState() {
+    const searchInput = document.getElementById('amountUnitSearch');
+    const sourceInput = document.getElementById('amountUnitSourceFilter');
+    return {
+        keyword: searchInput ? String(searchInput.value || '').trim().toLowerCase() : '',
+        source: sourceInput ? String(sourceInput.value || 'all').trim() : 'all'
+    };
+}
+
+function getNoiseRuleAmountPlaceholder() {
+    if (window.messageProcessor && typeof window.messageProcessor.getNoiseRuleCanonicalPlaceholder === 'function') {
+        return String(window.messageProcessor.getNoiseRuleCanonicalPlaceholder() || '{金额}');
+    }
+    return '{金额}';
+}
+
+function normalizeAmountUnitInput(token) {
+    if (window.messageProcessor && typeof window.messageProcessor.normalizeAmountUnitToken === 'function') {
+        return String(window.messageProcessor.normalizeAmountUnitToken(token) || '').trim();
+    }
+    return String(token || '').replace(/\s+/g, '').trim();
+}
+
+function normalizeNoiseRulePatternInput(pattern) {
+    if (window.messageProcessor && typeof window.messageProcessor.sanitizeNoiseRulePattern === 'function') {
+        return String(window.messageProcessor.sanitizeNoiseRulePattern(pattern) || '').trim();
+    }
+    return String(pattern || '').replace(/\{amount\}/gi, getNoiseRuleAmountPlaceholder()).trim();
+}
+
+function clearNoiseRulePreviewSelection() {
+    noiseRuleEditorState.previewPattern = '';
+    noiseRuleEditorState.previewSource = '';
+    noiseRuleEditorState.previewClientId = '';
+}
+
+function selectNoiseRulePreview(pattern, source = '', clientId = '') {
+    const normalizedPattern = normalizeNoiseRulePatternInput(pattern);
+    if (!normalizedPattern) {
+        clearNoiseRulePreviewSelection();
+        return;
+    }
+    noiseRuleEditorState.previewPattern = normalizedPattern;
+    noiseRuleEditorState.previewSource = String(source || '').trim();
+    noiseRuleEditorState.previewClientId = String(clientId || '').trim();
+}
+
+function getNoiseRulePreviewSelection() {
+    return {
+        pattern: normalizeNoiseRulePatternInput(noiseRuleEditorState.previewPattern),
+        source: String(noiseRuleEditorState.previewSource || '').trim(),
+        clientId: String(noiseRuleEditorState.previewClientId || '').trim()
+    };
+}
+
+function clearAmountUnitPreviewSelection() {
+    amountUnitEditorState.previewToken = '';
+    amountUnitEditorState.previewSource = '';
+    amountUnitEditorState.previewClientId = '';
+}
+
+function selectAmountUnitPreview(token, source = '', clientId = '') {
+    const normalizedToken = normalizeAmountUnitInput(token);
+    if (!normalizedToken) {
+        clearAmountUnitPreviewSelection();
+        return;
+    }
+    amountUnitEditorState.previewToken = normalizedToken;
+    amountUnitEditorState.previewSource = String(source || '').trim();
+    amountUnitEditorState.previewClientId = String(clientId || '').trim();
+}
+
+function getAmountUnitPreviewSelection() {
+    return {
+        token: normalizeAmountUnitInput(amountUnitEditorState.previewToken),
+        source: String(amountUnitEditorState.previewSource || '').trim(),
+        clientId: String(amountUnitEditorState.previewClientId || '').trim()
+    };
+}
+
+function isAmountUnitPreviewSelected(row, selection = getAmountUnitPreviewSelection()) {
+    if (!row || !selection.token) return false;
+    return normalizeAmountUnitInput(row.token) === selection.token
+        && String(row.source || '').trim() === selection.source
+        && String(row.clientId || '').trim() === selection.clientId;
+}
+
+function isNoiseRulePreviewSelected(row, selection = getNoiseRulePreviewSelection()) {
+    if (!row || !selection.pattern) return false;
+    return normalizeNoiseRulePatternInput(row.pattern) === selection.pattern
+        && String(row.source || '').trim() === selection.source
+        && String(row.clientId || '').trim() === selection.clientId;
+}
+
 function initAnchorAliasFilterControls() {
     const searchInput = document.getElementById('anchorAliasSearch');
     const sourceInput = document.getElementById('anchorAliasSourceFilter');
@@ -2277,6 +2430,88 @@ function initAnchorAliasFilterControls() {
         impactInput.dataset.bound = '1';
         impactInput.addEventListener('input', () => {
             renderAnchorImpactPreview();
+        });
+    }
+
+    const noiseNodes = [
+        document.getElementById('noiseRuleSearch'),
+        document.getElementById('noiseRuleSourceFilter')
+    ];
+    noiseNodes.forEach((node) => {
+        if (!node || node.dataset.bound === '1') return;
+        node.dataset.bound = '1';
+        const eventName = node.tagName === 'SELECT' ? 'change' : 'input';
+        node.addEventListener(eventName, () => {
+            renderNoiseRuleList();
+        });
+    });
+
+    const noisePatternInput = document.getElementById('noiseRulePatternInput');
+    if (noisePatternInput && noisePatternInput.dataset.bound !== '1') {
+        noisePatternInput.dataset.bound = '1';
+        noisePatternInput.addEventListener('input', () => {
+            clearNoiseRulePreviewSelection();
+            renderNoiseRuleEditorState();
+            renderNoiseRuleList();
+            renderNoiseRulePreview();
+        });
+    }
+
+    const noiseHelperNodes = Array.from(document.querySelectorAll('[data-noise-rule-example]'));
+    noiseHelperNodes.forEach((node) => {
+        if (!node || node.dataset.bound === '1') return;
+        node.dataset.bound = '1';
+        node.addEventListener('click', () => {
+            fillNoiseRulePattern(node.dataset.noiseRuleExample || '');
+        });
+    });
+
+    const noiseSampleInput = document.getElementById('noiseRuleSampleInput');
+    if (noiseSampleInput && noiseSampleInput.dataset.bound !== '1') {
+        noiseSampleInput.dataset.bound = '1';
+        noiseSampleInput.addEventListener('input', () => {
+            renderNoiseRulePreview();
+        });
+    }
+
+    const amountUnitNodes = [
+        document.getElementById('amountUnitSearch'),
+        document.getElementById('amountUnitSourceFilter')
+    ];
+    amountUnitNodes.forEach((node) => {
+        if (!node || node.dataset.bound === '1') return;
+        node.dataset.bound = '1';
+        const eventName = node.tagName === 'SELECT' ? 'change' : 'input';
+        node.addEventListener(eventName, () => {
+            renderAmountUnitList();
+        });
+    });
+
+    const amountUnitInput = document.getElementById('amountUnitTokenInput');
+    if (amountUnitInput && amountUnitInput.dataset.bound !== '1') {
+        amountUnitInput.dataset.bound = '1';
+        amountUnitInput.addEventListener('input', () => {
+            clearAmountUnitPreviewSelection();
+            renderAmountUnitEditorState();
+            renderAmountUnitList();
+            renderAmountUnitPreview();
+        });
+    }
+
+    const amountUnitHelperNodes = Array.from(document.querySelectorAll('[data-amount-unit-example]'));
+    amountUnitHelperNodes.forEach((node) => {
+        if (!node || node.dataset.bound === '1') return;
+        node.dataset.bound = '1';
+        node.addEventListener('click', () => {
+            fillAmountUnitToken(node.dataset.amountUnitExample || '');
+        });
+    });
+
+    const amountUnitSampleInput = document.getElementById('amountUnitSampleInput');
+    if (amountUnitSampleInput && amountUnitSampleInput.dataset.bound !== '1') {
+        amountUnitSampleInput.dataset.bound = '1';
+        amountUnitSampleInput.addEventListener('input', () => {
+            renderAmountUnitPreview();
         });
     }
 
@@ -2402,6 +2637,18 @@ function isDefaultOddsDirty() {
     const current = parsePositiveNumericInput(oddsInput.value);
     if (current.empty || !Number.isFinite(current.value)) return true;
     return formatNumericAmount(current.value) !== baseline;
+}
+
+function collectNoiseRuleEditorState() {
+    const patternInput = document.getElementById('noiseRulePatternInput');
+    return {
+        pattern: patternInput ? String(patternInput.value || '').trim() : ''
+    };
+}
+
+function isNoiseRuleEditorDirty() {
+    const current = collectNoiseRuleEditorState();
+    return current.pattern !== '';
 }
 
 function getAnchorSubgroupClosePrompt(key) {
@@ -2566,6 +2813,198 @@ function handleAnchorRuleClientChange() {
     handleAnchorRuleScopeChange();
 }
 
+function getNoiseRuleScope() {
+    const scopeInput = document.getElementById('noiseRuleScope');
+    return scopeInput && scopeInput.value === 'client' ? 'client' : 'global';
+}
+
+function resolveNoiseRuleClientId(options = {}) {
+    const clientCandidates = Array.isArray(options.clientCandidates)
+        ? options.clientCandidates
+        : getAnchorRuleClientCandidates();
+    const selectInput = document.getElementById('noiseRuleClientSelect');
+    const allowSelectionFallback = !(options && options.allowSelectionFallback === false);
+
+    let resolved = String(noiseRuleTargetClientId || '').trim();
+    if (!resolved && selectInput) {
+        resolved = String(selectInput.value || '').trim();
+    }
+
+    if ((!resolved || !clientCandidates.includes(resolved)) && allowSelectionFallback) {
+        const selectedUsers = getEditableUsersForCurrentSelection();
+        if (selectedUsers.length === 1 && clientCandidates.includes(selectedUsers[0])) {
+            resolved = selectedUsers[0];
+        }
+    }
+
+    if (!clientCandidates.includes(resolved)) {
+        resolved = '';
+    }
+    return resolved;
+}
+
+function syncNoiseRuleScopeButtons() {
+    const scope = getNoiseRuleScope();
+    const globalBtn = document.getElementById('noiseScopeGlobalBtn');
+    const clientBtn = document.getElementById('noiseScopeClientBtn');
+    if (globalBtn) {
+        const isActive = scope === 'global';
+        globalBtn.classList.toggle('active', isActive);
+        globalBtn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    }
+    if (clientBtn) {
+        const isActive = scope === 'client';
+        clientBtn.classList.toggle('active', isActive);
+        clientBtn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    }
+}
+
+function renderNoiseRuleClientSelect() {
+    const clientRow = document.getElementById('noiseRuleClientRow');
+    const selectInput = document.getElementById('noiseRuleClientSelect');
+    const scope = getNoiseRuleScope();
+    if (clientRow) {
+        clientRow.style.display = scope === 'client' ? '' : 'none';
+    }
+    if (!selectInput) return;
+
+    const clientCandidates = getAnchorRuleClientCandidates();
+    const resolved = resolveNoiseRuleClientId({ clientCandidates, allowSelectionFallback: true });
+    noiseRuleTargetClientId = resolved || (clientCandidates[0] || '');
+
+    selectInput.innerHTML = '';
+    if (clientCandidates.length === 0) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = '暂无客户';
+        selectInput.appendChild(option);
+        selectInput.value = '';
+        selectInput.disabled = true;
+        noiseRuleTargetClientId = '';
+        return;
+    }
+
+    clientCandidates.forEach((clientName) => {
+        const option = document.createElement('option');
+        option.value = clientName;
+        option.textContent = clientName;
+        selectInput.appendChild(option);
+    });
+    selectInput.disabled = false;
+    selectInput.value = noiseRuleTargetClientId || clientCandidates[0];
+}
+
+function setNoiseRuleScope(scope) {
+    const nextScope = scope === 'client' ? 'client' : 'global';
+    const scopeInput = document.getElementById('noiseRuleScope');
+    if (scopeInput) {
+        scopeInput.value = nextScope;
+    }
+    handleNoiseRuleScopeChange();
+}
+
+function handleNoiseRuleClientChange() {
+    const selectInput = document.getElementById('noiseRuleClientSelect');
+    noiseRuleTargetClientId = selectInput ? String(selectInput.value || '').trim() : '';
+    handleNoiseRuleScopeChange();
+}
+
+function getAmountUnitScope() {
+    const scopeInput = document.getElementById('amountUnitScope');
+    return scopeInput && scopeInput.value === 'client' ? 'client' : 'global';
+}
+
+function resolveAmountUnitClientId(options = {}) {
+    const clientCandidates = Array.isArray(options.clientCandidates)
+        ? options.clientCandidates
+        : getAnchorRuleClientCandidates();
+    const selectInput = document.getElementById('amountUnitClientSelect');
+    const allowSelectionFallback = !(options && options.allowSelectionFallback === false);
+
+    let resolved = String(amountUnitTargetClientId || '').trim();
+    if (!resolved && selectInput) {
+        resolved = String(selectInput.value || '').trim();
+    }
+
+    if ((!resolved || !clientCandidates.includes(resolved)) && allowSelectionFallback) {
+        const selectedUsers = getEditableUsersForCurrentSelection();
+        if (selectedUsers.length === 1 && clientCandidates.includes(selectedUsers[0])) {
+            resolved = selectedUsers[0];
+        }
+    }
+
+    if (!clientCandidates.includes(resolved)) {
+        resolved = '';
+    }
+    return resolved;
+}
+
+function syncAmountUnitScopeButtons() {
+    const scope = getAmountUnitScope();
+    const globalBtn = document.getElementById('amountUnitScopeGlobalBtn');
+    const clientBtn = document.getElementById('amountUnitScopeClientBtn');
+    if (globalBtn) {
+        const isActive = scope === 'global';
+        globalBtn.classList.toggle('active', isActive);
+        globalBtn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    }
+    if (clientBtn) {
+        const isActive = scope === 'client';
+        clientBtn.classList.toggle('active', isActive);
+        clientBtn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    }
+}
+
+function renderAmountUnitClientSelect() {
+    const clientRow = document.getElementById('amountUnitClientRow');
+    const selectInput = document.getElementById('amountUnitClientSelect');
+    const scope = getAmountUnitScope();
+    if (clientRow) {
+        clientRow.style.display = scope === 'client' ? '' : 'none';
+    }
+    if (!selectInput) return;
+
+    const clientCandidates = getAnchorRuleClientCandidates();
+    const resolved = resolveAmountUnitClientId({ clientCandidates, allowSelectionFallback: true });
+    amountUnitTargetClientId = resolved || (clientCandidates[0] || '');
+
+    selectInput.innerHTML = '';
+    if (clientCandidates.length === 0) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = '暂无客户';
+        selectInput.appendChild(option);
+        selectInput.value = '';
+        selectInput.disabled = true;
+        amountUnitTargetClientId = '';
+        return;
+    }
+
+    clientCandidates.forEach((clientName) => {
+        const option = document.createElement('option');
+        option.value = clientName;
+        option.textContent = clientName;
+        selectInput.appendChild(option);
+    });
+    selectInput.disabled = false;
+    selectInput.value = amountUnitTargetClientId || clientCandidates[0];
+}
+
+function setAmountUnitScope(scope) {
+    const nextScope = scope === 'client' ? 'client' : 'global';
+    const scopeInput = document.getElementById('amountUnitScope');
+    if (scopeInput) {
+        scopeInput.value = nextScope;
+    }
+    handleAmountUnitScopeChange();
+}
+
+function handleAmountUnitClientChange() {
+    const selectInput = document.getElementById('amountUnitClientSelect');
+    amountUnitTargetClientId = selectInput ? String(selectInput.value || '').trim() : '';
+    handleAmountUnitScopeChange();
+}
+
 function setAnchorRuleControlsEnabled(enabled) {
     const nodeIds = [
         'anchorParseMode',
@@ -2599,6 +3038,42 @@ function setAnchorRuleControlsEnabled(enabled) {
     });
 }
 
+function setNoiseRuleControlsEnabled(enabled) {
+    const nodeIds = [
+        'noiseRuleClientSelect',
+        'noiseRulePatternInput',
+        'saveNoiseRuleBtn',
+        'resetNoiseRuleBtn'
+    ];
+    nodeIds.forEach((id) => {
+        const node = document.getElementById(id);
+        if (!node) return;
+        if (id === 'noiseRuleClientSelect' && getNoiseRuleScope() !== 'client') {
+            node.disabled = true;
+            return;
+        }
+        node.disabled = !enabled;
+    });
+}
+
+function setAmountUnitControlsEnabled(enabled) {
+    const nodeIds = [
+        'amountUnitClientSelect',
+        'amountUnitTokenInput',
+        'saveAmountUnitBtn',
+        'resetAmountUnitBtn'
+    ];
+    nodeIds.forEach((id) => {
+        const node = document.getElementById(id);
+        if (!node) return;
+        if (id === 'amountUnitClientSelect' && getAmountUnitScope() !== 'client') {
+            node.disabled = true;
+            return;
+        }
+        node.disabled = !enabled;
+    });
+}
+
 function getRuleContext(options = {}) {
     const scope = getAnchorRuleScope();
     const requireClient = !!(options && options.requireClientForClientScope);
@@ -2620,9 +3095,63 @@ function getRuleContext(options = {}) {
     return { scope, clientId };
 }
 
+function getNoiseRuleContext(options = {}) {
+    const scope = getNoiseRuleScope();
+    const requireClient = !!(options && options.requireClientForClientScope);
+    let clientId = '';
+
+    if (scope === 'client') {
+        const clientCandidates = getAnchorRuleClientCandidates();
+        clientId = resolveNoiseRuleClientId({ clientCandidates, allowSelectionFallback: true });
+        if (requireClient) {
+            if (clientCandidates.length === 0) {
+                throw new Error('请先创建客户后再设置客户专属噪音规则');
+            }
+            if (!clientId) {
+                throw new Error('请选择要编辑的客户');
+            }
+        }
+    }
+
+    return { scope, clientId };
+}
+
+function getAmountUnitContext(options = {}) {
+    const scope = getAmountUnitScope();
+    const requireClient = !!(options && options.requireClientForClientScope);
+    let clientId = '';
+
+    if (scope === 'client') {
+        const clientCandidates = getAnchorRuleClientCandidates();
+        clientId = resolveAmountUnitClientId({ clientCandidates, allowSelectionFallback: true });
+        if (requireClient) {
+            if (clientCandidates.length === 0) {
+                throw new Error('请先创建客户后再设置客户专属金额单位');
+            }
+            if (!clientId) {
+                throw new Error('请选择要编辑的客户');
+            }
+        }
+    }
+
+    return { scope, clientId };
+}
+
 function getPreviewClientId() {
     const selectedUsers = getEditableUsersForCurrentSelection();
     return selectedUsers.length === 1 ? selectedUsers[0] : '';
+}
+
+function getNoiseRulePreviewClientIdByContext() {
+    const { scope, clientId } = getNoiseRuleContext();
+    if (scope === 'client') return clientId || '';
+    return getPreviewClientId() || '';
+}
+
+function getAmountUnitPreviewClientIdByContext() {
+    const { scope, clientId } = getAmountUnitContext();
+    if (scope === 'client') return clientId || '';
+    return getPreviewClientId() || '';
 }
 
 function initAnchorRuleControls() {
@@ -2630,21 +3159,45 @@ function initAnchorRuleControls() {
     if (scopeInput && !scopeInput.value) {
         scopeInput.value = 'global';
     }
+    const noiseScopeInput = document.getElementById('noiseRuleScope');
+    if (noiseScopeInput && !noiseScopeInput.value) {
+        noiseScopeInput.value = 'global';
+    }
+    const amountUnitScopeInput = document.getElementById('amountUnitScope');
+    if (amountUnitScopeInput && !amountUnitScopeInput.value) {
+        amountUnitScopeInput.value = 'global';
+    }
     anchorSubgroupState = loadAnchorSubgroupState();
     const firstConfig = ANCHOR_STRATEGY_GROUP_CONFIGS[0];
     anchorStrategyActiveTab = firstConfig ? firstConfig.mode : 'per_number';
     const selectedUsers = getEditableUsersForCurrentSelection();
     if (selectedUsers.length === 1) {
         anchorRuleTargetClientId = selectedUsers[0];
+        noiseRuleTargetClientId = selectedUsers[0];
+        amountUnitTargetClientId = selectedUsers[0];
     }
     const impactInput = document.getElementById('anchorImpactSampleInput');
     if (impactInput && !String(impactInput.value || '').trim()) {
         impactInput.value = (firstConfig && firstConfig.defaultSample) || '猴蛇狗都买10';
     }
+    const noiseSampleInput = document.getElementById('noiseRuleSampleInput');
+    if (noiseSampleInput && !String(noiseSampleInput.value || '').trim()) {
+        noiseSampleInput.value = '01 02 03 各十 共30';
+    }
+    const amountUnitSampleInput = document.getElementById('amountUnitSampleInput');
+    if (amountUnitSampleInput && !String(amountUnitSampleInput.value || '').trim()) {
+        amountUnitSampleInput.value = '01*10块 23.24各5';
+    }
     renderAnchorSubgroups();
     syncAnchorRuleScopeButtons();
     renderAnchorRuleClientSelect();
     handleAnchorRuleScopeChange();
+    syncNoiseRuleScopeButtons();
+    renderNoiseRuleClientSelect();
+    handleNoiseRuleScopeChange();
+    syncAmountUnitScopeButtons();
+    renderAmountUnitClientSelect();
+    handleAmountUnitScopeChange();
 }
 
 function handleAnchorRuleScopeChange() {
@@ -2675,6 +3228,30 @@ function handleAnchorRuleScopeChange() {
     renderAnchorStrategyGuide();
 }
 
+function handleNoiseRuleScopeChange() {
+    syncNoiseRuleScopeButtons();
+    renderNoiseRuleClientSelect();
+    const { scope, clientId } = getNoiseRuleContext();
+    const enableRuleControls = !(scope === 'client' && !clientId);
+    setNoiseRuleControlsEnabled(enableRuleControls);
+    renderNoiseRuleScopeExplain(scope, clientId);
+    renderNoiseRuleEditorState(scope, clientId);
+    renderNoiseRuleList();
+    renderNoiseRulePreview();
+}
+
+function handleAmountUnitScopeChange() {
+    syncAmountUnitScopeButtons();
+    renderAmountUnitClientSelect();
+    const { scope, clientId } = getAmountUnitContext();
+    const enableControls = !(scope === 'client' && !clientId);
+    setAmountUnitControlsEnabled(enableControls);
+    renderAmountUnitScopeExplain(scope, clientId);
+    renderAmountUnitEditorState(scope, clientId);
+    renderAmountUnitList();
+    renderAmountUnitPreview();
+}
+
 function getAnchorRuleSourceLabel(source) {
     if (source === 'client') return '客户专属';
     if (source === 'global') return '全局';
@@ -2699,6 +3276,46 @@ function renderAnchorScopeExplain(scope, clientId) {
     }
     explainEl.classList.add('is-global');
     explainEl.textContent = '当前选择：修改全局层。保存后对所有客户生效；若某客户有专属规则，会以客户规则优先。优先级：客户专属 > 全局 > 系统默认（系统级只读）。';
+}
+
+function renderNoiseRuleScopeExplain(scope, clientId) {
+    const explainEl = document.getElementById('noiseRuleScopeExplain');
+    if (!explainEl) return;
+    const currentScope = scope === 'client' ? 'client' : 'global';
+    const currentClientId = String(clientId || '').trim();
+    explainEl.className = 'anchor-scope-explain';
+    if (currentScope === 'client') {
+        if (!currentClientId) {
+            explainEl.classList.add('is-warning');
+            explainEl.textContent = '当前选择：仅修改客户层。请先选择客户后再保存；该规则只对该客户生效。';
+            return;
+        }
+        explainEl.classList.add('is-client');
+        explainEl.textContent = `当前选择：仅修改客户「${currentClientId}」。保存后只对该客户生效，并优先于全局与系统默认规则。`;
+        return;
+    }
+    explainEl.classList.add('is-global');
+    explainEl.textContent = '当前选择：修改全部客户范围。保存后对所有客户生效；若某客户有专属噪音规则，会以客户规则优先。';
+}
+
+function renderAmountUnitScopeExplain(scope, clientId) {
+    const explainEl = document.getElementById('amountUnitScopeExplain');
+    if (!explainEl) return;
+    const currentScope = scope === 'client' ? 'client' : 'global';
+    const currentClientId = String(clientId || '').trim();
+    explainEl.className = 'anchor-scope-explain';
+    if (currentScope === 'client') {
+        if (!currentClientId) {
+            explainEl.classList.add('is-warning');
+            explainEl.textContent = '当前选择：仅修改客户层。请先选择客户后再保存；该单位只对该客户的消息解析生效。';
+            return;
+        }
+        explainEl.classList.add('is-client');
+        explainEl.textContent = `当前选择：仅修改客户「${currentClientId}」。保存后只对该客户生效，并优先于全局与系统默认金额单位。`;
+        return;
+    }
+    explainEl.classList.add('is-global');
+    explainEl.textContent = '当前选择：修改全部客户范围。保存后对所有客户生效；若某客户有专属金额单位，会以客户规则优先。';
 }
 
 function getAnchorParseModeExplainMeta(mode) {
@@ -3170,6 +3787,52 @@ function getAnchorPreviewClientIdByContext() {
     return getPreviewClientId() || '';
 }
 
+function collectPreviewDisplayEntries(result) {
+    if (!result || typeof result !== 'object') return [];
+    const combined = [];
+    const appendEntries = (rows, kind) => {
+        (Array.isArray(rows) ? rows : []).forEach((entry) => {
+            combined.push({
+                kind,
+                order: Number.isFinite(Number(entry && entry.parseOrder)) ? Number(entry.parseOrder) : Number.MAX_SAFE_INTEGER,
+                entry
+            });
+        });
+    };
+    appendEntries(result.entries, 'standard');
+    appendEntries(result.playEntries, 'play');
+    return combined
+        .sort((left, right) => {
+            const leftLine = Number.parseInt(left && left.entry && left.entry.lineNo, 10);
+            const rightLine = Number.parseInt(right && right.entry && right.entry.lineNo, 10);
+            const safeLeftLine = Number.isFinite(leftLine) ? leftLine : Number.MAX_SAFE_INTEGER;
+            const safeRightLine = Number.isFinite(rightLine) ? rightLine : Number.MAX_SAFE_INTEGER;
+            if (safeLeftLine !== safeRightLine) {
+                return safeLeftLine - safeRightLine;
+            }
+            const leftSegment = Number.parseInt(left && left.entry && left.entry.segmentNo, 10);
+            const rightSegment = Number.parseInt(right && right.entry && right.entry.segmentNo, 10);
+            const safeLeftSegment = Number.isFinite(leftSegment) ? leftSegment : Number.MAX_SAFE_INTEGER;
+            const safeRightSegment = Number.isFinite(rightSegment) ? rightSegment : Number.MAX_SAFE_INTEGER;
+            if (safeLeftSegment !== safeRightSegment) {
+                return safeLeftSegment - safeRightSegment;
+            }
+            return left.order - right.order;
+        })
+        .map(item => item.entry)
+        .filter(Boolean);
+}
+
+function collectPreviewStandardEntries(result) {
+    if (!result || typeof result !== 'object') return [];
+    return Array.isArray(result.entries) ? result.entries.filter(Boolean) : [];
+}
+
+function collectPreviewPlayEntries(result) {
+    if (!result || typeof result !== 'object') return [];
+    return Array.isArray(result.playEntries) ? result.playEntries.filter(Boolean) : [];
+}
+
 function buildAnchorPreviewResultHtml(previewResult) {
     if (!previewResult) {
         return '<div class="anchor-impact-empty">请输入样例消息后查看预览。</div>';
@@ -3198,8 +3861,10 @@ function buildAnchorPreviewResultHtml(previewResult) {
         `;
     }
 
-    const entries = (((previewResult || {}).result || {}).entries) || [];
-    if (!entries.length) {
+    const result = (previewResult || {}).result || {};
+    const entries = collectPreviewStandardEntries(result);
+    const playEntries = collectPreviewPlayEntries(result);
+    if (!entries.length && !playEntries.length) {
         return '<div class="anchor-impact-empty">样例消息没有生成有效下注结果。</div>';
     }
 
@@ -3210,12 +3875,25 @@ function buildAnchorPreviewResultHtml(previewResult) {
         const amount = Number(entry && entry.totalAmount != null ? entry.totalAmount : NaN);
         return Number.isFinite(amount) ? sum + amount : sum;
     }, 0);
+    if (entries.length === 0 && playEntries.length > 0) {
+        return `
+            <div class="anchor-impact-error">
+                <div class="anchor-impact-error-title">检测到未开放玩法</div>
+                <div class="anchor-impact-error-msg">${playEntries.map(item => escapeHtml(String(item && item.canonical ? item.canonical : item && item.rawText ? item.rawText : '').trim())).filter(Boolean).join('<br>')}</div>
+            </div>
+        `;
+    }
     return `
         <div class="anchor-impact-success">
             <div class="anchor-impact-success-title">标准格式（${canonicals.length}条，合计${formatNumericAmount(totalAmount)}）</div>
             <div class="anchor-impact-success-list">${canonicals.map(item => `<div>${escapeHtml(item)}</div>`).join('')}</div>
         </div>
-    `;
+    ` + (playEntries.length > 0 ? `
+        <div class="anchor-impact-error" style="margin-top:12px;">
+            <div class="anchor-impact-error-title">检测到未开放玩法（不参与号码统计）</div>
+            <div class="anchor-impact-error-msg">${playEntries.map(item => escapeHtml(String(item && item.canonical ? item.canonical : item && item.rawText ? item.rawText : '').trim())).filter(Boolean).join('<br>')}</div>
+        </div>
+    ` : '');
 }
 
 function applyAnchorImpactExample() {
@@ -3256,6 +3934,1131 @@ function renderAnchorImpactPreview() {
     const previewClientId = getAnchorPreviewClientIdByContext();
     const preview = window.messageProcessor.previewMessage(sample, { clientId: previewClientId });
     output.innerHTML = buildAnchorPreviewResultHtml(preview);
+}
+
+function applyNoiseRuleExample() {
+    const sampleInput = document.getElementById('noiseRuleSampleInput');
+    if (!sampleInput) return;
+    const selectedPreview = getNoiseRulePreviewSelection();
+    if (selectedPreview.pattern) {
+        applyNoiseRulePreviewSample(selectedPreview.pattern, { clientId: selectedPreview.clientId });
+    } else {
+        sampleInput.value = '01 02 03 各十 共30';
+    }
+    renderNoiseRulePreview();
+}
+
+function resetNoiseRulePatternInput() {
+    const input = document.getElementById('noiseRulePatternInput');
+    if (input) {
+        input.value = '';
+    }
+    noiseRuleEditorState.editPattern = '';
+    noiseRuleEditorState.editSource = '';
+    noiseRuleEditorState.editClientId = '';
+    clearNoiseRulePreviewSelection();
+    renderNoiseRuleEditorState();
+    renderNoiseRuleList();
+    renderNoiseRulePreview();
+}
+
+function fillNoiseRulePattern(pattern, source = '', clientId = '') {
+    const input = document.getElementById('noiseRulePatternInput');
+    if (!input) return;
+    const normalizedPattern = normalizeNoiseRulePatternInput(pattern) || String(pattern || '').trim();
+    input.value = normalizedPattern;
+    noiseRuleEditorState.editPattern = normalizedPattern;
+    noiseRuleEditorState.editSource = String(source || '').trim();
+    noiseRuleEditorState.editClientId = String(clientId || '').trim();
+    if (source) {
+        selectNoiseRulePreview(normalizedPattern, source, clientId);
+        applyNoiseRulePreviewSample(normalizedPattern, { clientId });
+    } else {
+        clearNoiseRulePreviewSelection();
+    }
+    input.focus();
+    input.select();
+    renderNoiseRuleEditorState();
+    renderNoiseRuleList();
+    renderNoiseRulePreview();
+}
+
+function renderNoiseRuleEditorState(scope = null, clientId = null) {
+    const stateEl = document.getElementById('noiseRuleEditorState');
+    const input = document.getElementById('noiseRulePatternInput');
+    if (!stateEl) return;
+    const context = scope == null ? getNoiseRuleContext() : {
+        scope: scope === 'client' ? 'client' : 'global',
+        clientId: String(clientId || '').trim()
+    };
+    const pattern = input ? String(input.value || '').trim() : '';
+    stateEl.className = 'anchor-policy-state';
+    if (context.scope === 'client' && !context.clientId) {
+        stateEl.classList.add('is-warning');
+        stateEl.textContent = '当前是客户层，但还没选客户；请先选择客户后再保存噪音规则。';
+        return;
+    }
+    if (!pattern) {
+        stateEl.textContent = context.scope === 'client'
+            ? `当前保存范围：客户「${context.clientId}」层。可输入固定文本或 ${getNoiseRuleAmountPlaceholder()} 模板。`
+            : `当前保存范围：全局层。可输入固定文本或 ${getNoiseRuleAmountPlaceholder()} 模板。`;
+        return;
+    }
+    stateEl.classList.add('is-draft');
+    stateEl.textContent = context.scope === 'client'
+        ? `准备保存到客户「${context.clientId}」层：${pattern}`
+        : `准备保存到全局层：${pattern}`;
+}
+
+function buildNoiseRuleExamples(pattern) {
+    const normalized = normalizeNoiseRulePatternInput(pattern);
+    if (!normalized) return [];
+    const placeholder = getNoiseRuleAmountPlaceholder();
+    if (normalized.includes(placeholder)) {
+        return [
+            normalized.replace(new RegExp(escapeRegExp(placeholder), 'g'), '30'),
+            normalized.replace(new RegExp(escapeRegExp(placeholder), 'g'), '40'),
+            normalized.replace(new RegExp(escapeRegExp(placeholder), 'g'), '五十')
+        ];
+    }
+    const supportsImplicitAmountSuffix = window.messageProcessor
+        && typeof window.messageProcessor.supportsImplicitAmountSuffixForNoisePattern === 'function'
+        ? window.messageProcessor.supportsImplicitAmountSuffixForNoisePattern(normalized)
+        : !/[0-9０-９零〇一二两三四五六七八九十百千万]/.test(normalized);
+    if (supportsImplicitAmountSuffix) {
+        return [
+            normalized,
+            `${normalized}30`,
+            `${normalized} 40`
+        ];
+    }
+    return [normalized];
+}
+
+function collectNoisePreviewCandidateEntries(sample) {
+    const normalizedSample = String(sample || '').trim();
+    if (!normalizedSample) return [];
+    const entries = [];
+    const seen = new Set();
+    const pushEntry = (value, startIndex) => {
+        const text = String(value || '').trim();
+        const start = Number.isInteger(startIndex) ? startIndex : normalizedSample.indexOf(text);
+        if (!text || start < 0) return;
+        const key = `${start}:${text}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        entries.push({ text, startIndex: start });
+    };
+
+    pushEntry(normalizedSample, 0);
+    normalizedSample.split(/\r?\n/).forEach((line) => {
+        const trimmedLine = String(line || '').trim();
+        if (!trimmedLine) return;
+        const lineStart = normalizedSample.indexOf(trimmedLine);
+        pushEntry(trimmedLine, lineStart);
+        const boundaryRegex = /[\s,，;；|｜]+/g;
+        let match = null;
+        while ((match = boundaryRegex.exec(trimmedLine))) {
+            const suffix = trimmedLine.slice(match.index + match[0].length);
+            const suffixStart = lineStart + match.index + match[0].length;
+            pushEntry(suffix, suffixStart);
+        }
+    });
+
+    return entries;
+}
+
+function collectNoisePreviewCandidates(sample) {
+    return collectNoisePreviewCandidateEntries(sample).map(item => item.text);
+}
+
+function buildNoiseRulePreviewExampleText(pattern) {
+    const examples = buildNoiseRuleExamples(pattern);
+    if (!examples.length) return '';
+    const preferred = examples.find(example => /[0-9０-９零〇一二两三四五六七八九十百千万]/.test(String(example || '').trim()));
+    return String(preferred || examples[0] || '').trim();
+}
+
+function findExistingNoiseFragmentInSample(sample, clientId = '') {
+    if (!window.messageProcessor) return null;
+    const selectedPreview = getNoiseRulePreviewSelection();
+    const selectedPattern = normalizeNoiseRulePatternInput(selectedPreview.pattern);
+    const draftPattern = normalizeNoiseRulePatternInput(document.getElementById('noiseRulePatternInput')?.value || '');
+    const entries = collectNoisePreviewCandidateEntries(sample);
+    const canMatchRule = typeof window.messageProcessor.matchesNoiseRule === 'function';
+    const canFindSaved = typeof window.messageProcessor.findMatchingNoiseRule === 'function';
+    const canCheckSummary = typeof window.messageProcessor.isSummaryLine === 'function';
+
+    let best = null;
+    entries.forEach((entry) => {
+        if (!entry || !entry.text) return;
+        let matched = false;
+        if (selectedPattern && canMatchRule && window.messageProcessor.matchesNoiseRule(entry.text, selectedPattern)) {
+            matched = true;
+        } else if (draftPattern && canMatchRule && window.messageProcessor.matchesNoiseRule(entry.text, draftPattern)) {
+            matched = true;
+        } else if (canFindSaved && window.messageProcessor.findMatchingNoiseRule(entry.text, { clientId })) {
+            matched = true;
+        } else if (canCheckSummary && window.messageProcessor.isSummaryLine(entry.text)) {
+            matched = true;
+        }
+        if (!matched) return;
+        if (!best || entry.startIndex > best.startIndex || (entry.startIndex === best.startIndex && entry.text.length > best.text.length)) {
+            best = entry;
+        }
+    });
+    return best;
+}
+
+function applyNoiseRulePreviewSample(pattern, options = {}) {
+    const sampleInput = document.getElementById('noiseRuleSampleInput');
+    if (!sampleInput) return;
+    const exampleText = buildNoiseRulePreviewExampleText(pattern);
+    if (!exampleText) return;
+    const currentSample = String(sampleInput.value || '').trim();
+    const previewClientId = String(options.clientId || getNoiseRulePreviewClientIdByContext() || '').trim();
+    const existingFragment = findExistingNoiseFragmentInSample(currentSample, previewClientId);
+    let prefix = currentSample;
+    if (existingFragment && Number.isInteger(existingFragment.startIndex)) {
+        prefix = currentSample.slice(0, existingFragment.startIndex).trim();
+    } else {
+        prefix = currentSample.trim();
+    }
+    if (!prefix) {
+        prefix = '01 02 03 各十';
+    }
+    sampleInput.value = `${prefix} ${exampleText}`.trim();
+}
+
+function findNoisePreviewMatch(sample, clientId = '', options = {}) {
+    if (!window.messageProcessor) return null;
+    const selectedPattern = normalizeNoiseRulePatternInput(options && options.selectedPattern ? options.selectedPattern : '');
+    const selectedSource = String(options && options.selectedSource ? options.selectedSource : '').trim();
+    const draftPattern = normalizeNoiseRulePatternInput(document.getElementById('noiseRulePatternInput')?.value || '');
+    const candidates = collectNoisePreviewCandidates(sample);
+    const canMatchRule = typeof window.messageProcessor.matchesNoiseRule === 'function';
+    const canFindSaved = typeof window.messageProcessor.findMatchingNoiseRule === 'function';
+    const canCheckSummary = typeof window.messageProcessor.isSummaryLine === 'function';
+
+    if (selectedPattern) {
+        for (const candidate of candidates) {
+            if (canMatchRule && window.messageProcessor.matchesNoiseRule(candidate, selectedPattern)) {
+                return {
+                    kind: 'selected',
+                    pattern: selectedPattern,
+                    source: selectedSource,
+                    fragment: candidate
+                };
+            }
+        }
+        return {
+            kind: 'selected_pending',
+            pattern: selectedPattern,
+            source: selectedSource,
+            fragment: ''
+        };
+    }
+
+    for (const candidate of candidates) {
+        if (draftPattern && canMatchRule && window.messageProcessor.matchesNoiseRule(candidate, draftPattern)) {
+            return { kind: 'draft', pattern: draftPattern, fragment: candidate };
+        }
+        if (canFindSaved) {
+            const savedPattern = String(window.messageProcessor.findMatchingNoiseRule(candidate, { clientId }) || '').trim();
+            if (savedPattern) {
+                return { kind: 'saved', pattern: savedPattern, fragment: candidate };
+            }
+        }
+        if (canCheckSummary && window.messageProcessor.isSummaryLine(candidate)) {
+            return { kind: 'summary', fragment: candidate };
+        }
+    }
+
+    if (draftPattern) {
+        return { kind: 'draft_pending', pattern: draftPattern, fragment: '' };
+    }
+    return null;
+}
+
+function refreshNoiseRuleWorkspace(options = {}) {
+    if (options && options.resetEditor) {
+        resetNoiseRulePatternInput();
+    } else {
+        renderNoiseRuleEditorState();
+    }
+    renderNoiseRuleList();
+    renderNoiseRulePreview();
+    refreshRegionPnlPanel();
+}
+
+function renderNoiseRulePreview() {
+    const output = document.getElementById('noiseRulePreview');
+    const sampleInput = document.getElementById('noiseRuleSampleInput');
+    if (!output || !sampleInput) return;
+    const sample = String(sampleInput.value || '').trim();
+    if (!sample) {
+        output.innerHTML = '<div class="anchor-impact-empty">请输入样例后查看噪音规则预览。</div>';
+        return;
+    }
+    if (!window.messageProcessor) {
+        output.innerHTML = '<div class="anchor-impact-empty">当前版本不支持噪音规则预览。</div>';
+        return;
+    }
+    const previewClientId = getNoiseRulePreviewClientIdByContext();
+    const selectedPreview = getNoiseRulePreviewSelection();
+    const matchDetail = findNoisePreviewMatch(sample, previewClientId, {
+        selectedPattern: selectedPreview.pattern,
+        selectedSource: selectedPreview.source,
+        selectedClientId: selectedPreview.clientId
+    });
+
+    let preview = null;
+    if (typeof window.messageProcessor.previewMessage === 'function') {
+        preview = window.messageProcessor.previewMessage(sample, { clientId: previewClientId });
+    }
+
+    let matchedHtml = '';
+    if (matchDetail && matchDetail.kind === 'selected') {
+        matchedHtml = `
+            <div class="noise-rule-preview-tip success">
+                当前选中规则已命中：<span class="mono">${escapeHtml(matchDetail.pattern)}</span>
+                ${matchDetail.fragment && matchDetail.fragment !== sample ? `<div class="noise-rule-preview-fragment">命中片段：${escapeHtml(matchDetail.fragment)}</div>` : ''}
+            </div>
+        `;
+    } else if (matchDetail && matchDetail.kind === 'selected_pending') {
+        matchedHtml = `
+            <div class="noise-rule-preview-tip neutral">
+                当前选中规则未命中样例：<span class="mono">${escapeHtml(matchDetail.pattern)}</span>
+            </div>
+        `;
+    } else if (matchDetail && matchDetail.kind === 'draft') {
+        matchedHtml = `
+            <div class="noise-rule-preview-tip success">
+                当前输入模板已命中：<span class="mono">${escapeHtml(matchDetail.pattern)}</span>
+                ${matchDetail.fragment && matchDetail.fragment !== sample ? `<div class="noise-rule-preview-fragment">命中片段：${escapeHtml(matchDetail.fragment)}</div>` : ''}
+            </div>
+        `;
+    } else if (matchDetail && matchDetail.kind === 'saved') {
+        matchedHtml = `
+            <div class="noise-rule-preview-tip success">
+                命中已保存噪音规则：<span class="mono">${escapeHtml(matchDetail.pattern)}</span>
+                ${matchDetail.fragment && matchDetail.fragment !== sample ? `<div class="noise-rule-preview-fragment">命中片段：${escapeHtml(matchDetail.fragment)}</div>` : ''}
+            </div>
+        `;
+    } else if (matchDetail && matchDetail.kind === 'summary') {
+        matchedHtml = `
+            <div class="noise-rule-preview-tip neutral">
+                命中内置摘要忽略规则：该片段不会参与入账。
+                ${matchDetail.fragment && matchDetail.fragment !== sample ? `<div class="noise-rule-preview-fragment">命中片段：${escapeHtml(matchDetail.fragment)}</div>` : ''}
+            </div>
+        `;
+    } else if (matchDetail && matchDetail.kind === 'draft_pending') {
+        matchedHtml = `
+            <div class="noise-rule-preview-tip neutral">
+                当前输入模板尚未命中样例：<span class="mono">${escapeHtml(matchDetail.pattern)}</span>
+            </div>
+        `;
+    }
+
+    if (matchDetail && matchDetail.kind === 'selected_pending') {
+        output.innerHTML = `
+            ${matchedHtml}
+            <div class="anchor-impact-error-title">当前选中规则不会忽略这段样例</div>
+            <div class="anchor-impact-error-msg">请更换样例，或点击左侧其他噪音规则继续预览。</div>
+        `;
+        return;
+    }
+
+    if (preview && preview.success) {
+        output.innerHTML = `
+            ${matchedHtml}
+            <div class="noise-rule-preview-tip neutral">如果标准格式中没有原文尾巴，说明尾部噪音已被忽略或未参与入账。</div>
+            ${buildAnchorPreviewResultHtml(preview)}
+        `;
+        return;
+    }
+
+    if (matchDetail && ['selected', 'draft', 'saved', 'summary'].includes(matchDetail.kind)) {
+        output.innerHTML = `
+            ${matchedHtml}
+            <div class="anchor-impact-success">
+                <div class="anchor-impact-success-title">该片段会被忽略</div>
+                <div class="anchor-impact-success-list">
+                    <div>${escapeHtml(matchDetail.fragment || sample)}</div>
+                </div>
+            </div>
+        `;
+        return;
+    }
+
+    const errorText = preview && preview.error ? preview.error : '当前样例不会被噪音规则忽略，且未形成有效下注。';
+    output.innerHTML = `
+        <div class="anchor-impact-error-title">当前不会被忽略</div>
+        <div class="anchor-impact-error-msg">${escapeHtml(errorText)}</div>
+    `;
+}
+
+function copyNoiseRulesToClient(rows) {
+    try {
+        if (!Array.isArray(rows) || rows.length === 0) return;
+        if (!window.messageProcessor || typeof window.messageProcessor.upsertNoiseRule !== 'function') {
+            throw new Error('当前版本不支持噪音规则');
+        }
+        const { scope, clientId } = getNoiseRuleContext({ requireClientForClientScope: true });
+        if (scope !== 'client' || !clientId) {
+            throw new Error('请先切换到客户专属规则后再复制');
+        }
+        rows.forEach((row) => {
+            const pattern = String(row && row.pattern ? row.pattern : '').trim();
+            if (!pattern) return;
+            window.messageProcessor.upsertNoiseRule(pattern, { scope: 'client', clientId });
+        });
+        recalculateAllUsersByRuleChange();
+        if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
+            window.userManager.renderAllSections();
+        }
+        refreshNoiseRuleWorkspace();
+        previewMessage({ silent: true });
+        showSuccess(`已复制 ${rows.length} 条噪音规则到客户 ${clientId}`);
+    } catch (error) {
+        showError('复制噪音规则失败', error.message || '未知错误');
+    }
+}
+
+function removeNoiseRulePattern(pattern) {
+    try {
+        if (!window.messageProcessor || typeof window.messageProcessor.removeNoiseRule !== 'function') {
+            throw new Error('当前版本不支持噪音规则');
+        }
+        const { scope, clientId } = getNoiseRuleContext({ requireClientForClientScope: true });
+        const normalizedPattern = String(pattern || '').trim();
+        const input = document.getElementById('noiseRulePatternInput');
+        const currentInputPattern = input ? String(input.value || '').trim() : '';
+        const shouldResetEditor = currentInputPattern === normalizedPattern;
+        if (!normalizedPattern) {
+            throw new Error('缺少噪音规则内容');
+        }
+        window.messageProcessor.removeNoiseRule(normalizedPattern, { scope, clientId });
+        if (shouldResetEditor) {
+            noiseRuleEditorState.editPattern = '';
+            noiseRuleEditorState.editSource = '';
+            noiseRuleEditorState.editClientId = '';
+        }
+        recalculateAllUsersByRuleChange();
+        if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
+            window.userManager.renderAllSections();
+        }
+        refreshNoiseRuleWorkspace({ resetEditor: shouldResetEditor });
+        previewMessage({ silent: true });
+        showSuccess(`${getScopeDisplayName(scope)}噪音规则已删除：${normalizedPattern}`);
+    } catch (error) {
+        showError('删除噪音规则失败', error.message || '未知错误');
+    }
+}
+
+function saveNoiseRulePattern() {
+    try {
+        if (!window.messageProcessor || typeof window.messageProcessor.upsertNoiseRule !== 'function') {
+            throw new Error('当前版本不支持噪音规则');
+        }
+        const { scope, clientId } = getNoiseRuleContext({ requireClientForClientScope: true });
+        const input = document.getElementById('noiseRulePatternInput');
+        const pattern = input ? String(input.value || '').trim() : '';
+        const result = window.messageProcessor.upsertNoiseRule(pattern, { scope, clientId });
+        recalculateAllUsersByRuleChange();
+        if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
+            window.userManager.renderAllSections();
+        }
+        refreshNoiseRuleWorkspace({ resetEditor: true });
+        previewMessage({ silent: true });
+        showSuccess(`${getScopeDisplayName(scope)}噪音规则已保存：${result.pattern}`);
+    } catch (error) {
+        showError('保存噪音规则失败', error.message || '未知错误');
+    }
+}
+
+function renderNoiseRuleList() {
+    const list = document.getElementById('noiseRuleList');
+    if (!list) return;
+    list.innerHTML = '';
+
+    if (!window.messageProcessor || typeof window.messageProcessor.getNoiseRuleRows !== 'function') {
+        const empty = document.createElement('div');
+        empty.className = 'anchor-alias-empty';
+        empty.textContent = '当前版本不支持噪音规则';
+        list.appendChild(empty);
+        return;
+    }
+
+    const { scope, clientId } = getNoiseRuleContext();
+    if (scope === 'client' && !clientId) {
+        const empty = document.createElement('div');
+        empty.className = 'anchor-alias-empty';
+        empty.textContent = '请选择目标客户后再查看/编辑客户专属噪音规则';
+        list.appendChild(empty);
+        return;
+    }
+
+    const rows = window.messageProcessor.getNoiseRuleRows({ clientId });
+    const allRows = Array.isArray(rows) ? rows.filter(Boolean) : [];
+    const currentSelection = getNoiseRulePreviewSelection();
+    if (currentSelection.pattern && !allRows.some((row) => isNoiseRulePreviewSelected(row, currentSelection))) {
+        clearNoiseRulePreviewSelection();
+    }
+    const activeSelection = getNoiseRulePreviewSelection();
+    const filterState = getNoiseRuleFilterState();
+    const targetSource = scope === 'client' ? 'client' : 'global';
+    const displayRows = allRows.filter((row) => {
+        if (!row) return false;
+        if (filterState.source !== 'all' && row.source !== filterState.source) return false;
+        if (!filterState.keyword) return true;
+        const haystack = [
+            row.pattern,
+            getAnchorAliasSourceLabel(row.source, scope),
+            ...buildNoiseRuleExamples(row.pattern)
+        ]
+            .map(item => String(item || '').toLowerCase())
+            .join(' ');
+        return haystack.includes(filterState.keyword);
+    });
+
+    const container = document.createElement('div');
+    container.className = 'anchor-strategy-lanes';
+
+    const intro = document.createElement('div');
+    intro.className = 'anchor-strategy-current-intro';
+    intro.innerHTML = `
+        <div class="anchor-strategy-current-title">模式型噪音忽略</div>
+        <div class="anchor-strategy-current-summary">适合忽略统计尾巴、摘要尾巴、图片 OCR 多余尾句。固定词如“总共”会命中“总共30”；需要更明确时可用模板：共{金额}、合计{金额}。</div>
+        <ul class="anchor-strategy-current-examples">
+            <li>总共 => 命中 总共30 / 总共 40</li>
+            <li>共{金额} => 命中 共30 / 共 40 / 共五十</li>
+            <li>合计{金额} => 命中 合计30 / 合计30元</li>
+            <li>只会忽略匹配到的片段，不会把真正的锚点词误删</li>
+        </ul>
+    `;
+    container.appendChild(intro);
+
+    ANCHOR_SOURCE_DISPLAY_ORDER.forEach((sourceKey) => {
+        const laneRows = displayRows.filter(row => row.source === sourceKey);
+        const lane = document.createElement('section');
+        lane.className = `anchor-strategy-lane source-${sourceKey}`;
+
+        const laneHead = document.createElement('div');
+        laneHead.className = 'anchor-strategy-lane-head';
+        const left = document.createElement('div');
+        left.className = 'anchor-strategy-lane-head-left';
+        const sourceTag = document.createElement('span');
+        sourceTag.className = `anchor-alias-source-tag source-${sourceKey}`;
+        sourceTag.textContent = getAnchorAliasSourceLabel(sourceKey, scope);
+        const sourceHint = document.createElement('span');
+        sourceHint.className = 'anchor-strategy-source-hint';
+        sourceHint.textContent = ANCHOR_SOURCE_HINTS[sourceKey] || '';
+        left.appendChild(sourceTag);
+        left.appendChild(sourceHint);
+
+        const right = document.createElement('div');
+        right.className = 'anchor-strategy-lane-head-right';
+        const count = document.createElement('span');
+        count.className = 'anchor-strategy-lane-count';
+        count.textContent = `${laneRows.length} 条`;
+        right.appendChild(count);
+        if (laneRows.length > 0 && scope === 'client' && sourceKey !== 'client') {
+            const copyBtn = document.createElement('button');
+            copyBtn.type = 'button';
+            copyBtn.className = 'anchor-lane-action-btn';
+            copyBtn.textContent = '复制到客户层';
+            copyBtn.addEventListener('click', () => copyNoiseRulesToClient(laneRows));
+            right.appendChild(copyBtn);
+        }
+        laneHead.appendChild(left);
+        laneHead.appendChild(right);
+        lane.appendChild(laneHead);
+
+        if (laneRows.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'anchor-alias-empty';
+            empty.textContent = '该来源暂无匹配噪音规则';
+            lane.appendChild(empty);
+            container.appendChild(lane);
+            return;
+        }
+
+        const cards = document.createElement('div');
+        cards.className = 'anchor-strategy-source-rows';
+
+        laneRows.forEach((row) => {
+            const editable = row.source === targetSource;
+            const card = document.createElement('div');
+            const isSelected = isNoiseRulePreviewSelected(row, activeSelection);
+            card.className = `anchor-strategy-rule-card previewable source-${row.source} ${editable ? '' : 'readonly'} ${isSelected ? 'is-selected' : ''} noise-rule-card`.trim();
+            card.tabIndex = 0;
+            card.setAttribute('role', 'button');
+            card.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
+            card.addEventListener('click', () => {
+                selectNoiseRulePreview(row.pattern, row.source, row.clientId || '');
+                applyNoiseRulePreviewSample(row.pattern, { clientId: row.clientId || '' });
+                renderNoiseRuleList();
+                renderNoiseRulePreview();
+            });
+            card.addEventListener('keydown', (event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                selectNoiseRulePreview(row.pattern, row.source, row.clientId || '');
+                applyNoiseRulePreviewSample(row.pattern, { clientId: row.clientId || '' });
+                renderNoiseRuleList();
+                renderNoiseRulePreview();
+            });
+
+            const head = document.createElement('div');
+            head.className = 'anchor-strategy-rule-head';
+            const token = document.createElement('div');
+            token.className = 'anchor-strategy-rule-token noise-rule-pattern';
+            token.textContent = row.pattern;
+            token.title = row.pattern;
+            const stateChip = document.createElement('span');
+            stateChip.className = 'anchor-rule-state-chip active';
+            stateChip.textContent = '生效中';
+            head.appendChild(token);
+            head.appendChild(stateChip);
+
+            const desc = document.createElement('div');
+            desc.className = 'anchor-strategy-rule-desc';
+            const examples = buildNoiseRuleExamples(row.pattern);
+            desc.innerHTML = `
+                <div>模板规则：命中后该片段直接忽略，不参与入账。</div>
+                <div class="noise-rule-card-meta">示例：${escapeHtml(examples.join(' / '))}</div>
+            `;
+
+            const footer = document.createElement('div');
+            footer.className = 'anchor-strategy-rule-footer';
+            const scopeText = document.createElement('div');
+            scopeText.className = 'noise-rule-card-scope';
+            scopeText.textContent = editable ? '当前层可编辑' : '继承层，只读';
+            footer.appendChild(scopeText);
+
+            const actionWrap = document.createElement('div');
+            actionWrap.className = `anchor-alias-item-actions ${editable ? '' : 'readonly'}`.trim();
+            if (editable) {
+                const editBtn = document.createElement('button');
+                editBtn.className = 'edit-button anchor-action-primary';
+                editBtn.textContent = '编辑';
+                editBtn.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    fillNoiseRulePattern(row.pattern, row.source, row.clientId || '');
+                });
+                const removeBtn = document.createElement('button');
+                removeBtn.className = 'cancel-button';
+                removeBtn.textContent = '删除';
+                removeBtn.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    removeNoiseRulePattern(row.pattern);
+                });
+                actionWrap.appendChild(editBtn);
+                actionWrap.appendChild(removeBtn);
+            } else {
+                const readonlyTag = document.createElement('span');
+                readonlyTag.className = 'anchor-alias-readonly-tag';
+                readonlyTag.textContent = '只读';
+                actionWrap.appendChild(readonlyTag);
+            }
+            footer.appendChild(actionWrap);
+
+            card.appendChild(head);
+            card.appendChild(desc);
+            card.appendChild(footer);
+            cards.appendChild(card);
+        });
+
+        lane.appendChild(cards);
+        container.appendChild(lane);
+    });
+
+    list.appendChild(container);
+}
+
+function applyAmountUnitExample() {
+    const sampleInput = document.getElementById('amountUnitSampleInput');
+    if (!sampleInput) return;
+    const selectedPreview = getAmountUnitPreviewSelection();
+    if (selectedPreview.token) {
+        applyAmountUnitPreviewSample(selectedPreview.token, { clientId: selectedPreview.clientId });
+    } else {
+        sampleInput.value = '01*10块 23.24各5';
+    }
+    renderAmountUnitPreview();
+}
+
+function resetAmountUnitTokenInput() {
+    const input = document.getElementById('amountUnitTokenInput');
+    if (input) {
+        input.value = '';
+    }
+    amountUnitEditorState.editToken = '';
+    amountUnitEditorState.editSource = '';
+    amountUnitEditorState.editClientId = '';
+    clearAmountUnitPreviewSelection();
+    renderAmountUnitEditorState();
+    renderAmountUnitList();
+    renderAmountUnitPreview();
+}
+
+function fillAmountUnitToken(token, source = '', clientId = '') {
+    const input = document.getElementById('amountUnitTokenInput');
+    if (!input) return;
+    const normalizedToken = normalizeAmountUnitInput(token) || String(token || '').trim();
+    input.value = normalizedToken;
+    amountUnitEditorState.editToken = normalizedToken;
+    amountUnitEditorState.editSource = String(source || '').trim();
+    amountUnitEditorState.editClientId = String(clientId || '').trim();
+    if (source) {
+        selectAmountUnitPreview(normalizedToken, source, clientId);
+        applyAmountUnitPreviewSample(normalizedToken, { clientId });
+    } else {
+        clearAmountUnitPreviewSelection();
+    }
+    input.focus();
+    input.select();
+    renderAmountUnitEditorState();
+    renderAmountUnitList();
+    renderAmountUnitPreview();
+}
+
+function renderAmountUnitEditorState(scope = null, clientId = null) {
+    const stateEl = document.getElementById('amountUnitEditorState');
+    const input = document.getElementById('amountUnitTokenInput');
+    if (!stateEl) return;
+    const context = scope == null ? getAmountUnitContext() : {
+        scope: scope === 'client' ? 'client' : 'global',
+        clientId: String(clientId || '').trim()
+    };
+    const token = input ? normalizeAmountUnitInput(input.value) : '';
+    stateEl.className = 'anchor-policy-state';
+    if (context.scope === 'client' && !context.clientId) {
+        stateEl.classList.add('is-warning');
+        stateEl.textContent = '当前是客户层，但还没选客户；请先选择客户后再保存金额单位。';
+        return;
+    }
+    if (!token) {
+        stateEl.textContent = context.scope === 'client'
+            ? `当前保存范围：客户「${context.clientId}」层。适合录入像“块 / 毛 / 闷”这种金额结尾词。`
+            : '当前保存范围：全局层。适合录入像“元 / 块 / 米 / 毛”这种金额结尾词。';
+        return;
+    }
+    stateEl.classList.add('is-draft');
+    stateEl.textContent = context.scope === 'client'
+        ? `准备保存到客户「${context.clientId}」层：${token}`
+        : `准备保存到全局层：${token}`;
+}
+
+function buildAmountUnitExamples(token) {
+    const normalizedToken = normalizeAmountUnitInput(token);
+    if (!normalizedToken) return [];
+    return [
+        `01*10${normalizedToken}`,
+        `01.10${normalizedToken}`,
+        `23各五${normalizedToken}`
+    ];
+}
+
+function buildAmountUnitPreviewExampleText(token) {
+    const examples = buildAmountUnitExamples(token);
+    return examples[0] || '';
+}
+
+function applyAmountUnitPreviewSample(token, options = {}) {
+    const sampleInput = document.getElementById('amountUnitSampleInput');
+    if (!sampleInput) return;
+    const exampleText = buildAmountUnitPreviewExampleText(token);
+    if (!exampleText) return;
+    const suffixExample = buildAmountUnitExamples(token)[2] || `23各五${normalizeAmountUnitInput(token)}`;
+    sampleInput.value = `${exampleText} ${suffixExample}`.trim();
+}
+
+function refreshAmountUnitWorkspace(options = {}) {
+    if (options && options.resetEditor) {
+        resetAmountUnitTokenInput();
+        return;
+    }
+    renderAmountUnitEditorState();
+    renderAmountUnitList();
+    renderAmountUnitPreview();
+}
+
+function renderAmountUnitPreview() {
+    const output = document.getElementById('amountUnitPreview');
+    const sampleInput = document.getElementById('amountUnitSampleInput');
+    if (!output || !sampleInput) return;
+    const sample = String(sampleInput.value || '').trim();
+    if (!sample) {
+        output.innerHTML = '<div class="anchor-impact-empty">请输入样例后查看金额单位预览。</div>';
+        return;
+    }
+    if (!window.messageProcessor || typeof window.messageProcessor.previewMessage !== 'function') {
+        output.innerHTML = '<div class="anchor-impact-empty">当前版本不支持金额单位预览。</div>';
+        return;
+    }
+    const previewClientId = getAmountUnitPreviewClientIdByContext();
+    const selectedPreview = getAmountUnitPreviewSelection();
+    const draftToken = normalizeAmountUnitInput(document.getElementById('amountUnitTokenInput')?.value || '');
+    const draftContext = getAmountUnitContext();
+    let tipHtml = '';
+    if (selectedPreview.token) {
+        tipHtml = `
+            <div class="noise-rule-preview-tip neutral">
+                当前选中金额单位：<span class="mono">${escapeHtml(selectedPreview.token)}</span>
+            </div>
+        `;
+    } else if (draftToken) {
+        tipHtml = `
+            <div class="noise-rule-preview-tip neutral">
+                当前输入金额单位：<span class="mono">${escapeHtml(draftToken)}</span>
+            </div>
+        `;
+    }
+    let preview = null;
+    let simulatedDraft = false;
+    if (!selectedPreview.token
+        && draftToken
+        && (draftContext.scope !== 'client' || draftContext.clientId)
+        && typeof window.messageProcessor.getAttributeConfig === 'function'
+        && typeof window.messageProcessor.setAttributeConfig === 'function') {
+        const backupConfig = window.messageProcessor.getAttributeConfig();
+        try {
+            const tempConfig = JSON.parse(JSON.stringify(backupConfig || {}));
+            if (draftContext.scope === 'client') {
+                if (!tempConfig.clientRules || typeof tempConfig.clientRules !== 'object') {
+                    tempConfig.clientRules = {};
+                }
+                if (!tempConfig.clientRules[draftContext.clientId] || typeof tempConfig.clientRules[draftContext.clientId] !== 'object') {
+                    tempConfig.clientRules[draftContext.clientId] = {};
+                }
+                const currentUnits = Array.isArray(tempConfig.clientRules[draftContext.clientId].amountUnits)
+                    ? tempConfig.clientRules[draftContext.clientId].amountUnits
+                    : [];
+                tempConfig.clientRules[draftContext.clientId].amountUnits = Array.from(new Set([
+                    ...currentUnits,
+                    draftToken
+                ]));
+            } else {
+                if (!tempConfig.globalRules || typeof tempConfig.globalRules !== 'object') {
+                    tempConfig.globalRules = {};
+                }
+                const currentUnits = Array.isArray(tempConfig.globalRules.amountUnits)
+                    ? tempConfig.globalRules.amountUnits
+                    : [];
+                tempConfig.globalRules.amountUnits = Array.from(new Set([
+                    ...currentUnits,
+                    draftToken
+                ]));
+            }
+            window.messageProcessor.setAttributeConfig(tempConfig);
+            preview = window.messageProcessor.previewMessage(sample, { clientId: previewClientId });
+            simulatedDraft = true;
+        } catch (error) {
+            preview = window.messageProcessor.previewMessage(sample, { clientId: previewClientId });
+        } finally {
+            try {
+                window.messageProcessor.setAttributeConfig(backupConfig);
+            } catch (restoreError) {
+                // ignore
+            }
+        }
+    } else {
+        preview = window.messageProcessor.previewMessage(sample, { clientId: previewClientId });
+    }
+    if (preview && preview.success) {
+        output.innerHTML = `
+            ${tipHtml}
+            <div class="noise-rule-preview-tip neutral">${simulatedDraft ? '当前结果按“保存后预期效果”预演。' : '如果标准格式里出现 01各10、23各五 这类结果，说明该金额单位已被识别。'}</div>
+            ${buildAnchorPreviewResultHtml(preview)}
+        `;
+        return;
+    }
+    output.innerHTML = `
+        ${tipHtml}
+        <div class="anchor-impact-error-title">当前样例还没有识别成功</div>
+        <div class="anchor-impact-error-msg">${escapeHtml(preview && preview.error ? preview.error : '该金额单位尚未形成有效下注')}</div>
+    `;
+}
+
+function copyAmountUnitsToClient(rows) {
+    try {
+        if (!Array.isArray(rows) || rows.length === 0) return;
+        if (!window.messageProcessor || typeof window.messageProcessor.upsertAmountUnit !== 'function') {
+            throw new Error('当前版本不支持金额单位');
+        }
+        const { scope, clientId } = getAmountUnitContext({ requireClientForClientScope: true });
+        if (scope !== 'client' || !clientId) {
+            throw new Error('请先切换到客户专属后再复制');
+        }
+        rows.forEach((row) => {
+            const token = normalizeAmountUnitInput(row && row.token ? row.token : '');
+            if (!token) return;
+            window.messageProcessor.upsertAmountUnit(token, { scope: 'client', clientId });
+        });
+        recalculateAllUsersByRuleChange();
+        if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
+            window.userManager.renderAllSections();
+        }
+        refreshAmountUnitWorkspace();
+        previewMessage({ silent: true });
+        showSuccess(`已复制 ${rows.length} 个金额单位到客户 ${clientId}`);
+    } catch (error) {
+        showError('复制金额单位失败', error.message || '未知错误');
+    }
+}
+
+function removeAmountUnitToken(token) {
+    try {
+        if (!window.messageProcessor || typeof window.messageProcessor.removeAmountUnit !== 'function') {
+            throw new Error('当前版本不支持金额单位');
+        }
+        const { scope, clientId } = getAmountUnitContext({ requireClientForClientScope: true });
+        const normalizedToken = normalizeAmountUnitInput(token);
+        const input = document.getElementById('amountUnitTokenInput');
+        const currentInputToken = normalizeAmountUnitInput(input ? input.value : '');
+        const shouldResetEditor = currentInputToken === normalizedToken;
+        if (!normalizedToken) {
+            throw new Error('缺少金额单位内容');
+        }
+        window.messageProcessor.removeAmountUnit(normalizedToken, { scope, clientId });
+        if (shouldResetEditor) {
+            amountUnitEditorState.editToken = '';
+            amountUnitEditorState.editSource = '';
+            amountUnitEditorState.editClientId = '';
+        }
+        recalculateAllUsersByRuleChange();
+        if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
+            window.userManager.renderAllSections();
+        }
+        refreshAmountUnitWorkspace({ resetEditor: shouldResetEditor });
+        previewMessage({ silent: true });
+        showSuccess(`${getScopeDisplayName(scope)}金额单位已删除：${normalizedToken}`);
+    } catch (error) {
+        showError('删除金额单位失败', error.message || '未知错误');
+    }
+}
+
+function saveAmountUnitToken() {
+    try {
+        if (!window.messageProcessor || typeof window.messageProcessor.upsertAmountUnit !== 'function') {
+            throw new Error('当前版本不支持金额单位');
+        }
+        const { scope, clientId } = getAmountUnitContext({ requireClientForClientScope: true });
+        const input = document.getElementById('amountUnitTokenInput');
+        const token = input ? String(input.value || '').trim() : '';
+        const result = window.messageProcessor.upsertAmountUnit(token, { scope, clientId });
+        recalculateAllUsersByRuleChange();
+        if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
+            window.userManager.renderAllSections();
+        }
+        refreshAmountUnitWorkspace({ resetEditor: true });
+        previewMessage({ silent: true });
+        showSuccess(`${getScopeDisplayName(scope)}金额单位已保存：${result.token}`);
+    } catch (error) {
+        showError('保存金额单位失败', error.message || '未知错误');
+    }
+}
+
+function renderAmountUnitList() {
+    const list = document.getElementById('amountUnitList');
+    if (!list) return;
+    list.innerHTML = '';
+
+    if (!window.messageProcessor || typeof window.messageProcessor.getAmountUnitRows !== 'function') {
+        const empty = document.createElement('div');
+        empty.className = 'anchor-alias-empty';
+        empty.textContent = '当前版本不支持金额单位';
+        list.appendChild(empty);
+        return;
+    }
+
+    const { scope, clientId } = getAmountUnitContext();
+    if (scope === 'client' && !clientId) {
+        const empty = document.createElement('div');
+        empty.className = 'anchor-alias-empty';
+        empty.textContent = '请选择目标客户后再查看/编辑客户专属金额单位';
+        list.appendChild(empty);
+        return;
+    }
+
+    const rows = window.messageProcessor.getAmountUnitRows({ clientId });
+    const allRows = Array.isArray(rows) ? rows.filter(Boolean) : [];
+    const currentSelection = getAmountUnitPreviewSelection();
+    if (currentSelection.token && !allRows.some((row) => isAmountUnitPreviewSelected(row, currentSelection))) {
+        clearAmountUnitPreviewSelection();
+    }
+    const activeSelection = getAmountUnitPreviewSelection();
+    const filterState = getAmountUnitFilterState();
+    const targetSource = scope === 'client' ? 'client' : 'global';
+    const displayRows = allRows.filter((row) => {
+        if (!row) return false;
+        if (filterState.source !== 'all' && row.source !== filterState.source) return false;
+        if (!filterState.keyword) return true;
+        const haystack = [
+            row.token,
+            getAnchorAliasSourceLabel(row.source, scope),
+            ...buildAmountUnitExamples(row.token)
+        ]
+            .map(item => String(item || '').toLowerCase())
+            .join(' ');
+        return haystack.includes(filterState.keyword);
+    });
+
+    const container = document.createElement('div');
+    container.className = 'anchor-strategy-lanes';
+
+    const intro = document.createElement('div');
+    intro.className = 'anchor-strategy-current-intro';
+    intro.innerHTML = `
+        <div class="anchor-strategy-current-title">金额边界词表</div>
+        <div class="anchor-strategy-current-summary">这些词告诉解析器“金额已经结束”。适合补齐 块 / 毛 / 角 / 分 / 闷 这类口语或客户自定义写法。</div>
+        <ul class="anchor-strategy-current-examples">
+            <li>块 => 命中 01*10块 / 23各五块</li>
+            <li>毛 => 命中 01*10毛 / 23各五毛</li>
+            <li>闷 => 仅当你确认它在当前客户里表示金额单位时再加</li>
+            <li>这里只负责识别金额结尾，不会把它当锚点</li>
+        </ul>
+    `;
+    container.appendChild(intro);
+
+    ANCHOR_SOURCE_DISPLAY_ORDER.forEach((sourceKey) => {
+        const laneRows = displayRows.filter(row => row.source === sourceKey);
+        const lane = document.createElement('section');
+        lane.className = `anchor-strategy-lane source-${sourceKey}`;
+
+        const laneHead = document.createElement('div');
+        laneHead.className = 'anchor-strategy-lane-head';
+        const left = document.createElement('div');
+        left.className = 'anchor-strategy-lane-head-left';
+        const sourceTag = document.createElement('span');
+        sourceTag.className = `anchor-alias-source-tag source-${sourceKey}`;
+        sourceTag.textContent = getAnchorAliasSourceLabel(sourceKey, scope);
+        const sourceHint = document.createElement('span');
+        sourceHint.className = 'anchor-strategy-source-hint';
+        sourceHint.textContent = ANCHOR_SOURCE_HINTS[sourceKey] || '';
+        left.appendChild(sourceTag);
+        left.appendChild(sourceHint);
+
+        const right = document.createElement('div');
+        right.className = 'anchor-strategy-lane-head-right';
+        const count = document.createElement('span');
+        count.className = 'anchor-strategy-lane-count';
+        count.textContent = `${laneRows.length} 条`;
+        right.appendChild(count);
+        if (laneRows.length > 0 && scope === 'client' && sourceKey !== 'client') {
+            const copyBtn = document.createElement('button');
+            copyBtn.type = 'button';
+            copyBtn.className = 'anchor-lane-action-btn';
+            copyBtn.textContent = '复制到客户层';
+            copyBtn.addEventListener('click', () => copyAmountUnitsToClient(laneRows));
+            right.appendChild(copyBtn);
+        }
+        laneHead.appendChild(left);
+        laneHead.appendChild(right);
+        lane.appendChild(laneHead);
+
+        if (laneRows.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'anchor-alias-empty';
+            empty.textContent = '该来源暂无匹配金额单位';
+            lane.appendChild(empty);
+            container.appendChild(lane);
+            return;
+        }
+
+        const cards = document.createElement('div');
+        cards.className = 'anchor-strategy-source-rows';
+
+        laneRows.forEach((row) => {
+            const editable = row.source === targetSource;
+            const card = document.createElement('div');
+            const isSelected = isAmountUnitPreviewSelected(row, activeSelection);
+            card.className = `anchor-strategy-rule-card previewable source-${row.source} ${editable ? '' : 'readonly'} ${isSelected ? 'is-selected' : ''} noise-rule-card`.trim();
+            card.tabIndex = 0;
+            card.setAttribute('role', 'button');
+            card.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
+            card.addEventListener('click', () => {
+                selectAmountUnitPreview(row.token, row.source, row.clientId || '');
+                applyAmountUnitPreviewSample(row.token, { clientId: row.clientId || '' });
+                renderAmountUnitList();
+                renderAmountUnitPreview();
+            });
+            card.addEventListener('keydown', (event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                selectAmountUnitPreview(row.token, row.source, row.clientId || '');
+                applyAmountUnitPreviewSample(row.token, { clientId: row.clientId || '' });
+                renderAmountUnitList();
+                renderAmountUnitPreview();
+            });
+
+            const head = document.createElement('div');
+            head.className = 'anchor-strategy-rule-head';
+            const token = document.createElement('div');
+            token.className = 'anchor-strategy-rule-token noise-rule-pattern';
+            token.textContent = row.token;
+            token.title = row.token;
+            const stateChip = document.createElement('span');
+            stateChip.className = 'anchor-rule-state-chip active';
+            stateChip.textContent = '生效中';
+            head.appendChild(token);
+            head.appendChild(stateChip);
+
+            const desc = document.createElement('div');
+            desc.className = 'anchor-strategy-rule-desc';
+            const examples = buildAmountUnitExamples(row.token);
+            desc.innerHTML = `
+                <div>金额单位：命中后用于识别金额结尾，不作为锚点参与分配。</div>
+                <div class="noise-rule-card-meta">示例：${escapeHtml(examples.join(' / '))}</div>
+            `;
+
+            const footer = document.createElement('div');
+            footer.className = 'anchor-strategy-rule-footer';
+            const scopeText = document.createElement('div');
+            scopeText.className = 'noise-rule-card-scope';
+            scopeText.textContent = editable ? '当前层可编辑' : '继承层，只读';
+            footer.appendChild(scopeText);
+
+            const actionWrap = document.createElement('div');
+            actionWrap.className = `anchor-alias-item-actions ${editable ? '' : 'readonly'}`.trim();
+            if (editable) {
+                const editBtn = document.createElement('button');
+                editBtn.className = 'edit-button anchor-action-primary';
+                editBtn.textContent = '编辑';
+                editBtn.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    fillAmountUnitToken(row.token, row.source, row.clientId || '');
+                });
+                const removeBtn = document.createElement('button');
+                removeBtn.className = 'cancel-button';
+                removeBtn.textContent = '删除';
+                removeBtn.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    removeAmountUnitToken(row.token);
+                });
+                actionWrap.appendChild(editBtn);
+                actionWrap.appendChild(removeBtn);
+            } else {
+                const readonlyTag = document.createElement('span');
+                readonlyTag.className = 'anchor-alias-readonly-tag';
+                readonlyTag.textContent = '只读';
+                actionWrap.appendChild(readonlyTag);
+            }
+            footer.appendChild(actionWrap);
+
+            card.appendChild(head);
+            card.appendChild(desc);
+            card.appendChild(footer);
+            cards.appendChild(card);
+        });
+
+        lane.appendChild(cards);
+        container.appendChild(lane);
+    });
+
+    list.appendChild(container);
 }
 
 function buildDrawerDefaultSample(mode, token = '') {
@@ -3308,11 +5111,15 @@ function summarizeAnchorPreviewOutcome(previewResult) {
             text: previewResult.error || '解析失败'
         };
     }
-    const entries = (((previewResult || {}).result || {}).entries) || [];
+    const entries = collectPreviewStandardEntries((previewResult || {}).result || {});
     const canonicals = entries
         .map(item => String(item && item.canonical ? item.canonical : '').trim())
         .filter(Boolean);
     if (canonicals.length === 0) {
+        const playEntries = collectPreviewPlayEntries((previewResult || {}).result || {});
+        if (playEntries.length > 0) {
+            return { state: 'neutral', text: '仅识别到未开放玩法' };
+        }
         return { state: 'neutral', text: '无标准格式输出' };
     }
     return {
@@ -3338,7 +5145,7 @@ function extractAnchorPreviewDetails(previewResult) {
             totalAmount: 0
         };
     }
-    const entries = (((previewResult || {}).result || {}).entries) || [];
+    const entries = collectPreviewStandardEntries((previewResult || {}).result || {});
     const canonicals = entries
         .map(item => String(item && item.canonical ? item.canonical : '').trim())
         .filter(Boolean);
@@ -3347,6 +5154,15 @@ function extractAnchorPreviewDetails(previewResult) {
         return Number.isFinite(amount) ? sum + amount : sum;
     }, 0);
     if (canonicals.length === 0) {
+        const playEntries = collectPreviewPlayEntries((previewResult || {}).result || {});
+        if (playEntries.length > 0) {
+            return {
+                success: false,
+                error: '仅识别到未开放玩法，当前不参与号码统计。',
+                canonicals: [],
+                totalAmount: 0
+            };
+        }
         return {
             success: false,
             error: '样例消息没有生成有效下注结果。',
@@ -4819,6 +6635,261 @@ function syncRecognizeMessageAutoHeight() {
     }
 }
 
+function canSubmitRecognizeMessageOnEnter() {
+    if (recognizeEditContext) return false;
+    if (!window.messageProcessor || typeof window.messageProcessor.previewMessage !== 'function') {
+        return false;
+    }
+
+    const messageTextarea = document.getElementById('message');
+    const rawValue = messageTextarea ? String(messageTextarea.value || '') : '';
+    if (!rawValue.trim()) return false;
+
+    let message = '';
+    try {
+        message = normalizeMessageBeforeSubmit(rawValue);
+    } catch (error) {
+        return false;
+    }
+    if (!message) return false;
+
+    const selectedUsers = typeof userManager.getSelectedUsers === 'function'
+        ? userManager.getSelectedUsers()
+        : [userManager.getCurrentUser()].filter(Boolean);
+    if (!Array.isArray(selectedUsers) || selectedUsers.length <= 0) {
+        return false;
+    }
+
+    return selectedUsers.every((userName) => {
+        try {
+            const preview = window.messageProcessor.previewMessage(message, { clientId: userName });
+            return !!(preview && preview.success && !isAmbiguityResult(preview));
+        } catch (error) {
+            return false;
+        }
+    });
+}
+
+function getRecognizeSpeechRecognitionCtor() {
+    if (typeof window === 'undefined') return null;
+    return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
+function resetRecognizeSpeechBuffer() {
+    recognizeSpeechFinalText = '';
+    recognizeSpeechInterimText = '';
+    recognizeSpeechLastError = '';
+}
+
+function normalizeRecognizeSpeechTranscript(text) {
+    return String(text || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+function getRecognizeSpeechErrorMessage(errorCode) {
+    const code = String(errorCode || '').trim();
+    if (code === 'not-allowed' || code === 'service-not-allowed') {
+        return '麦克风权限未开启，请在系统设置里允许当前应用使用麦克风。';
+    }
+    if (code === 'audio-capture') {
+        return '未检测到可用麦克风，请检查设备后重试。';
+    }
+    if (code === 'network') {
+        return '语音识别服务暂不可用，请检查网络后重试。';
+    }
+    if (code === 'no-speech') {
+        return '没有识别到语音，请重新说一遍。';
+    }
+    if (code === 'aborted') {
+        return '语音录入已停止。';
+    }
+    return code ? `语音录入失败：${code}` : '语音录入失败，请重试。';
+}
+
+function renderRecognizeVoiceUi() {
+    const button = document.getElementById('recognizeVoiceButton');
+    const statusEl = document.getElementById('recognizeVoiceStatus');
+    recognizeSpeechSupported = !!getRecognizeSpeechRecognitionCtor();
+
+    if (button) {
+        button.disabled = !recognizeSpeechSupported;
+        button.classList.toggle('unsupported', !recognizeSpeechSupported);
+        button.classList.toggle('listening', recognizeSpeechListening);
+        button.textContent = recognizeSpeechListening ? '停止语音' : '语音录入';
+        button.setAttribute('aria-pressed', recognizeSpeechListening ? 'true' : 'false');
+        button.title = recognizeSpeechSupported ? '使用麦克风把语音转成文字' : '当前环境不支持语音录入';
+    }
+
+    if (!statusEl) return;
+    statusEl.className = 'recognize-voice-status';
+    if (!recognizeSpeechSupported) {
+        statusEl.classList.add('error');
+        statusEl.textContent = '当前环境不支持语音录入。';
+        return;
+    }
+    if (recognizeSpeechListening) {
+        statusEl.classList.add('listening');
+        statusEl.textContent = recognizeSpeechInterimText
+            ? `正在听写：${recognizeSpeechInterimText}`
+            : '正在听写，请开始说话。';
+        return;
+    }
+    if (recognizeSpeechLastError) {
+        statusEl.classList.add('error');
+        statusEl.textContent = getRecognizeSpeechErrorMessage(recognizeSpeechLastError);
+        return;
+    }
+    if (recognizeSpeechFinalText) {
+        statusEl.textContent = `已识别：${recognizeSpeechFinalText}`;
+        return;
+    }
+    statusEl.textContent = '语音录入可用，点击“语音录入”开始听写。';
+}
+
+function appendRecognizeSpeechText(fragment) {
+    const messageTextarea = document.getElementById('message');
+    if (!messageTextarea) return;
+    const normalizedFragment = normalizeRecognizeSpeechTranscript(fragment);
+    if (!normalizedFragment) return;
+    const current = normalizeRecognizeSpeechTranscript(messageTextarea.value || '');
+    const nextText = current ? `${current}\n${normalizedFragment}` : normalizedFragment;
+    applyRecognizeMessageText(nextText);
+    clearMessageLineError();
+    previewMessage({ silent: true, realtime: true });
+}
+
+function ensureRecognizeSpeechRecognition() {
+    const RecognitionCtor = getRecognizeSpeechRecognitionCtor();
+    if (!RecognitionCtor) {
+        recognizeSpeechSupported = false;
+        renderRecognizeVoiceUi();
+        return null;
+    }
+    if (recognizeSpeechRecognition) {
+        return recognizeSpeechRecognition;
+    }
+
+    const recognition = new RecognitionCtor();
+    recognition.lang = 'zh-CN';
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => {
+        recognizeSpeechListening = true;
+        recognizeSpeechLastError = '';
+        renderRecognizeVoiceUi();
+    };
+
+    recognition.onresult = (event) => {
+        let interimText = '';
+        for (let i = event.resultIndex; i < event.results.length; i += 1) {
+            const result = event.results[i];
+            const transcript = normalizeRecognizeSpeechTranscript(result && result[0] ? result[0].transcript : '');
+            if (!transcript) continue;
+            if (result.isFinal) {
+                recognizeSpeechFinalText = normalizeRecognizeSpeechTranscript(`${recognizeSpeechFinalText} ${transcript}`);
+            } else {
+                interimText = normalizeRecognizeSpeechTranscript(`${interimText} ${transcript}`);
+            }
+        }
+        recognizeSpeechInterimText = interimText;
+        renderRecognizeVoiceUi();
+    };
+
+    recognition.onerror = (event) => {
+        const code = event && event.error ? String(event.error) : 'unknown';
+        if (recognizeSpeechManualStop && code === 'aborted') {
+            return;
+        }
+        recognizeSpeechLastError = code;
+        renderRecognizeVoiceUi();
+        if (code !== 'no-speech' && code !== 'aborted') {
+            showError('语音录入失败', getRecognizeSpeechErrorMessage(code));
+        }
+    };
+
+    recognition.onend = () => {
+        const shouldDiscard = recognizeSpeechDiscardOnEnd;
+        const finalText = recognizeSpeechFinalText;
+        recognizeSpeechListening = false;
+        recognizeSpeechInterimText = '';
+        recognizeSpeechDiscardOnEnd = false;
+        recognizeSpeechManualStop = false;
+
+        if (!shouldDiscard && finalText) {
+            appendRecognizeSpeechText(finalText);
+            showSuccess('语音已转成文字');
+            recognizeSpeechLastError = '';
+        } else if (!shouldDiscard && recognizeSpeechLastError === 'no-speech') {
+            showError('语音录入失败', getRecognizeSpeechErrorMessage('no-speech'));
+        }
+
+        recognizeSpeechFinalText = '';
+        renderRecognizeVoiceUi();
+    };
+
+    recognizeSpeechRecognition = recognition;
+    recognizeSpeechSupported = true;
+    return recognition;
+}
+
+function startRecognizeVoiceInput() {
+    const recognition = ensureRecognizeSpeechRecognition();
+    if (!recognition) {
+        showError('语音录入不可用', '当前环境不支持语音录入。');
+        return;
+    }
+    if (recognizeSpeechListening) return;
+
+    resetRecognizeSpeechBuffer();
+    recognizeSpeechDiscardOnEnd = false;
+    recognizeSpeechManualStop = false;
+    renderRecognizeVoiceUi();
+    try {
+        recognition.start();
+    } catch (error) {
+        const message = error && error.message ? error.message : '';
+        if (/already started/i.test(message)) {
+            recognizeSpeechListening = true;
+            renderRecognizeVoiceUi();
+            return;
+        }
+        showError('语音录入失败', message || '无法启动麦克风听写');
+    }
+}
+
+function stopRecognizeVoiceInput(options = {}) {
+    recognizeSpeechManualStop = true;
+    recognizeSpeechDiscardOnEnd = !!(options && options.discard);
+    if (recognizeSpeechRecognition && recognizeSpeechListening) {
+        try {
+            recognizeSpeechRecognition.stop();
+        } catch (error) {
+            recognizeSpeechListening = false;
+            renderRecognizeVoiceUi();
+        }
+        return;
+    }
+    if (recognizeSpeechDiscardOnEnd) {
+        resetRecognizeSpeechBuffer();
+    }
+    recognizeSpeechListening = false;
+    renderRecognizeVoiceUi();
+}
+
+function toggleRecognizeVoiceInput() {
+    if (recognizeSpeechListening) {
+        stopRecognizeVoiceInput();
+        return;
+    }
+    startRecognizeVoiceInput();
+}
+
 function setupRecognizeMessageInput() {
     const messageTextarea = document.getElementById('message');
     const lineNumberEl = document.getElementById('messageLineNumbers');
@@ -4836,8 +6907,14 @@ function setupRecognizeMessageInput() {
     messageTextarea.addEventListener('keydown', handleMessageManualInputKeydown);
     messageTextarea.addEventListener('keydown', (event) => {
         if (event.key !== 'Enter') return;
-        if (!(event.ctrlKey || event.metaKey)) return;
         if (event.isComposing || event.keyCode === 229) return;
+        if (event.shiftKey || event.altKey) return;
+        if (event.ctrlKey || event.metaKey) {
+            event.preventDefault();
+            confirmEdit();
+            return;
+        }
+        if (!canSubmitRecognizeMessageOnEnter()) return;
         event.preventDefault();
         confirmEdit();
     });
@@ -4884,6 +6961,7 @@ function setupRecognizeMessageInput() {
         ocrDropZone.addEventListener('paste', handleOcrPaste);
     }
     document.addEventListener('paste', handleGlobalOcrPaste, true);
+    renderRecognizeVoiceUi();
 
     syncRecognizeMessageAutoHeight();
     renderMessageLineNumbers();
@@ -5025,6 +7103,91 @@ function updateOcrHint(stateText = '') {
     hint.textContent = `已选择图片：${selectedOcrImage.name} (${kb} KB)`;
 }
 
+function getLocalAiUnavailableHint(status = localAiSemanticStatus) {
+    const hint = status && status.installHint
+        ? String(status.installHint)
+        : '内置模型文件缺失，请重新安装软件或检查 assets/ai 资源。';
+    return hint;
+}
+
+function setLocalAiRewriteButtonState() {
+    const button = document.getElementById('localAiFixButton');
+    if (!button) return;
+    button.disabled = localAiRewriteBusy;
+    button.textContent = localAiRewriteBusy ? '本地AI修正中...' : '本地AI修正';
+}
+
+function renderLocalAiSemanticStatus(status = {}) {
+    const nextStatus = status && typeof status === 'object' ? status : {};
+    localAiSemanticStatus = {
+        ...localAiSemanticStatus,
+        ...nextStatus,
+        checked: true,
+    };
+
+    const el = document.getElementById('localAiAssistStatus');
+    if (el) {
+        el.className = 'local-ai-assist-status';
+        if (localAiRewriteBusy && localAiSemanticStatus.message) {
+            el.classList.add('working');
+            el.textContent = localAiSemanticStatus.message;
+        } else if (localAiSemanticStatus.reason === 'loading') {
+            el.classList.add('working');
+            el.textContent = localAiSemanticStatus.message || '本地 AI 语义修正：内置模型加载中...';
+        } else if (localAiSemanticStatus.available) {
+            el.classList.add('ready');
+            el.textContent = `本地 AI 语义修正：内置模型已就绪（${localAiSemanticStatus.model || '中文小模型'}）`;
+        } else if (localAiSemanticStatus.reason === 'missing_files') {
+            el.classList.add('warning');
+            el.textContent = `本地 AI 语义修正：内置模型文件缺失。${getLocalAiUnavailableHint(localAiSemanticStatus)}`;
+        } else if (localAiSemanticStatus.reason === 'load_failed') {
+            el.classList.add('warning');
+            el.textContent = localAiSemanticStatus.message || '本地 AI 语义修正：内置模型初始化失败';
+        } else {
+            el.textContent = localAiSemanticStatus.message || '本地 AI 语义修正：检测中...';
+        }
+        el.title = localAiSemanticStatus.detail || '';
+    }
+
+    setLocalAiRewriteButtonState();
+}
+
+async function refreshLocalAiSemanticStatus(options = {}) {
+    if (!ipcRenderer || typeof ipcRenderer.invoke !== 'function') {
+        renderLocalAiSemanticStatus({
+            available: false,
+            reason: 'ipc_unavailable',
+            message: '本地 AI 语义修正：IPC 不可用',
+        });
+        return localAiSemanticStatus;
+    }
+
+    try {
+        const result = await ipcRenderer.invoke('ai:get-semantic-status', {
+            forceRefresh: !!(options && options.forceRefresh),
+        });
+        renderLocalAiSemanticStatus(result || {
+            available: false,
+            reason: 'empty',
+            message: '本地 AI 状态读取失败',
+        });
+    } catch (error) {
+        renderLocalAiSemanticStatus({
+            available: false,
+            reason: 'status_failed',
+            message: error && error.message ? error.message : '本地 AI 状态读取失败',
+        });
+    }
+    return localAiSemanticStatus;
+}
+
+async function ensureLocalAiSemanticStatusReady(forceRefresh = false) {
+    if (!localAiSemanticStatus.checked || forceRefresh) {
+        return refreshLocalAiSemanticStatus({ forceRefresh });
+    }
+    return localAiSemanticStatus;
+}
+
 function renderOcrPreview() {
     const wrap = document.getElementById('ocrPreviewWrap');
     const img = document.getElementById('ocrPreviewImage');
@@ -5041,7 +7204,7 @@ function renderOcrPreview() {
 function scoreCandidateWithParser(text) {
     const content = String(text || '').trim();
     if (!content) {
-        return { ok: false, score: 0, entries: 0, reason: '空内容', richness: 0 };
+        return { ok: false, score: 0, entries: 0, playEntries: 0, unresolvedCount: 0, reason: '空内容', richness: 0 };
     }
     const lines = content.split('\n').map(line => line.trim()).filter(Boolean);
     const lineCount = lines.length;
@@ -5062,21 +7225,36 @@ function scoreCandidateWithParser(text) {
     richness = Math.max(0, richness);
 
     if (!window.messageProcessor || typeof window.messageProcessor.previewMessage !== 'function') {
-        return { ok: false, score: richness + lineCount * 2, entries: 0, reason: '解析器不可用', richness };
+        return { ok: false, score: richness + lineCount * 2, entries: 0, playEntries: 0, unresolvedCount: 0, reason: '解析器不可用', richness };
     }
     try {
-        const preview = window.messageProcessor.previewMessage(content);
+        const preview = window.messageProcessor.previewMessage(content, { allowPartial: true });
         if (preview && preview.success) {
-            const entries = preview.result && Array.isArray(preview.result.entries) ? preview.result.entries.length : 0;
-            let score = 70 + entries * 12 + Math.min(20, lineCount * 3) + richness;
+            const entries = collectPreviewStandardEntries(preview.result || {}).length;
+            const playEntries = collectPreviewPlayEntries(preview.result || {}).length;
+            const unresolvedCount = Array.isArray(preview.result && preview.result.unresolvedLines)
+                ? preview.result.unresolvedLines.length
+                : 0;
+            let score = 70 + entries * 12 + playEntries * 4 + Math.min(20, lineCount * 3) + richness - unresolvedCount * 45;
             if (entries <= 1 && lineCount <= 1) score -= 35;
             if (digitCount <= 6) score -= 20;
-            return { ok: true, score: Math.max(0, score), entries, reason: '', richness };
+            if (unresolvedCount > 0) score -= 20;
+            return {
+                ok: unresolvedCount === 0 && entries > 0,
+                score: Math.max(0, score),
+                entries,
+                playEntries,
+                unresolvedCount,
+                reason: unresolvedCount > 0 ? `仍有 ${unresolvedCount} 行未识别` : '',
+                richness
+            };
         }
         return {
             ok: false,
             score: Math.min(40, lineCount * 5) + richness * 0.7,
             entries: 0,
+            playEntries: 0,
+            unresolvedCount: 0,
             reason: preview && preview.error ? preview.error : '解析失败',
             richness
         };
@@ -5085,16 +7263,92 @@ function scoreCandidateWithParser(text) {
             ok: false,
             score: Math.min(20, lineCount * 3) + richness * 0.6,
             entries: 0,
+            playEntries: 0,
+            unresolvedCount: 0,
             reason: error && error.message ? error.message : '解析异常',
             richness
         };
     }
 }
 
+function summarizePreviewQuality(previewResult) {
+    if (!previewResult || !previewResult.success || !previewResult.result) {
+        return {
+            success: false,
+            entries: 0,
+            playEntries: 0,
+            unresolvedCount: Number.MAX_SAFE_INTEGER,
+            totalAmount: 0,
+            score: -1000000,
+            reason: previewResult && previewResult.error ? previewResult.error : '解析失败'
+        };
+    }
+
+    const result = previewResult.result || {};
+    const entries = collectPreviewStandardEntries(result).length;
+    const playEntries = collectPreviewPlayEntries(result).length;
+    const unresolvedCount = Array.isArray(result.unresolvedLines) ? result.unresolvedLines.length : 0;
+    const totalAmount = Number(result.totalAmount) || 0;
+    let score = entries * 100 + playEntries * 25 + Math.min(totalAmount, 99999) * 0.001;
+    score -= unresolvedCount * 180;
+    if (entries > 0) score += 30;
+    if (playEntries > 0) score += 10;
+    if (unresolvedCount === 0) score += 40;
+    return {
+        success: true,
+        entries,
+        playEntries,
+        unresolvedCount,
+        totalAmount,
+        score,
+        reason: ''
+    };
+}
+
+function evaluateLocalAiRewriteCandidate(text, options = {}) {
+    const candidateText = String(text || '').trim();
+    const clientId = options && options.clientId ? String(options.clientId) : '';
+    if (!candidateText || !window.messageProcessor || typeof window.messageProcessor.previewMessage !== 'function') {
+        return null;
+    }
+
+    const preview = window.messageProcessor.previewMessage(candidateText, {
+        clientId,
+        allowPartial: true
+    });
+    const quality = summarizePreviewQuality(preview);
+    const baselineScore = Number(options && options.baselineQuality && Number.isFinite(Number(options.baselineQuality.score))
+        ? options.baselineQuality.score
+        : -1000000);
+    return {
+        text: candidateText,
+        preview,
+        quality,
+        improvement: quality.score - baselineScore
+    };
+}
+
+function pickBestLocalAiRewriteCandidate(texts, options = {}) {
+    const uniqueTexts = Array.from(new Set((Array.isArray(texts) ? texts : []).map(item => String(item || '').trim()).filter(Boolean)));
+    const evaluations = uniqueTexts
+        .map(text => evaluateLocalAiRewriteCandidate(text, options))
+        .filter(Boolean)
+        .sort((left, right) => {
+            if (right.improvement !== left.improvement) {
+                return right.improvement - left.improvement;
+            }
+            if (right.quality.score !== left.quality.score) {
+                return right.quality.score - left.quality.score;
+            }
+            return right.text.length - left.text.length;
+        });
+    return evaluations.length > 0 ? evaluations[0] : null;
+}
+
 function evaluateOcrCandidateSafety(text) {
     const content = String(text || '');
     const hasLatin = /[A-Za-z]/.test(content);
-    const allowedChars = /[0-9０-９\s\.\,\，\:：~～\-—=各号澳奥老香港新鼠牛虎兔龙蛇马羊猴鸡狗猪零〇一二两三四五六七八九十百千万亿元米块蚊]/;
+    const allowedChars = /[0-9０-９\s\.\,\，\:：~～\-—=各号澳奥老香港新鼠牛虎兔龙蛇马羊猴鸡狗猪零〇一二两三四五六七八九十百千万亿元米块蚊买都全平摊均分共每个肖尾波门数连特注碼码子合通下]/;
     let invalidCharCount = 0;
     for (const ch of content) {
         if (!ch.trim()) continue;
@@ -5144,6 +7398,126 @@ function normalizeAndRankOcrCandidates(candidates) {
     return Array.from(map.values()).sort((a, b) => b.totalScore - a.totalScore).slice(0, 3);
 }
 
+function buildLocalAiRewriteCandidates(result) {
+    const texts = [];
+    const normalizedText = result && result.normalizedText ? String(result.normalizedText).trim() : '';
+    if (normalizedText) {
+        texts.push(normalizedText);
+    }
+    if (result && Array.isArray(result.alternatives)) {
+        result.alternatives.forEach((item) => {
+            const text = String(item || '').trim();
+            if (text) {
+                texts.push(text);
+            }
+        });
+    }
+
+    const seen = new Set();
+    const confidence = Math.round(
+        Math.max(0, Math.min(1, Number(result && result.confidence))) * 100
+    );
+    const shouldApply = !(result && result.shouldApply === false);
+    const source = `local-ai:${result && result.model ? result.model : 'embedded-model'}`;
+    return texts
+        .filter((text) => {
+            if (!text || seen.has(text)) return false;
+            seen.add(text);
+            return true;
+        })
+        .map((text, index) => ({
+            text,
+            score: Math.max(0, confidence - index * 6 - (shouldApply ? 0 : 40)),
+            source,
+        }));
+}
+
+async function requestLocalAiRewrite(rawText, options = {}) {
+    if (!ipcRenderer || typeof ipcRenderer.invoke !== 'function') {
+        return {
+            ok: false,
+            available: false,
+            reason: 'ipc_unavailable',
+            message: 'IPC 不可用',
+        };
+    }
+    const payload = {
+        text: String(rawText || ''),
+        source: options && options.source ? String(options.source) : 'manual',
+        parserError: options && options.parserError ? String(options.parserError) : '',
+        clientId: options && options.clientId ? String(options.clientId) : '',
+        rewriteMode: options && options.rewriteMode ? String(options.rewriteMode) : 'full_message',
+        unresolvedLines: Array.isArray(options && options.unresolvedLines)
+            ? options.unresolvedLines.map((item) => ({
+                lineNo: Number.isFinite(Number(item && item.lineNo)) ? Number(item.lineNo) : null,
+                rawText: String(item && item.rawText ? item.rawText : '').trim(),
+                reason: String(item && item.reason ? item.reason : '').trim()
+            })).filter(item => item.rawText)
+            : [],
+    };
+    const safePayload = JSON.parse(JSON.stringify(payload));
+    const encodedPayload = encodeURIComponent(JSON.stringify(safePayload));
+    return ipcRenderer.invoke('ai:rewrite-message', encodedPayload);
+}
+
+function applyRecognizeMessageText(nextText) {
+    const messageTextarea = document.getElementById('message');
+    if (!messageTextarea) return;
+    messageTextarea.value = String(nextText || '');
+    syncRecognizeMessageAutoHeight();
+    messageTextarea.focus();
+    messageTextarea.setSelectionRange(messageTextarea.value.length, messageTextarea.value.length);
+    renderMessageLineNumbers();
+}
+
+async function tryEnhanceOcrCandidatesWithLocalAi(rankedCandidates) {
+    const ranked = Array.isArray(rankedCandidates) ? rankedCandidates : [];
+    if (!ranked.length) {
+        return { candidates: ranked, used: false, model: '' };
+    }
+
+    const best = ranked[0];
+    if (best && best.parserOk && best.parserScore >= 70) {
+        return { candidates: ranked, used: false, model: '' };
+    }
+
+    const status = await ensureLocalAiSemanticStatusReady();
+    if (!status.available) {
+        return { candidates: ranked, used: false, model: '' };
+    }
+
+    const parserError = best && best.parserReason ? best.parserReason : '';
+    const result = await requestLocalAiRewrite(best && best.text ? best.text : '', {
+        source: 'ocr',
+        parserError,
+        clientId: getPreviewClientId(),
+    });
+    if (!result || !result.ok) {
+        if (result && result.reason) {
+            renderLocalAiSemanticStatus(result);
+        }
+        return { candidates: ranked, used: false, model: '' };
+    }
+
+    const aiCandidates = buildLocalAiRewriteCandidates(result);
+    if (!aiCandidates.length) {
+        return { candidates: ranked, used: false, model: result.model || '' };
+    }
+
+    return {
+        candidates: normalizeAndRankOcrCandidates([
+            ...ranked.map((item) => ({
+                text: item.text,
+                score: item.ocrScore,
+                source: item.source,
+            })),
+            ...aiCandidates,
+        ]),
+        used: true,
+        model: result.model || '',
+    };
+}
+
 function renderOcrCandidates(candidates) {
     const panel = document.getElementById('ocrCandidatePanel');
     const list = document.getElementById('ocrCandidateList');
@@ -5187,13 +7561,7 @@ function clearOcrCandidates() {
 function applyOcrCandidate(index, showToast) {
     const item = ocrCandidateResults[index];
     if (!item) return;
-    const messageTextarea = document.getElementById('message');
-    if (!messageTextarea) return;
-    messageTextarea.value = item.text;
-    syncRecognizeMessageAutoHeight();
-    messageTextarea.focus();
-    messageTextarea.setSelectionRange(messageTextarea.value.length, messageTextarea.value.length);
-    renderMessageLineNumbers();
+    applyRecognizeMessageText(item.text);
     previewMessage({ silent: true });
     if (showToast) {
         showSuccess(`已应用候选${index + 1}${item.parserOk ? '（解析通过）' : ''}`);
@@ -5257,10 +7625,15 @@ async function runOcrFromSelectedImage() {
             rawCandidates.push(...result.candidates);
         }
 
-        const ranked = normalizeAndRankOcrCandidates(rawCandidates);
+        let ranked = normalizeAndRankOcrCandidates(rawCandidates);
         if (!ranked.length) {
             throw new Error(result && result.message ? result.message : '未识别到可用文本');
         }
+
+        const aiEnhanced = await tryEnhanceOcrCandidatesWithLocalAi(ranked);
+        ranked = aiEnhanced && Array.isArray(aiEnhanced.candidates) && aiEnhanced.candidates.length
+            ? aiEnhanced.candidates
+            : ranked;
 
         renderOcrCandidates(ranked);
         const best = ranked[0];
@@ -5268,7 +7641,10 @@ async function runOcrFromSelectedImage() {
         if (autoApplied) {
             applyOcrCandidate(0, false);
         }
-        updateOcrHint(`识别完成（${best.source || 'offline'}，候选${ranked.length}条，耗时 ${result && result.elapsedMs ? result.elapsedMs : 0} ms）`);
+        const aiLabel = aiEnhanced && aiEnhanced.used
+            ? `，本地AI:${aiEnhanced.model || 'embedded-model'}`
+            : '';
+        updateOcrHint(`识别完成（${best.source || 'offline'}，候选${ranked.length}条${aiLabel}，耗时 ${result && result.elapsedMs ? result.elapsedMs : 0} ms）`);
         if (autoApplied) {
             showSuccess('图片识别成功，已自动应用最优候选');
         } else {
@@ -5278,6 +7654,152 @@ async function runOcrFromSelectedImage() {
         updateOcrHint();
         clearOcrCandidates();
         showError('图片识别失败', error.message || '未知错误');
+    }
+}
+
+async function rewriteMessageWithLocalAi(options = {}) {
+    const messageTextarea = document.getElementById('message');
+    const rawValue = messageTextarea ? String(messageTextarea.value || '') : '';
+    if (!rawValue.trim()) {
+        showError('本地AI修正失败', '请先输入需要修正的消息');
+        return;
+    }
+    if (localAiRewriteBusy) {
+        return;
+    }
+
+    localAiRewriteBusy = true;
+    setLocalAiRewriteButtonState();
+
+    try {
+        const status = await ensureLocalAiSemanticStatusReady(true);
+        if (!status.available) {
+            showError('本地AI不可用', getLocalAiUnavailableHint(status));
+            return;
+        }
+
+        const clientId = options && options.clientId ? String(options.clientId) : getPreviewClientId();
+        let parserError = options && options.parserError ? String(options.parserError) : '';
+        let baselinePreview = null;
+        let unresolvedLines = [];
+        let blockingUnresolvedLines = [];
+        if (window.messageProcessor && typeof window.messageProcessor.previewMessage === 'function') {
+            try {
+                baselinePreview = window.messageProcessor.previewMessage(rawValue, { clientId, allowPartial: true });
+                if (baselinePreview && baselinePreview.success) {
+                    unresolvedLines = Array.isArray(baselinePreview.result && baselinePreview.result.unresolvedLines)
+                        ? baselinePreview.result.unresolvedLines.filter(Boolean)
+                        : [];
+                    blockingUnresolvedLines = Array.isArray(baselinePreview.result && baselinePreview.result.blockingUnresolvedLines)
+                        ? baselinePreview.result.blockingUnresolvedLines.filter(Boolean)
+                        : [];
+                    if (!parserError && unresolvedLines.length > 0) {
+                        parserError = `当前有 ${unresolvedLines.length} 行未识别`;
+                    }
+                } else if (!parserError) {
+                    parserError = baselinePreview && baselinePreview.error ? baselinePreview.error : '';
+                }
+            } catch (error) {
+                if (!parserError) {
+                    parserError = error && error.message ? error.message : '';
+                }
+            }
+        }
+        const baselineQuality = summarizePreviewQuality(baselinePreview);
+        if (baselinePreview && baselinePreview.success && unresolvedLines.length === 0 && (!options || options.forceFullRewrite !== true)) {
+            showError('本地AI修正失败', '当前消息已可稳定解析，无需本地AI修正');
+            return;
+        }
+        const targetBlockingOnly = options && options.source === 'blocking_lines';
+        const targetLines = targetBlockingOnly ? blockingUnresolvedLines : unresolvedLines;
+        if (targetBlockingOnly && targetLines.length === 0) {
+            showError('本地AI修正失败', '当前没有待人工处理行，无需使用“只修待处理”');
+            return;
+        }
+        const rewriteMode = targetLines.length > 0 ? 'target_unresolved' : 'full_message';
+        const unresolvedPayload = targetLines.slice(0, 12).map((item) => ({
+            lineNo: item.lineNo,
+            rawText: item.rawText,
+            reason: item.reason
+        }));
+        if (targetBlockingOnly) {
+            const blockingReasonSummary = unresolvedPayload
+                .map((item) => `第${item.lineNo || '?'}行：${item.reason || '格式无法识别'}`)
+                .join('；');
+            parserError = blockingReasonSummary || parserError || '当前存在待人工处理行';
+        } else if (!parserError && unresolvedPayload.length > 0) {
+            parserError = unresolvedPayload.map((item) => `第${item.lineNo || '?'}行：${item.reason || '格式无法识别'}`).join('；');
+        }
+
+        renderLocalAiSemanticStatus({
+            ...status,
+            message: `本地 AI 语义修正：${status.model || '内置模型'} 修正中...`,
+        });
+
+        const result = await requestLocalAiRewrite(rawValue, {
+            source: options && options.source ? String(options.source) : 'manual',
+            parserError,
+            clientId,
+            rewriteMode,
+            unresolvedLines: unresolvedPayload,
+        });
+        if (!result || !result.ok) {
+            if (result && typeof result === 'object') {
+                renderLocalAiSemanticStatus(result);
+            }
+            const detail = result && result.message ? result.message : '未返回可用结果';
+            const reasonHint = unresolvedPayload.length > 0
+                ? `待处理原因：${unresolvedPayload.map((item) => `第${item.lineNo || '?'}行${item.reason || '格式无法识别'}`).join('；')}；`
+                : '';
+            showError('本地AI修正失败', `${reasonHint}${detail}`);
+            return;
+        }
+        if (result.shouldApply === false) {
+            const issueText = Array.isArray(result.issues) && result.issues.length
+                ? result.issues.join('；')
+                : '模型认为当前语义仍不够明确';
+            showError('本地AI修正失败', issueText);
+            return;
+        }
+
+        const candidateTexts = buildLocalAiRewriteCandidates(result).map(item => item && item.text ? item.text : '');
+        const best = pickBestLocalAiRewriteCandidate(candidateTexts, {
+            clientId,
+            baselineQuality
+        });
+        if (!best || !best.text) {
+            showError('本地AI修正失败', '模型已返回结果，但未生成可应用文本');
+            return;
+        }
+        if (!best.preview || !best.preview.success) {
+            const issueText = Array.isArray(result.issues) && result.issues.length
+                ? `；${result.issues.join('；')}`
+                : '';
+            showError('本地AI修正失败', `模型已返回结果，但仍未通过本地解析${issueText}`);
+            return;
+        }
+        if (best.improvement <= 0) {
+            const issueText = Array.isArray(result.issues) && result.issues.length
+                ? `；${result.issues.join('；')}`
+                : '';
+            showError('本地AI修正失败', `模型已返回结果，但没有让当前解析更好${issueText}`);
+            return;
+        }
+
+        applyRecognizeMessageText(best.text);
+        await previewMessage({ silent: true });
+        const improvementHint = baselineQuality && Number.isFinite(Number(baselineQuality.unresolvedCount)) && baselineQuality.unresolvedCount !== Number.MAX_SAFE_INTEGER
+            ? `，未识别行 ${baselineQuality.unresolvedCount} -> ${best.quality.unresolvedCount}`
+            : '';
+        showSuccess(`已使用本地AI修正（${result.model || '内置模型'}${improvementHint}）`);
+        await refreshLocalAiSemanticStatus();
+    } catch (error) {
+        showError('本地AI修正失败', error && error.message ? error.message : '未知错误');
+        await refreshLocalAiSemanticStatus({ forceRefresh: true });
+    } finally {
+        localAiRewriteBusy = false;
+        setLocalAiRewriteButtonState();
+        renderLocalAiSemanticStatus(localAiSemanticStatus);
     }
 }
 
@@ -5894,11 +8416,11 @@ function extractRegionKeysForDuplicate(message) {
     }
     try {
         const preview = window.messageProcessor.previewMessage(message);
-        if (!preview || !preview.success || !preview.result || !Array.isArray(preview.result.entries)) {
+        if (!preview || !preview.success || !preview.result) {
             return [fallback];
         }
         const keys = Array.from(new Set(
-            preview.result.entries
+            collectPreviewStandardEntries(preview.result)
                 .map(item => (item && item.regionKey ? item.regionKey : fallback))
                 .filter(Boolean)
         ));
@@ -6260,6 +8782,7 @@ function resetRecognizeModalState() {
         resultElement.innerHTML = '';
     }
     setRecognizePreviewError('');
+    setRecognizePreviewBlocked(false);
     const customName = document.getElementById('customAttrName');
     const customNumbers = document.getElementById('customAttrNumbers');
     const anchorAliasToken = document.getElementById('anchorAliasToken');
@@ -6658,6 +9181,8 @@ function setupEventListeners() {
             renderAttributePicker();
             renderCustomAttributeList();
             renderAnchorAliasList();
+            handleNoiseRuleScopeChange();
+            handleAmountUnitScopeChange();
             renderDefaultOddsState();
             renderAnchorParseModeState();
             renderAttributeCombinePolicyState();
@@ -6703,6 +9228,8 @@ function setupEventListeners() {
             renderAttributePicker();
             renderCustomAttributeList();
             renderAnchorAliasList();
+            handleNoiseRuleScopeChange();
+            handleAmountUnitScopeChange();
             renderDefaultOddsState();
             renderAnchorParseModeState();
             renderAttributeCombinePolicyState();
@@ -7837,18 +10364,24 @@ function toggleRecognizeAttributePanel() {
 function loadRecognizeSideGroupState() {
     try {
         const raw = window.localStorage.getItem(RECOGNIZE_SIDE_GROUP_STATE_KEY);
-        if (!raw) return { attributes: true, anchors: false };
+        if (!raw) return { attributes: true, anchors: false, noise: false, amountUnits: false };
         const parsed = JSON.parse(raw);
         const normalized = {
             attributes: parsed && parsed.attributes !== false,
-            anchors: parsed && parsed.anchors === true
+            anchors: parsed && parsed.anchors === true,
+            noise: parsed && parsed.noise === true,
+            amountUnits: parsed && parsed.amountUnits === true
         };
-        if (normalized.attributes && normalized.anchors) {
-            normalized.anchors = false;
+        const expandedKeys = Object.keys(normalized).filter((key) => normalized[key]);
+        if (expandedKeys.length > 1) {
+            const keepKey = expandedKeys[0];
+            Object.keys(normalized).forEach((key) => {
+                normalized[key] = key === keepKey;
+            });
         }
         return normalized;
     } catch (error) {
-        return { attributes: true, anchors: false };
+        return { attributes: true, anchors: false, noise: false, amountUnits: false };
     }
 }
 
@@ -7863,7 +10396,9 @@ function saveRecognizeSideGroupState() {
 function applyRecognizeSideGroups() {
     const mappings = [
         { key: 'attributes', rootId: 'recognizeGroupAttributes', toggleId: 'recognizeGroupAttributesToggle' },
-        { key: 'anchors', rootId: 'recognizeGroupAnchors', toggleId: 'recognizeGroupAnchorsToggle' }
+        { key: 'anchors', rootId: 'recognizeGroupAnchors', toggleId: 'recognizeGroupAnchorsToggle' },
+        { key: 'noise', rootId: 'recognizeGroupNoise', toggleId: 'recognizeGroupNoiseToggle' },
+        { key: 'amountUnits', rootId: 'recognizeGroupAmountUnits', toggleId: 'recognizeGroupAmountUnitsToggle' }
     ];
     const expandedKeys = mappings
         .filter(({ key }) => recognizeSideGroupState[key] !== false)
@@ -7886,14 +10421,25 @@ function initRecognizeSideGroups() {
 }
 
 function toggleRecognizeSideGroup(groupKey) {
-    if (groupKey !== 'attributes' && groupKey !== 'anchors') return;
+    if (!['attributes', 'anchors', 'noise', 'amountUnits'].includes(groupKey)) return;
     const currentlyExpanded = recognizeSideGroupState[groupKey] !== false;
     if (currentlyExpanded) {
         recognizeSideGroupState[groupKey] = false;
     } else {
-        recognizeSideGroupState[groupKey] = true;
-        const otherKey = groupKey === 'attributes' ? 'anchors' : 'attributes';
-        recognizeSideGroupState[otherKey] = false;
+        Object.keys(recognizeSideGroupState).forEach((key) => {
+            recognizeSideGroupState[key] = key === groupKey;
+        });
+        if (groupKey === 'anchors') {
+            renderAnchorAliasList();
+            renderAnchorImpactPreview();
+            renderDefaultOddsState();
+            renderAnchorParseModeState();
+            renderAttributeCombinePolicyState();
+        } else if (groupKey === 'noise') {
+            handleNoiseRuleScopeChange();
+        } else if (groupKey === 'amountUnits') {
+            handleAmountUnitScopeChange();
+        }
     }
     applyRecognizeSideGroups();
     saveRecognizeSideGroupState();
@@ -7903,7 +10449,8 @@ function syncRecognizeModalActionMode() {
     const confirmBtn = document.getElementById('recognizeConfirmBtn');
     const clearBtn = document.getElementById('recognizeClearBtn');
     if (confirmBtn) {
-        confirmBtn.textContent = recognizeEditContext ? '确定' : '添加';
+        confirmBtn.textContent = recognizeEditContext ? '保存' : '添加';
+        confirmBtn.disabled = recognizePreviewBlocked;
     }
     if (clearBtn) {
         clearBtn.textContent = recognizeEditContext ? '取消' : '清空输入';
@@ -7920,6 +10467,7 @@ function openOriginalDataEditInRecognize(payload = {}) {
     const userName = String(context.userName || '').trim();
     const regionKey = String(context.regionKey || '').trim() || 'new_ao';
     const message = String(context.message || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const focusLineNo = Number.isFinite(Number(context.focusLineNo)) ? Number(context.focusLineNo) : null;
     const index = Number.isInteger(context.index) ? context.index : parseInt(context.index, 10);
 
     if (!userName || !Number.isInteger(index) || index < 0) {
@@ -7952,7 +10500,11 @@ function openOriginalDataEditInRecognize(payload = {}) {
     }
     clearMessageLineError();
     renderMessageLineNumbers();
-    previewMessage({ silent: true });
+    Promise.resolve(previewMessage({ silent: true })).finally(() => {
+        if (Number.isFinite(focusLineNo) && focusLineNo > 0) {
+            focusRecognizeMessageLine(focusLineNo);
+        }
+    });
     stopRecognizeClipboardMonitor();
     updateClipboardAssistBanner(false);
 }
@@ -7984,6 +10536,7 @@ function openModal(modalType, options = {}) {
     if (modalType === 'recognize') {
         syncPlanCapabilityUI();
         refreshClipboardMonitorState();
+        renderRecognizeVoiceUi();
         ensureAnchorGuideVisibleWhenRecognizeOpen();
         requestAnimationFrame(() => {
             ensureRecognizeAttrWidth();
@@ -7998,6 +10551,7 @@ function openModal(modalType, options = {}) {
 function closeModal() {
     const modal = document.getElementById('myModal');
     modal.style.display = 'none';
+    stopRecognizeVoiceInput({ discard: true });
     stopRecognizeClipboardMonitor();
     resetRecognizeModalState();
     setRecognizePreviewError('');
@@ -8012,6 +10566,363 @@ function renderCompareCellValue(value, fallbackText, extraClass = '') {
         ? `recognize-compare-cell-value ${extraClass}`.trim()
         : `recognize-compare-cell-value empty ${extraClass}`.trim();
     return `<div class="${cls}">${safeText}</div>`;
+}
+
+function buildRecognizeIssueKey(issue) {
+    const lineNo = Number.parseInt(issue && issue.lineNo, 10);
+    const safeLineNo = Number.isFinite(lineNo) ? lineNo : '?';
+    const rawText = String(issue && issue.rawText ? issue.rawText : '').trim();
+    const reason = String(issue && issue.reason ? issue.reason : '').trim();
+    return `${safeLineNo}|${rawText}|${reason}`;
+}
+
+function getRecognizeConfirmActionVerb() {
+    return recognizeEditContext ? '保存' : '添加';
+}
+
+function getRecognizeBlockedBadgeText() {
+    return recognizeEditContext ? '不可保存' : '不可添加';
+}
+
+function getRecognizeActiveClientId() {
+    if (recognizeEditContext && recognizeEditContext.userName) {
+        return String(recognizeEditContext.userName || '').trim();
+    }
+    return getPreviewClientId() || '';
+}
+
+function encodeRecognizeActionArg(value) {
+    return encodeURIComponent(String(value == null ? '' : value));
+}
+
+function decodeRecognizeActionArg(value) {
+    try {
+        return decodeURIComponent(String(value == null ? '' : value));
+    } catch (error) {
+        return String(value == null ? '' : value);
+    }
+}
+
+function inferQuickAnchorModeFromToken(token) {
+    const normalized = String(token || '').replace(/\s+/g, '');
+    if (!normalized) return 'per_number';
+    if (/肖|生肖/u.test(normalized)) {
+        return 'per_target_equal_split';
+    }
+    return 'per_number';
+}
+
+function extractUnknownAnchorTokensFromReason(reason) {
+    const raw = String(reason || '').trim();
+    const match = raw.match(/未配置锚点：(.+)$/u);
+    if (!match) return [];
+    return String(match[1] || '')
+        .split('、')
+        .map((item) => String(item || '').replace(/（\d+次）/gu, '').trim())
+        .filter(Boolean);
+}
+
+function extractAmbiguousChunksFromReason(reason) {
+    const raw = String(reason || '').trim();
+    const match = raw.match(/歧义简写：(.+?)(?:，|,)\s*缺少明确金额单位或高额特征/u);
+    if (!match) return [];
+    return String(match[1] || '')
+        .split('、')
+        .map(item => String(item || '').trim())
+        .filter(Boolean);
+}
+
+function buildAmbiguousRewriteSuggestion(rawText, reason) {
+    const source = String(rawText || '').trim();
+    if (!source) return null;
+    const chunks = extractAmbiguousChunksFromReason(reason);
+    if (!chunks.length) return null;
+    let nextText = source;
+    let changed = false;
+    chunks.forEach((chunk) => {
+        const normalized = String(chunk || '')
+            .replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 65248))
+            .trim();
+        const parsed = normalized.match(/^(\d{1,2})\s*[-=/#*]\s*([0-9]+|[零〇一二两三四五六七八九十百千万]+)$/u);
+        if (!parsed) return;
+        const numberText = String(parsed[1] || '').padStart(2, '0');
+        const amountText = String(parsed[2] || '').trim();
+        const replacement = `${numberText}各${amountText}元`;
+        if (!replacement) return;
+        nextText = nextText.replace(chunk, replacement);
+        changed = true;
+    });
+    if (!changed || nextText === source) return null;
+    return {
+        nextText,
+        previewText: nextText.length > 36 ? `${nextText.slice(0, 36)}...` : nextText
+    };
+}
+
+function detectAmountUnitCandidatesFromIssue(rawText) {
+    const source = String(rawText || '').trim();
+    if (!source) return [];
+    const pattern = /(?:\d{1,2}\s*(?:[-=/#*]|[.．。])\s*(?:[0-9０-９]+|[零〇一二两三四五六七八九十百千万]+)|各\s*(?:[0-9０-９]+|[零〇一二两三四五六七八九十百千万]+))\s*([A-Za-z\u4e00-\u9fa5]{1,4})/gu;
+    const tokens = new Set();
+    let match = null;
+    while ((match = pattern.exec(source)) !== null) {
+        const token = normalizeAmountUnitInput(match[1]);
+        if (!token) continue;
+        tokens.add(token);
+    }
+    return Array.from(tokens);
+}
+
+function buildRecognizeBlockingActionPlan(warning, row) {
+    const issue = warning && typeof warning === 'object' ? warning : {};
+    const lineNo = Number.isFinite(Number(row && row.lineNo)) ? Number(row.lineNo) : null;
+    const rawText = String((row && row.sourceText) || issue.rawText || '').trim();
+    const reason = String(issue.reason || '').trim() || '格式无法识别';
+    const currentClientId = getRecognizeActiveClientId();
+    const actions = [];
+    let suggestion = '';
+
+    const unknownTokens = extractUnknownAnchorTokensFromReason(reason);
+    if (unknownTokens.length > 0) {
+        const limitedTokens = unknownTokens.slice(0, 2);
+        suggestion = limitedTokens.length === 1
+            ? `建议把「${limitedTokens[0]}」加入锚点；如果它不是锚点，请直接改写这一行。`
+            : `建议先补齐锚点：${limitedTokens.map(token => `「${token}」`).join('、')}。`;
+        limitedTokens.forEach((token) => {
+            if (currentClientId) {
+                actions.push({
+                    label: `当前客户加锚点：${token}`,
+                    handler: 'handleRecognizeQuickAddAnchor',
+                    args: [token, 'client', currentClientId, lineNo || '']
+                });
+            }
+            actions.push({
+                label: `全部客户加锚点：${token}`,
+                handler: 'handleRecognizeQuickAddAnchor',
+                args: [token, 'global', '', lineNo || '']
+            });
+        });
+    }
+
+    const rewriteSuggestion = buildAmbiguousRewriteSuggestion(rawText, reason);
+    if (rewriteSuggestion) {
+        if (!suggestion) {
+            suggestion = `如果这里表达的是金额，建议改成「${rewriteSuggestion.previewText}」。`;
+        }
+        actions.unshift({
+            label: '按建议改写本行',
+            handler: 'applyRecognizeSuggestedLineRewrite',
+            args: [lineNo || '', rewriteSuggestion.nextText]
+        });
+    }
+
+    const amountUnitTokens = detectAmountUnitCandidatesFromIssue(rawText);
+    if (!suggestion && amountUnitTokens.length > 0 && /无效的数字|格式无法识别|缺少明确金额单位/u.test(reason)) {
+        suggestion = `这一行可能缺少金额单位配置，可尝试把 ${amountUnitTokens.map(token => `「${token}」`).join('、')} 加入金额单位。`;
+        amountUnitTokens.slice(0, 2).forEach((token) => {
+            if (currentClientId) {
+                actions.push({
+                    label: `当前客户加单位：${token}`,
+                    handler: 'handleRecognizeQuickAddAmountUnit',
+                    args: [token, 'client', currentClientId, lineNo || '']
+                });
+            }
+            actions.push({
+                label: `全部客户加单位：${token}`,
+                handler: 'handleRecognizeQuickAddAmountUnit',
+                args: [token, 'global', '', lineNo || '']
+            });
+        });
+    }
+
+    if (!suggestion && /检测到\s*\d+\s*组金额/u.test(reason)) {
+        suggestion = '这一行看起来有多组下注，建议拆成多行，或补清楚锚点后再保存。';
+    }
+    if (!suggestion && /无效的数字/u.test(reason)) {
+        suggestion = '这一行里可能把金额写成了号码，建议检查金额边界，必要时补“元/块/米”等单位。';
+    }
+    if (!suggestion && /存在未绑定数值/u.test(reason)) {
+        suggestion = '这一行还有号码没绑到金额，建议补上“各/各号/买 + 金额”。';
+    }
+    if (!suggestion) {
+        suggestion = '请先定位这一行，手动改清楚后再重新预览。';
+    }
+
+    if (lineNo) {
+        actions.push({
+            label: '定位本行',
+            handler: 'focusRecognizeMessageLine',
+            args: [lineNo]
+        });
+    }
+
+    return { suggestion, actions };
+}
+
+function buildRecognizeActionButtonHtml(action) {
+    if (!action || !action.handler || !action.label) return '';
+    const args = Array.isArray(action.args) ? action.args : [];
+    const encodedArgs = args.map((item) => `'${encodeRecognizeActionArg(item)}'`).join(', ');
+    return `
+        <button
+            type="button"
+            class="parse-issue-action-button"
+            onclick="${action.handler}(${encodedArgs}); return false;"
+        >${escapeHtml(String(action.label || '').trim())}</button>
+    `;
+}
+
+function renderRecognizeBlockedWarnings(row) {
+    const safeWarnings = Array.isArray(row && row.warnings) ? row.warnings.filter(Boolean) : [];
+    if (!safeWarnings.length) return '';
+    return `
+        <div class="recognize-compare-warning-list">
+            ${safeWarnings.map((warning) => {
+                const actionPlan = buildRecognizeBlockingActionPlan(warning, row);
+                const actionsHtml = (Array.isArray(actionPlan.actions) ? actionPlan.actions : [])
+                    .map(buildRecognizeActionButtonHtml)
+                    .join('');
+                return `
+                    <div class="recognize-compare-warning-item blocking">
+                        <div>已拦截：${escapeHtml(String(warning.reason || '格式无法识别').trim() || '格式无法识别')}</div>
+                        ${actionPlan.suggestion
+                            ? `<div class="recognize-issue-suggestion">建议：${escapeHtml(actionPlan.suggestion)}</div>`
+                            : ''}
+                        ${actionsHtml ? `<div class="recognize-issue-actions">${actionsHtml}</div>` : ''}
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+}
+
+function getMessageLineRange(text, lineNo) {
+    const raw = String(text || '').replace(/\r/g, '');
+    const normalizedLineNo = Number.parseInt(lineNo, 10);
+    if (!Number.isFinite(normalizedLineNo) || normalizedLineNo <= 0) {
+        return null;
+    }
+    const lines = raw.split('\n');
+    if (normalizedLineNo > lines.length) {
+        return null;
+    }
+    let start = 0;
+    for (let i = 0; i < normalizedLineNo - 1; i += 1) {
+        start += lines[i].length + 1;
+    }
+    const end = start + lines[normalizedLineNo - 1].length;
+    return { start, end, lineText: lines[normalizedLineNo - 1], lines };
+}
+
+function focusRecognizeMessageLine(encodedLineNo) {
+    const lineNo = Number.parseInt(decodeRecognizeActionArg(encodedLineNo), 10);
+    const textarea = document.getElementById('message');
+    if (!textarea || !Number.isFinite(lineNo) || lineNo <= 0) return false;
+    const range = getMessageLineRange(textarea.value, lineNo);
+    if (!range) return false;
+    textarea.focus();
+    if (typeof textarea.setSelectionRange === 'function') {
+        textarea.setSelectionRange(range.start, range.end);
+    }
+    const lineHeight = parseFloat(window.getComputedStyle(textarea).lineHeight || '24') || 24;
+    textarea.scrollTop = Math.max(0, (lineNo - 1) * lineHeight - lineHeight * 2);
+    setMessageLineErrors([lineNo]);
+    return true;
+}
+
+function replaceRecognizeMessageLine(lineNo, nextText) {
+    const textarea = document.getElementById('message');
+    if (!textarea) return false;
+    const raw = String(textarea.value || '').replace(/\r/g, '');
+    const lines = raw.split('\n');
+    const normalizedLineNo = Number.parseInt(lineNo, 10);
+    if (!Number.isFinite(normalizedLineNo) || normalizedLineNo <= 0 || normalizedLineNo > lines.length) {
+        return false;
+    }
+    lines[normalizedLineNo - 1] = String(nextText || '');
+    textarea.value = lines.join('\n');
+    syncRecognizeMessageAutoHeight();
+    renderMessageLineNumbers();
+    focusRecognizeMessageLine(normalizedLineNo);
+    previewMessage({ silent: true });
+    return true;
+}
+
+function applyRecognizeSuggestedLineRewrite(encodedLineNo, encodedNextText) {
+    const lineNo = Number.parseInt(decodeRecognizeActionArg(encodedLineNo), 10);
+    const nextText = decodeRecognizeActionArg(encodedNextText);
+    if (!Number.isFinite(lineNo) || !nextText) {
+        showError('处理失败', '缺少可应用的改写内容');
+        return;
+    }
+    if (replaceRecognizeMessageLine(lineNo, nextText)) {
+        showSuccess(`已按建议改写第 ${lineNo} 行`);
+    } else {
+        showError('处理失败', `无法定位第 ${lineNo} 行`);
+    }
+}
+
+function refreshAfterRecognizeQuickRuleChange(lineNo = null) {
+    recalculateAllUsersByRuleChange();
+    if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
+        window.userManager.renderAllSections();
+    }
+    Promise.resolve(previewMessage({ silent: true })).finally(() => {
+        if (Number.isFinite(Number(lineNo)) && Number(lineNo) > 0) {
+            focusRecognizeMessageLine(lineNo);
+        }
+    });
+}
+
+function handleRecognizeQuickAddAnchor(encodedToken, encodedScope, encodedClientId, encodedLineNo) {
+    try {
+        if (!window.messageProcessor || typeof window.messageProcessor.upsertAnchorAlias !== 'function') {
+            throw new Error('当前版本不支持锚点快捷处理');
+        }
+        const token = decodeRecognizeActionArg(encodedToken).trim();
+        const scope = decodeRecognizeActionArg(encodedScope) === 'client' ? 'client' : 'global';
+        const clientId = decodeRecognizeActionArg(encodedClientId).trim();
+        const lineNo = Number.parseInt(decodeRecognizeActionArg(encodedLineNo), 10);
+        if (!token) {
+            throw new Error('缺少锚点内容');
+        }
+        if (scope === 'client' && !clientId) {
+            throw new Error('当前没有可用的客户可保存专属锚点');
+        }
+        const mode = inferQuickAnchorModeFromToken(token);
+        window.messageProcessor.upsertAnchorAlias(token, mode, { scope, clientId });
+        refreshAfterRecognizeQuickRuleChange(lineNo);
+        showSuccess(`${getScopeDisplayName(scope)}锚点已保存：${token}`);
+    } catch (error) {
+        showError('快捷保存锚点失败', error.message || '未知错误');
+    }
+}
+
+function handleRecognizeQuickAddAmountUnit(encodedToken, encodedScope, encodedClientId, encodedLineNo) {
+    try {
+        if (!window.messageProcessor || typeof window.messageProcessor.upsertAmountUnit !== 'function') {
+            throw new Error('当前版本不支持金额单位快捷处理');
+        }
+        const token = normalizeAmountUnitInput(decodeRecognizeActionArg(encodedToken));
+        const scope = decodeRecognizeActionArg(encodedScope) === 'client' ? 'client' : 'global';
+        const clientId = decodeRecognizeActionArg(encodedClientId).trim();
+        const lineNo = Number.parseInt(decodeRecognizeActionArg(encodedLineNo), 10);
+        if (!token) {
+            throw new Error('缺少金额单位内容');
+        }
+        if (scope === 'client' && !clientId) {
+            throw new Error('当前没有可用的客户可保存专属金额单位');
+        }
+        window.messageProcessor.upsertAmountUnit(token, { scope, clientId });
+        refreshAfterRecognizeQuickRuleChange(lineNo);
+        showSuccess(`${getScopeDisplayName(scope)}金额单位已保存：${token}`);
+    } catch (error) {
+        showError('快捷保存金额单位失败', error.message || '未知错误');
+    }
+}
+
+function handleRecognizeBlockedAiRewrite() {
+    rewriteMessageWithLocalAi({ source: 'blocking_lines' });
 }
 
 function formatRecognizePreviewEntryCore(entry) {
@@ -8030,6 +10941,73 @@ function formatRecognizePreviewEntryCore(entry) {
     return canonical.replace(/^(新奥|老奥|香港)\s*/u, '');
 }
 
+function getRecognizePreviewSummary(result) {
+    const summary = result && result.summary && typeof result.summary === 'object'
+        ? result.summary
+        : {};
+    const entries = Array.isArray(result && result.entries) ? result.entries.filter(Boolean) : [];
+    const playEntries = Array.isArray(result && result.playEntries) ? result.playEntries.filter(Boolean) : [];
+    const blockingLines = Array.isArray(result && result.blockingUnresolvedLines)
+        ? result.blockingUnresolvedLines.filter(Boolean)
+        : [];
+    const ignoredLines = Array.isArray(result && result.ignoredUnresolvedLines)
+        ? result.ignoredUnresolvedLines.filter(Boolean)
+        : [];
+    const countedAmount = Number.isFinite(Number(summary.countedAmount))
+        ? Number(summary.countedAmount)
+        : entries.reduce((sum, entry) => sum + (Number(entry && entry.totalAmount) || 0), 0);
+    return {
+        status: String(summary.status || '').trim() || 'partial',
+        statusLabel: String(summary.statusLabel || '').trim() || '部分统计',
+        countedEntryCount: Number(summary.countedEntryCount) || entries.length,
+        countedAmount,
+        playCount: Number(summary.playCount) || playEntries.length,
+        blockedCount: Number(summary.blockedCount) || blockingLines.length,
+        ignoredCount: Number(summary.ignoredCount) || ignoredLines.length
+    };
+}
+
+function renderRecognizePreviewSummary(summary) {
+    if (!summary || typeof summary !== 'object') return '';
+    const blocks = [
+        {
+            label: '待处理',
+            value: `${Number(summary.blockedCount) || 0}行`,
+            note: '高风险内容，需修改后再入账',
+            tone: 'blocked'
+        },
+        {
+            label: '未统计',
+            value: `${Number(summary.playCount) || 0}条`,
+            note: '已识别但不入号码统计',
+            tone: 'play'
+        },
+        {
+            label: '已忽略',
+            value: `${Number(summary.ignoredCount) || 0}行`,
+            note: '摘要尾巴或噪音，不影响统计',
+            tone: 'ignored'
+        },
+        {
+            label: '已计入',
+            value: `${Number(summary.countedEntryCount) || 0}条`,
+            note: Number(summary.countedAmount) > 0 ? `金额 ${formatNumericAmount(summary.countedAmount)}` : '未计金额',
+            tone: 'counted'
+        }
+    ];
+    return `
+        <div class="recognize-preview-summary">
+            ${blocks.map((block) => `
+                <div class="recognize-preview-summary-card tone-${block.tone}">
+                    <div class="recognize-preview-summary-label">${escapeHtml(block.label)}</div>
+                    <div class="recognize-preview-summary-value">${escapeHtml(block.value)}</div>
+                    <div class="recognize-preview-summary-note">${escapeHtml(block.note)}</div>
+                </div>
+            `).join('')}
+        </div>
+    `;
+}
+
 function renderCompareStandardEntries(entries, emptyText = '（本行未识别到可用投注）') {
     const safeEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
     if (!safeEntries.length) {
@@ -8038,14 +11016,193 @@ function renderCompareStandardEntries(entries, emptyText = '（本行未识别�
     const itemsHtml = safeEntries.map((entry) => {
         const coreText = formatRecognizePreviewEntryCore(entry);
         const regionText = String(entry.regionLabel || '新奥').trim() || '新奥';
+        const isPlay = String(entry && entry.kind ? entry.kind : '').trim() === 'play';
         return `
-            <div class="recognize-standard-item">
+            <div class="recognize-standard-item ${isPlay ? 'play' : 'counted'}">
                 <span class="recognize-standard-text">${escapeHtml(coreText || '（无法生成标准格式）')}</span>
-                <span class="recognize-region-tag">${escapeHtml(regionText)}</span>
+                <span class="recognize-standard-tags">
+                    <span class="recognize-entry-state-tag ${isPlay ? 'play' : 'counted'}">${isPlay ? '未统计' : '已计入'}</span>
+                    <span class="recognize-region-tag">${escapeHtml(regionText)}</span>
+                </span>
             </div>
         `;
     }).join('');
     return `<div class="recognize-compare-cell-value standard">${itemsHtml}</div>`;
+}
+
+function renderCompareLineWarnings(warnings) {
+    const safeWarnings = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
+    if (!safeWarnings.length) return '';
+    return `
+        <div class="recognize-compare-warning-list">
+            ${safeWarnings.map((warning) => `
+                <div class="recognize-compare-warning-item ${warning && warning.blocking ? 'blocking' : 'ignored'}">
+                    ${warning && warning.blocking ? '已拦截' : '已忽略'}：${escapeHtml(String(warning.reason || '格式无法识别').trim() || '格式无法识别')}
+                </div>
+            `).join('')}
+        </div>
+    `;
+}
+
+function formatRecognizePreviewLineLabel(lineNo, fallback = '未定位') {
+    const parsed = Number.parseInt(lineNo, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+        return `第 ${parsed} 行`;
+    }
+    return fallback;
+}
+
+function renderRecognizePreviewSourceCell(row) {
+    return `
+        <div class="recognize-preview-source-cell">
+            <div class="recognize-preview-source-meta">
+                <span class="recognize-preview-line-tag">${escapeHtml(formatRecognizePreviewLineLabel(row && row.lineNo, '未定位段'))}</span>
+            </div>
+            ${renderCompareCellValue(row && row.sourceText, '（无法定位到原文）')}
+        </div>
+    `;
+}
+
+function buildRecognizePreviewGroupedRows(result, rawValue) {
+    const rawLines = String(rawValue || '')
+        .replace(/\r/g, '')
+        .split('\n');
+    const getSourceText = (lineNo, fallbackText = '') => {
+        const parsed = Number.parseInt(lineNo, 10);
+        const fallback = String(fallbackText || '').trim();
+        if (Number.isFinite(parsed) && parsed > 0 && parsed <= rawLines.length) {
+            const rawLine = String(rawLines[parsed - 1] || '');
+            const displayLine = rawLine.trim();
+            return displayLine || rawLine || fallback;
+        }
+        return fallback;
+    };
+    const sortRows = (rows) => rows.sort((left, right) => {
+        const leftLine = Number.parseInt(left && left.lineNo, 10);
+        const rightLine = Number.parseInt(right && right.lineNo, 10);
+        const safeLeftLine = Number.isFinite(leftLine) && leftLine > 0 ? leftLine : Number.MAX_SAFE_INTEGER;
+        const safeRightLine = Number.isFinite(rightLine) && rightLine > 0 ? rightLine : Number.MAX_SAFE_INTEGER;
+        if (safeLeftLine !== safeRightLine) {
+            return safeLeftLine - safeRightLine;
+        }
+        const safeLeftOrder = Number.isFinite(Number(left && left.order)) ? Number(left.order) : Number.MAX_SAFE_INTEGER;
+        const safeRightOrder = Number.isFinite(Number(right && right.order)) ? Number(right.order) : Number.MAX_SAFE_INTEGER;
+        return safeLeftOrder - safeRightOrder;
+    });
+
+    const buildEntryRows = (items = [], kind = 'counted') => {
+        const rows = [];
+        const map = new Map();
+        (Array.isArray(items) ? items : []).forEach((entry, index) => {
+            if (!entry) return;
+            const parsedLineNo = Number.parseInt(entry.lineNo, 10);
+            const parsedOrder = Number.isFinite(Number(entry && entry.parseOrder)) ? Number(entry.parseOrder) : (index + 1);
+            const key = Number.isFinite(parsedLineNo) && parsedLineNo > 0
+                ? `line:${parsedLineNo}`
+                : `${kind}:floating:${index}`;
+            if (!map.has(key)) {
+                map.set(key, {
+                    key,
+                    lineNo: Number.isFinite(parsedLineNo) && parsedLineNo > 0 ? parsedLineNo : null,
+                    order: parsedOrder,
+                    sourceText: getSourceText(parsedLineNo, entry.rawText || entry.displayText || entry.canonical || ''),
+                    entries: []
+                });
+            }
+            const row = map.get(key);
+            row.entries.push(entry);
+            row.order = Math.min(row.order, parsedOrder);
+            rows.push(row);
+        });
+        return sortRows(Array.from(new Set(rows)));
+    };
+
+    const buildIssueRows = (issues = [], kind = 'blocked') => {
+        const rows = [];
+        const map = new Map();
+        (Array.isArray(issues) ? issues : []).forEach((issue, index) => {
+            if (!issue) return;
+            const parsedLineNo = Number.parseInt(issue.lineNo, 10);
+            const keyBase = Number.isFinite(parsedLineNo) && parsedLineNo > 0
+                ? `line:${parsedLineNo}`
+                : `${kind}:floating:${index}`;
+            const rawText = String(issue.rawText || '').trim();
+            const key = rawText ? `${keyBase}:${rawText}` : keyBase;
+            if (!map.has(key)) {
+                map.set(key, {
+                    key,
+                    lineNo: Number.isFinite(parsedLineNo) && parsedLineNo > 0 ? parsedLineNo : null,
+                    order: Number.isFinite(parsedLineNo) && parsedLineNo > 0 ? parsedLineNo : (index + 1),
+                    sourceText: getSourceText(parsedLineNo, rawText),
+                    warnings: []
+                });
+            }
+            map.get(key).warnings.push({
+                ...issue,
+                blocking: kind === 'blocked'
+            });
+        });
+        map.forEach(row => rows.push(row));
+        return sortRows(rows);
+    };
+
+    return {
+        countedRows: buildEntryRows(Array.isArray(result && result.entries) ? result.entries : [], 'counted'),
+        playRows: buildEntryRows(Array.isArray(result && result.playEntries) ? result.playEntries : [], 'play'),
+        blockedRows: buildIssueRows(Array.isArray(result && result.blockingUnresolvedLines) ? result.blockingUnresolvedLines : [], 'blocked'),
+        ignoredRows: buildIssueRows(Array.isArray(result && result.ignoredUnresolvedLines) ? result.ignoredUnresolvedLines : [], 'ignored')
+    };
+}
+
+function renderRecognizePreviewGroupedCompareRows(rows, kind = 'counted') {
+    const safeRows = Array.isArray(rows) ? rows.filter(Boolean) : [];
+    if (!safeRows.length) return '';
+    return safeRows.map((row) => `
+        <div class="recognize-compare-row tone-${kind}">
+            <div class="recognize-compare-cell">
+                ${renderRecognizePreviewSourceCell(row)}
+            </div>
+            <div class="recognize-compare-cell">
+                ${kind === 'counted' || kind === 'play'
+                    ? renderCompareStandardEntries(row.entries, kind === 'counted' ? '（本组暂无安全识别）' : '（本组暂无未统计内容）')
+                    : (kind === 'blocked'
+                        ? (renderRecognizeBlockedWarnings(row) || renderCompareCellValue('', '（暂无处理建议）'))
+                        : (renderCompareLineWarnings(row.warnings) || renderCompareCellValue('', '（暂无忽略原因）')))
+                }
+            </div>
+        </div>
+    `).join('');
+}
+
+function renderRecognizePreviewGroupSection(config = {}) {
+    const title = String(config.title || '').trim() || '未命名分组';
+    const note = String(config.note || '').trim();
+    const countLabel = String(config.countLabel || '').trim();
+    const tone = String(config.tone || 'counted').trim();
+    const rowsHtml = String(config.rowsHtml || '').trim();
+    const emptyText = String(config.emptyText || '当前分组暂无内容').trim();
+    const leftHeader = String(config.leftHeader || '原始消息').trim();
+    const rightHeader = String(config.rightHeader || '核对结果').trim();
+    return `
+        <section class="recognize-preview-group tone-${tone}">
+            <div class="recognize-preview-group-head">
+                <div class="recognize-preview-group-title-wrap">
+                    <div class="recognize-preview-group-title">${escapeHtml(title)}</div>
+                    ${note ? `<div class="recognize-preview-group-note">${escapeHtml(note)}</div>` : ''}
+                </div>
+                ${countLabel ? `<div class="recognize-preview-group-count">${escapeHtml(countLabel)}</div>` : ''}
+            </div>
+            ${rowsHtml
+                ? `
+                    <div class="recognize-compare-table-head in-group">
+                        <div class="recognize-compare-head-cell">${escapeHtml(leftHeader)}</div>
+                        <div class="recognize-compare-head-cell">${escapeHtml(rightHeader)}</div>
+                    </div>
+                    <div class="recognize-compare-list">${rowsHtml}</div>
+                `
+                : `<div class="recognize-preview-group-empty">${escapeHtml(emptyText)}</div>`}
+        </section>
+    `;
 }
 
 function buildRecognizePreviewHtml(previewResult, rawValue) {
@@ -8055,72 +11212,110 @@ function buildRecognizePreviewHtml(previewResult, rawValue) {
     }
 
     const result = previewResult.result || {};
-    const entries = Array.isArray(result.entries) ? result.entries : [];
-    // 解析器 lineNo 按“输入真实行号”编号（含空白行）；核对表按真实行号映射，
-    // 但跳过“空白且无解析结果”的行，兼顾准确定位与阅读密度。
-    const rawLines = String(rawValue || '')
-        .replace(/\r/g, '')
-        .split('\n');
-    const lineRows = rawLines.map((lineText, index) => ({
-        lineNo: index + 1,
-        rawLine: String(lineText || ''),
-        displayLine: String(lineText || '').trim(),
-        entries: []
-    }));
-    const floatingEntries = [];
-
-    entries.forEach((entry) => {
-        if (!entry) return;
-        if (!formatRecognizePreviewEntryCore(entry)) return;
-        const lineNo = Number.parseInt(entry.lineNo, 10);
-        if (Number.isFinite(lineNo) && lineNo > 0 && lineNo <= lineRows.length) {
-            lineRows[lineNo - 1].entries.push(entry);
-            return;
+    const summary = getRecognizePreviewSummary(result);
+    const groupedRows = buildRecognizePreviewGroupedRows(result, rawValue);
+    const blockedLineLabels = groupedRows.blockedRows
+        .map((row) => formatRecognizePreviewLineLabel(row && row.lineNo, '未定位段'))
+        .filter(Boolean)
+        .slice(0, 4);
+    const blockedLineSummaryText = blockedLineLabels.length > 0
+        ? `待人工处理：${blockedLineLabels.join('、')}${groupedRows.blockedRows.length > blockedLineLabels.length ? ' 等' : ''}`
+        : '待人工处理内容请看下方红色分组。';
+    const blockedReasonSummaryText = groupedRows.blockedRows
+        .flatMap((row) => Array.isArray(row && row.warnings) ? row.warnings : [])
+        .filter(Boolean)
+        .slice(0, 3)
+        .map((issue) => {
+            const lineLabel = formatRecognizePreviewLineLabel(issue && issue.lineNo, '未定位段');
+            const reason = String(issue && issue.reason ? issue.reason : '格式无法识别').trim() || '格式无法识别';
+            return `${lineLabel}：${reason}`;
+        })
+        .join('；');
+    const firstBlockedLineNo = groupedRows.blockedRows.find((row) => Number.isFinite(Number(row && row.lineNo)) && Number(row.lineNo) > 0)?.lineNo || '';
+    const sections = [
+        {
+            title: '待人工处理',
+            note: '这些内容当前不会入账。请先看建议并处理后，再重新预览。',
+            countLabel: `${Number(summary.blockedCount) || 0} 行`,
+            tone: 'blocked',
+            rowsHtml: renderRecognizePreviewGroupedCompareRows(groupedRows.blockedRows, 'blocked'),
+            rightHeader: '处理建议',
+            emptyText: '当前没有需要立即处理的高风险内容。'
+        },
+        {
+            title: '已识别但未统计',
+            note: '这些内容识别到了，但当前不进入号码统计。',
+            countLabel: `${Number(summary.playCount) || 0} 条`,
+            tone: 'play',
+            rowsHtml: renderRecognizePreviewGroupedCompareRows(groupedRows.playRows, 'play'),
+            emptyText: '当前没有“已识别但未统计”的内容。'
+        },
+        {
+            title: '已忽略',
+            note: '这些内容被当作摘要尾巴或噪音忽略，不影响统计。',
+            countLabel: `${Number(summary.ignoredCount) || 0} 行`,
+            tone: 'ignored',
+            rowsHtml: renderRecognizePreviewGroupedCompareRows(groupedRows.ignoredRows, 'ignored'),
+            emptyText: '当前没有被忽略的内容。'
+        },
+        {
+            title: '安全识别',
+            note: '这些内容已经安全计入号码统计。',
+            countLabel: `${Number(summary.countedEntryCount) || 0} 条`,
+            tone: 'counted',
+            rowsHtml: renderRecognizePreviewGroupedCompareRows(groupedRows.countedRows, 'counted'),
+            emptyText: '当前没有已安全计入的内容。'
         }
-        floatingEntries.push(entry);
-    });
+    ];
+    const sectionsHtml = sections
+        .filter((section) => String(section.rowsHtml || '').trim())
+        .map(section => renderRecognizePreviewGroupSection(section))
+        .join('');
+    const emptySectionsHtml = sectionsHtml
+        ? ''
+        : renderRecognizePreviewGroupSection({
+            title: '安全识别',
+            note: '当前没有可展示的识别结果。',
+            countLabel: '0 条',
+            tone: 'counted',
+            rowsHtml: '',
+            emptyText: '当前没有可核对的识别结果。'
+        });
 
-    const rows = [];
-
-    lineRows.forEach((lineRow) => {
-        if (!lineRow.displayLine && !lineRow.entries.length) {
-            return;
-        }
-        rows.push(`
-            <div class="recognize-compare-row">
-                <div class="recognize-compare-cell">
-                    ${renderCompareCellValue(lineRow.displayLine, '（空行）')}
-                </div>
-                <div class="recognize-compare-cell">
-                    ${renderCompareStandardEntries(lineRow.entries)}
-                </div>
-            </div>
-        `);
-    });
-
-    if (floatingEntries.length) {
-        rows.push(`
-            <div class="recognize-compare-row">
-                <div class="recognize-compare-cell">
-                    ${renderCompareCellValue('（未定位段）', '（无法定位到单行）')}
-                </div>
-                <div class="recognize-compare-cell">
-                    ${renderCompareStandardEntries(floatingEntries, '（无）')}
-                </div>
-            </div>
-        `);
-    }
-
-    const listBlock = rows.length
+    const confirmActionVerb = getRecognizeConfirmActionVerb();
+    const blockedBadgeText = getRecognizeBlockedBadgeText();
+    const blockingUnresolvedLines = Array.isArray(result.blockingUnresolvedLines)
+        ? result.blockingUnresolvedLines.filter(Boolean)
+        : [];
+    const unresolvedLines = Array.isArray(result.unresolvedLines) ? result.unresolvedLines.filter(Boolean) : [];
+    const summaryBlock = renderRecognizePreviewSummary(summary);
+    const warningBlock = blockingUnresolvedLines.length > 0
         ? `
-            <div class="recognize-compare-table-head">
-                <div class="recognize-compare-head-cell">原始消息</div>
-                <div class="recognize-compare-head-cell">标准格式</div>
+            <div class="parse-issue parse-issue-blocking" style="margin-bottom: 12px;">
+                <div class="parse-issue-head">
+                    <span class="parse-issue-badge blocking">当前消息${blockedBadgeText}</span>
+                </div>
+                <div class="parse-issue-message">当前仍有 ${blockingUnresolvedLines.length} 行待人工处理，已阻止${confirmActionVerb}。${escapeHtml(blockedLineSummaryText)}${blockedReasonSummaryText ? `<br>原因：${escapeHtml(blockedReasonSummaryText)}` : ''}</div>
+                ${firstBlockedLineNo
+                    ? `
+                        <div class="parse-issue-actions">
+                            <button type="button" class="parse-issue-action-button" onclick="focusRecognizeMessageLine('${encodeRecognizeActionArg(firstBlockedLineNo)}'); return false;">定位第一条待处理</button>
+                        </div>
+                    `
+                    : ''}
             </div>
-            <div class="recognize-compare-list">${rows.join('')}</div>
         `
-        : '<div class="recognize-compare-empty">暂无可核对的数据，请继续输入消息。</div>';
-    return `<div class="recognize-compare-table">${listBlock}</div>`;
+        : (unresolvedLines.length
+            ? `
+                <div class="parse-issue parse-issue-warning" style="margin-bottom: 12px;">
+                    <div class="parse-issue-head">
+                        <span class="parse-issue-badge warning">部分未识别</span>
+                    </div>
+                    <div class="parse-issue-message">当前消息已按可识别部分统计，另有 ${unresolvedLines.length} 行内容暂未识别，已忽略。</div>
+                </div>
+            `
+            : '');
+    return `<div class="recognize-compare-table">${summaryBlock}${warningBlock}<div class="recognize-preview-groups">${sectionsHtml || emptySectionsHtml}</div></div>`;
 }
 
 // 预览消息
@@ -8135,6 +11330,7 @@ async function previewMessage(options = {}) {
             if (resultElement) {
                 resultElement.innerHTML = '';
             }
+            setRecognizePreviewBlocked(false);
             setRecognizePreviewError('');
             clearMessageLineError();
             return;
@@ -8145,6 +11341,7 @@ async function previewMessage(options = {}) {
             if (resultElement) {
                 resultElement.innerHTML = '';
             }
+            setRecognizePreviewBlocked(false);
             setRecognizePreviewError('');
             clearMessageLineError();
             if (!silent) {
@@ -8180,8 +11377,26 @@ async function previewMessage(options = {}) {
         if (resultElement) {
             resultElement.innerHTML = buildRecognizePreviewHtml(previewResult, previewMessageText);
         }
-        setRecognizePreviewError('');
-        clearMessageLineError();
+        const unresolvedLines = Array.isArray(previewResult.result && previewResult.result.unresolvedLines)
+            ? previewResult.result.unresolvedLines.filter(Boolean)
+            : [];
+        const blockingUnresolvedLines = Array.isArray(previewResult.result && previewResult.result.blockingUnresolvedLines)
+            ? previewResult.result.blockingUnresolvedLines.filter(Boolean)
+            : [];
+        if (unresolvedLines.length > 0) {
+            setMessageLineErrors(unresolvedLines.map(item => item.lineNo).filter(lineNo => Number.isFinite(Number(lineNo))));
+            if (blockingUnresolvedLines.length > 0) {
+                setRecognizePreviewBlocked(true);
+                setRecognizePreviewError(`当前消息${getRecognizeBlockedBadgeText()}：仍有 ${blockingUnresolvedLines.length} 行待人工处理`);
+            } else {
+                setRecognizePreviewBlocked(false);
+                setRecognizePreviewError(`已忽略 ${unresolvedLines.length} 行暂未识别内容`);
+            }
+        } else {
+            setRecognizePreviewBlocked(false);
+            setRecognizePreviewError('');
+            clearMessageLineError();
+        }
     } catch (error) {
         const message = error && error.message ? error.message : '解析失败';
         // 实时输入中对“输入不完整”类错误不打断、不刷红错误。
@@ -8189,6 +11404,7 @@ async function previewMessage(options = {}) {
         if (shouldSuppressRealtime) {
             return;
         }
+        setRecognizePreviewBlocked(true);
         renderInlineParseError(message, { context: 'preview', clientId: getPreviewClientId() });
         if (!silent) {
             showError('预览失败', error.message);
@@ -8214,7 +11430,32 @@ async function confirmEdit() {
             }
 
             const { userName, index, regionKey } = recognizeEditContext;
-            window.userManager.applyEditedOriginalData(userName, index, regionKey, rawInputMessage);
+            const resolved = await resolveMessageAmbiguityFlow(message, userName, {
+                interactive: true,
+                updateTextarea: true
+            });
+            const previewResult = resolved && resolved.previewResult ? resolved.previewResult : null;
+            if (!previewResult || !previewResult.success) {
+                const errorMessage = previewResult && previewResult.error ? previewResult.error : '解析失败';
+                renderInlineParseError(errorMessage, { context: 'confirm', clientId: userName });
+                showError('确认失败', `${userName}: ${errorMessage}`);
+                return;
+            }
+            const blockingUnresolvedLines = Array.isArray(previewResult.result && previewResult.result.blockingUnresolvedLines)
+                ? previewResult.result.blockingUnresolvedLines.filter(Boolean)
+                : [];
+            if (blockingUnresolvedLines.length > 0) {
+                const blockedMessage = `当前消息不可保存：仍有 ${blockingUnresolvedLines.length} 行待人工处理`;
+                setRecognizePreviewBlocked(true);
+                setRecognizePreviewError(blockedMessage);
+                renderInlineParseError(blockedMessage, { context: 'confirm', clientId: userName });
+                showError('确认失败', `${userName}: 仍有 ${blockingUnresolvedLines.length} 行疑似下注内容未识别，已阻止保存`);
+                return;
+            }
+            const originalMessageForStorage = messageTextarea
+                ? String(messageTextarea.value || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+                : String((resolved && typeof resolved.message === 'string' ? resolved.message : message) || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+            window.userManager.applyEditedOriginalData(userName, index, regionKey, originalMessageForStorage);
             renderViewRegionButtons();
             closeModal();
             const regionLabel = window.userManager.getRegionLabel ? window.userManager.getRegionLabel(regionKey) : regionKey;
@@ -8237,6 +11478,8 @@ async function confirmEdit() {
         }
 
         let totalAdded = 0;
+        let maxIgnoredLineCount = 0;
+        const createdAt = new Date().toISOString();
         for (const userName of selectedUsers) {
             const resolved = await resolveMessageAmbiguityFlow(message, userName, {
                 interactive: true,
@@ -8256,7 +11499,8 @@ async function confirmEdit() {
                 : String(message || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
             const result = messageProcessor.processMessageForUser(message, userName, {
                 clientId: userName,
-                originalMessage: originalMessageForStorage
+                originalMessage: originalMessageForStorage,
+                createdAt
             });
             if (!result.success) {
                 renderInlineParseError(result.message, { context: 'confirm', clientId: userName });
@@ -8264,6 +11508,7 @@ async function confirmEdit() {
                 return;
             }
             totalAdded += result.totalAdded || 0;
+            maxIgnoredLineCount = Math.max(maxIgnoredLineCount, Number(result.ignoredLineCount) || 0);
         }
 
         const regionKeys = extractRegionKeysForDuplicate(message);
@@ -8283,10 +11528,16 @@ async function confirmEdit() {
         setRecognizePreviewError('');
         clearMessageLineError();
         renderMessageLineNumbers();
-        showSuccess(`消息处理成功，已添加到 ${selectedUsers.length} 位客户，总数: ${totalAdded}`);
+        const ignoredHint = maxIgnoredLineCount > 0
+            ? `，另有 ${maxIgnoredLineCount} 行未识别内容已忽略`
+            : '';
+        showSuccess(`消息处理成功，已添加到 ${selectedUsers.length} 位客户，总数: ${totalAdded}${ignoredHint}`);
     } catch (error) {
         if (error && error.message) {
-            renderInlineParseError(error.message, { context: 'confirm', clientId: getPreviewClientId() });
+            renderInlineParseError(error.message, {
+                context: 'confirm',
+                clientId: recognizeEditContext ? recognizeEditContext.userName : getPreviewClientId()
+            });
         }
         showError('确认失败', error.message);
     }
@@ -8394,6 +11645,12 @@ function mergeLotteryScopeData(manager, scopedUsers, viewRegions) {
             if (entry == null) return '';
             return String(entry);
         };
+    const extractOriginalCreatedAt = typeof manager.extractOriginalMessageCreatedAt === 'function'
+        ? manager.extractOriginalMessageCreatedAt.bind(manager)
+        : (entry) => {
+            if (!entry || typeof entry !== 'object') return '';
+            return typeof entry.createdAt === 'string' ? String(entry.createdAt || '').trim() : '';
+        };
     const getRegionLabel = typeof manager.getRegionLabel === 'function'
         ? manager.getRegionLabel.bind(manager)
         : (regionKey) => String(regionKey || '');
@@ -8435,6 +11692,7 @@ function mergeLotteryScopeData(manager, scopedUsers, viewRegions) {
                     regionKey,
                     regionLabel: getRegionLabel(regionKey),
                     message: extractOriginalText(message),
+                    createdAt: extractOriginalCreatedAt(message),
                     originalEntry: message
                 });
             });
@@ -8936,7 +12194,7 @@ function computeOriginalRowExportPnl(row, winningConfigs = {}) {
                 return fallbackOdds;
             };
 
-            const parsed = processor.parseMessage(rawMessage, { clientId: userName });
+            const parsed = processor.parseMessage(rawMessage, { clientId: userName, allowPartial: true });
             const targetNumber = winning.numberText || '';
 
             (parsed && Array.isArray(parsed.entries) ? parsed.entries : []).forEach((entry) => {
@@ -9623,6 +12881,18 @@ window.saveAnchorRuleFromDrawer = saveAnchorRuleFromDrawer;
 window.renderAnchorRuleDrawerPreview = renderAnchorRuleDrawerPreview;
 window.renderAnchorImpactPreview = renderAnchorImpactPreview;
 window.applyAnchorImpactExample = applyAnchorImpactExample;
+window.setNoiseRuleScope = setNoiseRuleScope;
+window.handleNoiseRuleClientChange = handleNoiseRuleClientChange;
+window.saveNoiseRulePattern = saveNoiseRulePattern;
+window.resetNoiseRulePatternInput = resetNoiseRulePatternInput;
+window.applyNoiseRuleExample = applyNoiseRuleExample;
+window.renderNoiseRulePreview = renderNoiseRulePreview;
+window.setAmountUnitScope = setAmountUnitScope;
+window.handleAmountUnitClientChange = handleAmountUnitClientChange;
+window.saveAmountUnitToken = saveAmountUnitToken;
+window.resetAmountUnitTokenInput = resetAmountUnitTokenInput;
+window.applyAmountUnitExample = applyAmountUnitExample;
+window.renderAmountUnitPreview = renderAmountUnitPreview;
 window.saveAnchorAliasRule = saveAnchorAliasRule;
 window.removeAnchorAliasRule = removeAnchorAliasRule;
 window.resetAnchorAliasRules = resetAnchorAliasRules;
@@ -9655,4 +12925,10 @@ window.closePlanModal = closePlanModal;
 window.switchTrialPlanTier = switchTrialPlanTier;
 window.pickOcrImage = pickOcrImage;
 window.runOcrFromSelectedImage = runOcrFromSelectedImage;
+window.rewriteMessageWithLocalAi = rewriteMessageWithLocalAi;
+window.focusRecognizeMessageLine = focusRecognizeMessageLine;
+window.applyRecognizeSuggestedLineRewrite = applyRecognizeSuggestedLineRewrite;
+window.handleRecognizeQuickAddAnchor = handleRecognizeQuickAddAnchor;
+window.handleRecognizeQuickAddAmountUnit = handleRecognizeQuickAddAmountUnit;
+window.handleRecognizeBlockedAiRewrite = handleRecognizeBlockedAiRewrite;
 window.clearOcrImage = clearOcrImage;

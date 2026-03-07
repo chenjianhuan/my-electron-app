@@ -96,7 +96,41 @@ class UserModel {
     }
 
     for (const originalData of regionData.originalData) {
-      if (typeof originalData !== 'string') {
+      if (!this.validateOriginalDataEntry(originalData)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  validateOriginalDataEntry(entry) {
+    if (typeof entry === 'string') {
+      return true;
+    }
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return false;
+    }
+
+    const messageKeys = ['raw', 'message', 'text', 'original', 'value', 'canonical'];
+    const hasMessage = messageKeys.some((key) => typeof entry[key] === 'string' && String(entry[key]).trim());
+    if (!hasMessage) {
+      return false;
+    }
+
+    const amountKeys = ['totalAmount', 'orderTotal', 'total', 'sum'];
+    for (const key of amountKeys) {
+      if (!Object.prototype.hasOwnProperty.call(entry, key)) continue;
+      const value = Number(entry[key]);
+      if (!Number.isFinite(value) || value < 0) {
+        return false;
+      }
+    }
+
+    const timeKeys = ['createdAt', 'addedAt', 'timestamp', 'time'];
+    for (const key of timeKeys) {
+      if (!Object.prototype.hasOwnProperty.call(entry, key)) continue;
+      if (typeof entry[key] !== 'string') {
         return false;
       }
     }
@@ -307,6 +341,92 @@ class UserModel {
 
   sanitizeAttributeConfig(config) {
     const normalizeAnchorToken = (rawToken) => String(rawToken || '').replace(/\s+/g, '').replace(/[：:]+$/g, '').trim();
+    const inferAnchorTokenType = (rawToken) => {
+      const token = normalizeAnchorToken(rawToken);
+      if (!token) return '';
+      if (/^[\u4e00-\u9fa5A-Za-z]+$/.test(token)) return 'word';
+      if (/^[^0-9０-９\u4e00-\u9fa5A-Za-z]+$/.test(token)) return 'symbol';
+      return 'mixed';
+    };
+    const normalizeAnchorTokenType = (rawValue, rawToken) => {
+      const value = String(rawValue || '').trim();
+      if (['word', 'symbol', 'mixed'].includes(value)) return value;
+      return inferAnchorTokenType(rawToken);
+    };
+    const normalizeAnchorPosition = (rawValue) => {
+      const value = String(rawValue || '').trim();
+      return ['before_amount', 'after_target', 'standalone'].includes(value) ? value : 'before_amount';
+    };
+    const normalizeAnchorBoundary = (rawValue) => {
+      const value = String(rawValue || '').trim();
+      return ['strict', 'soft'].includes(value) ? value : 'strict';
+    };
+    const normalizeAnchorPriority = (rawValue) => {
+      const parsed = Number.parseInt(rawValue, 10);
+      if (!Number.isFinite(parsed)) return 100;
+      if (parsed < 0) return 0;
+      if (parsed > 9999) return 9999;
+      return parsed;
+    };
+    const reservedAnchorTokens = new Set([
+      '新', '老', '香', '港', '奥', '澳',
+      '新奥', '老奥', '澳门', '香港',
+      '米', '元', '块', '蚊', '井', '斤', '注', '码', '碼', '毛', '角', '分', '闷'
+    ]);
+    const sanitizeAmountUnits = (rawAmountUnits) => {
+      if (!Array.isArray(rawAmountUnits)) return [];
+      const seen = new Set();
+      const safeUnits = [];
+      rawAmountUnits.forEach((item) => {
+        const candidate = item && typeof item === 'object' && !Array.isArray(item)
+          ? item.token
+          : item;
+        const token = String(candidate || '').replace(/\s+/g, '').trim();
+        if (!token || token.length > 6) return;
+        if (/[\r\n]/.test(token)) return;
+        if (/^[0-9０-９零〇一二两三四五六七八九十百千万]+$/.test(token)) return;
+        if (!/[\u4e00-\u9fa5A-Za-z]/.test(token)) return;
+        if (/^(?:新|老|香|港|奥|澳|新奥|老奥|澳门|香港)$/.test(token)) return;
+        if (seen.has(token)) return;
+        seen.add(token);
+        safeUnits.push(token);
+      });
+      return safeUnits;
+    };
+    const isSupportedAnchorToken = (rawToken) => {
+      const token = normalizeAnchorToken(rawToken);
+      if (!token || token.length > 12) return false;
+      if (/^[0-9０-９零〇一二两三四五六七八九十百千万]+$/.test(token)) return false;
+      if (reservedAnchorTokens.has(token)) return false;
+      return true;
+    };
+    const sanitizeNoiseRulePattern = (rawPattern) => {
+      const normalized = String(rawPattern || '')
+        .replace(/\{amount\}/gi, '{金额}')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!normalized || normalized.length > 40) return '';
+      const placeholders = normalized.match(/\{[^}]+\}/g) || [];
+      if (placeholders.some(token => token !== '{金额}')) return '';
+      const literal = normalized.replace(/\{金额\}/g, '').trim();
+      if (!literal) return '';
+      return normalized;
+    };
+    const sanitizeNoiseRules = (rawNoiseRules) => {
+      if (!Array.isArray(rawNoiseRules)) return [];
+      const seen = new Set();
+      const safeRules = [];
+      rawNoiseRules.forEach(item => {
+        const candidate = item && typeof item === 'object' && !Array.isArray(item)
+          ? item.pattern
+          : item;
+        const pattern = sanitizeNoiseRulePattern(candidate);
+        if (!pattern || seen.has(pattern)) return;
+        seen.add(pattern);
+        safeRules.push(pattern);
+      });
+      return safeRules;
+    };
     const normalizeAmountDistribute = (rawValue) => {
       const value = String(rawValue || '').trim();
       if (['per_number', 'per_target_equal_split', 'per_entry_equal_split', 'undetermined'].includes(value)) return value;
@@ -333,14 +453,17 @@ class UserModel {
       if (!rawSemantics || typeof rawSemantics !== 'object') return safeAnchors;
       Object.entries(rawSemantics).forEach(([rawToken, rawRule]) => {
         const token = normalizeAnchorToken(rawToken);
-        if (!token || token.length > 12) return;
-        if (!/[\u4e00-\u9fa5A-Za-z]/.test(token)) return;
+        if (!isSupportedAnchorToken(token)) return;
         if (!rawRule || typeof rawRule !== 'object') return;
         const amountDistribute = normalizeAmountDistribute(rawRule.amountDistribute);
         if (!amountDistribute) return;
         const rule = {
           amountDistribute,
-          enabled: rawRule.enabled !== false
+          enabled: rawRule.enabled !== false,
+          tokenType: normalizeAnchorTokenType(rawRule.tokenType, token),
+          position: normalizeAnchorPosition(rawRule.position),
+          boundary: normalizeAnchorBoundary(rawRule.boundary),
+          priority: normalizeAnchorPriority(rawRule.priority)
         };
         const odds = normalizeOdds(rawRule.odds);
         if (Number.isFinite(odds)) {
@@ -365,6 +488,16 @@ class UserModel {
       const anchors = sanitizeAnchorSemantics(profile.anchorSemantics);
       if (Object.keys(anchors).length > 0) {
         safeProfile.anchorSemantics = anchors;
+      }
+
+      const noiseRules = sanitizeNoiseRules(profile.noiseRules);
+      if (noiseRules.length > 0) {
+        safeProfile.noiseRules = noiseRules;
+      }
+
+      const amountUnits = sanitizeAmountUnits(profile.amountUnits);
+      if (amountUnits.length > 0) {
+        safeProfile.amountUnits = amountUnits;
       }
 
       const combinePolicy = String(profile.attributeCombinePolicy || '').trim();

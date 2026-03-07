@@ -162,7 +162,10 @@
 
                         <div class="recognize-inline-actions">
                             <span>输入后自动识别，右侧实时核对标准格式。</span>
-                            <button id="toggleAttributePanelBtn" class="edit-button recognize-attr-toggle" type="button" onclick="toggleRecognizeAttributePanel()">隐藏属性面板</button>
+                            <div class="recognize-inline-action-buttons">
+                                <button id="recognizeVoiceButton" class="edit-button recognize-voice-toggle" type="button" onclick="toggleRecognizeVoiceInput()" aria-pressed="false">语音录入</button>
+                                <button id="toggleAttributePanelBtn" class="edit-button recognize-attr-toggle" type="button" onclick="toggleRecognizeAttributePanel()">隐藏属性面板</button>
+                            </div>
                         </div>
 
                         <div id="clipboardAssistBanner" class="clipboard-assist-banner">
@@ -181,6 +184,7 @@
                             <textarea id="message" rows="4" cols="50" placeholder="输入消息，例如：40-39-37-38-49-36-48-34-46各5"></textarea>
                             <div id="messageErrorOverlay" class="message-error-overlay" aria-hidden="true"></div>
                         </div>
+                        <div id="recognizeVoiceStatus" class="recognize-voice-status" aria-live="polite">语音录入可用，点击“语音录入”开始听写。</div>
 
                         <div class="ocr-uploader" id="ocrDropZone">
                             <input id="ocrImageInput" type="file" accept="image/*" hidden>
@@ -424,6 +428,138 @@
                                             </div>
                                         </div>
                                     </section>
+
+                                </div>
+                            </div>
+                        </section>
+
+                        <section id="recognizeGroupNoise" class="recognize-side-group collapsed">
+                            <button id="recognizeGroupNoiseToggle" class="recognize-side-group-toggle" type="button" onclick="toggleRecognizeSideGroup('noise')" aria-expanded="false">
+                                <span class="recognize-side-group-title">噪音规则管理</span>
+                                <span class="recognize-side-group-caret">▾</span>
+                            </button>
+                            <div id="recognizeGroupNoiseBody" class="recognize-side-group-body">
+                                <input id="noiseRuleScope" type="hidden" value="global">
+                                <div class="anchor-console-card">
+                                    <div class="anchor-alias-title">新增噪音规则</div>
+                                    <div class="anchor-alias-subtitle">适合忽略尾部摘要、统计尾巴等无须入账的片段。支持固定文本，也支持 `{金额}` 模板，例如：`共{金额}`、`合计{金额}`。</div>
+                                    <div class="anchor-rule-scope-shell">
+                                        <div class="anchor-rule-scope-row">
+                                            <label>作用范围</label>
+                                            <div class="anchor-rule-scope-segmented">
+                                                <button id="noiseScopeGlobalBtn" type="button" class="anchor-scope-btn" onclick="setNoiseRuleScope('global')">全部客户</button>
+                                                <button id="noiseScopeClientBtn" type="button" class="anchor-scope-btn" onclick="setNoiseRuleScope('client')">当前客户</button>
+                                            </div>
+                                        </div>
+                                        <div id="noiseRuleClientRow" class="anchor-rule-client-row" style="display: none;">
+                                            <label for="noiseRuleClientSelect">客户</label>
+                                            <select id="noiseRuleClientSelect" onchange="handleNoiseRuleClientChange()"></select>
+                                        </div>
+                                        <div id="noiseRuleScopeExplain" class="anchor-scope-explain"></div>
+                                    </div>
+                                    <input id="noiseRulePatternInput" type="text" placeholder="例如：共{金额} / 合计{金额}">
+                                    <div class="anchor-alias-actions">
+                                        <button id="saveNoiseRuleBtn" class="confirm-button" type="button" onclick="saveNoiseRulePattern()">保存噪音规则</button>
+                                        <button id="resetNoiseRuleBtn" class="cancel-button" type="button" onclick="resetNoiseRulePatternInput()">清空输入</button>
+                                    </div>
+                                    <div id="noiseRuleEditorState" class="anchor-policy-state"></div>
+                                    <div class="noise-rule-helper-list">
+                                        <button class="noise-rule-helper-chip" type="button" data-noise-rule-example="共{金额}">共{金额}</button>
+                                        <button class="noise-rule-helper-chip" type="button" data-noise-rule-example="合计{金额}">合计{金额}</button>
+                                        <button class="noise-rule-helper-chip" type="button" data-noise-rule-example="总计{金额}">总计{金额}</button>
+                                    </div>
+                                </div>
+
+                                <div class="anchor-rule-workspace noise-rule-workspace">
+                                    <div class="anchor-rule-list-column">
+                                        <div class="anchor-alias-toolbar">
+                                            <input id="noiseRuleSearch" type="text" placeholder="搜索噪音规则">
+                                            <select id="noiseRuleSourceFilter">
+                                                <option value="all">全部来源</option>
+                                                <option value="client">客户</option>
+                                                <option value="global">全局</option>
+                                                <option value="system">系统默认</option>
+                                            </select>
+                                        </div>
+                                        <div id="noiseRuleList" class="anchor-alias-list"></div>
+                                    </div>
+
+                                    <div class="anchor-impact-panel">
+                                        <div class="anchor-impact-title">噪音命中预览</div>
+                                        <div class="anchor-impact-subtitle">输入一段尾巴或整条原始消息，实时查看当前规则是否会忽略该内容。</div>
+                                        <textarea id="noiseRuleSampleInput" placeholder="例如：01 02 03 各十 共30"></textarea>
+                                        <div class="anchor-impact-actions">
+                                            <button type="button" class="edit-button" onclick="applyNoiseRuleExample()">套用示例</button>
+                                            <button type="button" class="recognize-button" onclick="renderNoiseRulePreview()">刷新预览</button>
+                                        </div>
+                                        <div id="noiseRulePreview" class="anchor-impact-preview"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section id="recognizeGroupAmountUnits" class="recognize-side-group collapsed">
+                            <button id="recognizeGroupAmountUnitsToggle" class="recognize-side-group-toggle" type="button" onclick="toggleRecognizeSideGroup('amountUnits')" aria-expanded="false">
+                                <span class="recognize-side-group-title">金额单位管理</span>
+                                <span class="recognize-side-group-caret">▾</span>
+                            </button>
+                            <div id="recognizeGroupAmountUnitsBody" class="recognize-side-group-body">
+                                <input id="amountUnitScope" type="hidden" value="global">
+                                <div class="anchor-console-card">
+                                    <div class="anchor-alias-title">新增金额单位</div>
+                                    <div class="anchor-alias-subtitle">用于识别金额结尾词，帮助解析 `01*10块`、`01.10闷`、`各五毛` 这类写法。这里配置的是“金额单位”，不是锚点词。</div>
+                                    <div class="anchor-rule-scope-shell">
+                                        <div class="anchor-rule-scope-row">
+                                            <label>作用范围</label>
+                                            <div class="anchor-rule-scope-segmented">
+                                                <button id="amountUnitScopeGlobalBtn" type="button" class="anchor-scope-btn" onclick="setAmountUnitScope('global')">全部客户</button>
+                                                <button id="amountUnitScopeClientBtn" type="button" class="anchor-scope-btn" onclick="setAmountUnitScope('client')">当前客户</button>
+                                            </div>
+                                        </div>
+                                        <div id="amountUnitClientRow" class="anchor-rule-client-row" style="display: none;">
+                                            <label for="amountUnitClientSelect">客户</label>
+                                            <select id="amountUnitClientSelect" onchange="handleAmountUnitClientChange()"></select>
+                                        </div>
+                                        <div id="amountUnitScopeExplain" class="anchor-scope-explain"></div>
+                                    </div>
+                                    <input id="amountUnitTokenInput" type="text" placeholder="例如：元 / 块 / 毛 / 闷">
+                                    <div class="anchor-alias-actions">
+                                        <button id="saveAmountUnitBtn" class="confirm-button" type="button" onclick="saveAmountUnitToken()">保存金额单位</button>
+                                        <button id="resetAmountUnitBtn" class="cancel-button" type="button" onclick="resetAmountUnitTokenInput()">清空输入</button>
+                                    </div>
+                                    <div id="amountUnitEditorState" class="anchor-policy-state"></div>
+                                    <div class="noise-rule-helper-list">
+                                        <button class="noise-rule-helper-chip" type="button" data-amount-unit-example="元">元</button>
+                                        <button class="noise-rule-helper-chip" type="button" data-amount-unit-example="块">块</button>
+                                        <button class="noise-rule-helper-chip" type="button" data-amount-unit-example="毛">毛</button>
+                                        <button class="noise-rule-helper-chip" type="button" data-amount-unit-example="闷">闷</button>
+                                    </div>
+                                </div>
+
+                                <div class="anchor-rule-workspace noise-rule-workspace">
+                                    <div class="anchor-rule-list-column">
+                                        <div class="anchor-alias-toolbar">
+                                            <input id="amountUnitSearch" type="text" placeholder="搜索金额单位">
+                                            <select id="amountUnitSourceFilter">
+                                                <option value="all">全部来源</option>
+                                                <option value="client">客户</option>
+                                                <option value="global">全局</option>
+                                                <option value="system">系统默认</option>
+                                            </select>
+                                        </div>
+                                        <div id="amountUnitList" class="anchor-alias-list"></div>
+                                    </div>
+
+                                    <div class="anchor-impact-panel">
+                                        <div class="anchor-impact-title">金额单位预览</div>
+                                        <div class="anchor-impact-subtitle">点击左侧某个单位后，右侧会切到该单位的演示样例，实时查看是否能被当前解析器识别。</div>
+                                        <textarea id="amountUnitSampleInput" placeholder="例如：01*10块 23.24各5"></textarea>
+                                        <div class="anchor-impact-actions">
+                                            <button type="button" class="edit-button" onclick="applyAmountUnitExample()">套用示例</button>
+                                            <button type="button" class="recognize-button" onclick="renderAmountUnitPreview()">刷新预览</button>
+                                        </div>
+                                        <div id="amountUnitPreview" class="anchor-impact-preview"></div>
+                                    </div>
                                 </div>
                             </div>
                         </section>

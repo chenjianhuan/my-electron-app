@@ -1,17 +1,18 @@
 {
   "name": "messagecounter",
-  "version": "5.0.1",
+  "version": "5.0.2",
   "author": "小张",
   "description": "一款支持内置书库与本地 TXT 导入的离线小说阅读器",
   "main": "main.js",
   "dependencies": {
+    "@huggingface/transformers": "^3.8.1",
     "antd": "^5.20.5",
     "electron-updater": "^6.3.9",
     "sharp": "^0.34.4",
     "tesseract.js": "^6.0.1"
   },
   "devDependencies": {
-    "electron": "^25.9.8",
+    "electron": "^27.3.11",
     "electron-builder": "^24.13.3",
     "electron-rebuild": "^3.2.9"
   },
@@ -31,6 +32,7 @@
     "license:issue-to-usb": "node scripts/license-tools.js issue-to-usb",
     "license:wizard": "node scripts/license-tools.js issue-wizard",
     "license:studio": "electron scripts/license-studio/main.js",
+    "parser:dataset-blocks": "node scripts/check-message-dataset-blocks.js",
     "license:studio:dist": "electron-builder --config scripts/license-studio/builder.config.json",
     "license:studio:dist:dir": "electron-builder --config scripts/license-studio/builder.config.json --dir",
     "license:studio:dist:mac": "electron-builder --config scripts/license-studio/builder.config.json --mac zip",
@@ -57,6 +59,10 @@
         "zip"
       ],
       "icon": "public/icon.icns",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "语音录入需要使用麦克风，把语音转成文字消息。",
+        "NSSpeechRecognitionUsageDescription": "语音录入需要语音识别权限，把说话内容转成文字消息。"
+      },
       "identity": null
     },
     "win": {
@@ -87,6 +93,13 @@
       {
         "from": "assets/ocr/",
         "to": "ocr",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "assets/ai/",
+        "to": "ai",
         "filter": [
           "**/*"
         ]

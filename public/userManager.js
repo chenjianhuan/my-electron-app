@@ -11,6 +11,7 @@ class UserManager {
         this.editingOriginal = null;
         this.virtualListStates = {};
         this.originalOrderTotalCache = new Map();
+        this.originalParseSummaryCache = new Map();
         this.originalDataSearchKeyword = '';
     }
 
@@ -442,6 +443,37 @@ class UserManager {
         return String(entry).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     }
 
+    extractOriginalMessageCreatedAt(entry) {
+        if (!entry || typeof entry !== 'object') return '';
+        const candidates = ['createdAt', 'addedAt', 'timestamp', 'time'];
+        for (const key of candidates) {
+            if (typeof entry[key] === 'string' && String(entry[key]).trim()) {
+                return String(entry[key]).trim();
+            }
+        }
+        return '';
+    }
+
+    normalizeOriginalMessageCreatedAt(value) {
+        const raw = String(value || '').trim();
+        if (!raw) return '';
+        const parsed = new Date(raw);
+        if (Number.isNaN(parsed.getTime())) {
+            return raw;
+        }
+        return parsed.toISOString();
+    }
+
+    formatOriginalMessageCreatedAt(value) {
+        const normalized = this.normalizeOriginalMessageCreatedAt(value);
+        if (!normalized) return '未记录';
+        const parsed = new Date(normalized);
+        if (Number.isNaN(parsed.getTime())) {
+            return normalized;
+        }
+        return parsed.toLocaleString('zh-CN', { hour12: false });
+    }
+
     escapeHtmlText(value) {
         return String(value || '')
             .replace(/&/g, '&amp;')
@@ -505,6 +537,21 @@ class UserManager {
         return null;
     }
 
+    buildStoredOriginalDataEntry(message, totalAmount = null, createdAt = '') {
+        const entry = {
+            message: this.extractOriginalMessageText(message)
+        };
+        const normalizedTotal = Number(totalAmount);
+        if (Number.isFinite(normalizedTotal) && normalizedTotal >= 0) {
+            entry.totalAmount = normalizedTotal;
+        }
+        const normalizedCreatedAt = this.normalizeOriginalMessageCreatedAt(createdAt);
+        if (normalizedCreatedAt) {
+            entry.createdAt = normalizedCreatedAt;
+        }
+        return entry;
+    }
+
     formatAmountValue(value) {
         const amount = Number(value);
         if (!Number.isFinite(amount) || Math.abs(amount) < 1e-9) return '0';
@@ -543,7 +590,7 @@ class UserManager {
 
         if (window.messageProcessor && typeof window.messageProcessor.parseMessage === 'function') {
             try {
-                const parsed = window.messageProcessor.parseMessage(raw, { clientId: userName });
+                const parsed = window.messageProcessor.parseMessage(raw, { clientId: userName, allowPartial: true });
                 let regionTotal = 0;
                 let allRegionTotal = 0;
                 (parsed.entries || []).forEach((entry) => {
@@ -579,6 +626,45 @@ class UserManager {
         return 0;
     }
 
+    validateOriginalMessageBeforeSave(sourceMessage, userName) {
+        const raw = this.extractOriginalMessageText(sourceMessage);
+        if (!raw.trim()) {
+            return {
+                ok: false,
+                message: '消息不能为空'
+            };
+        }
+        if (!window.messageProcessor || typeof window.messageProcessor.previewMessage !== 'function') {
+            return { ok: true };
+        }
+
+        const preview = window.messageProcessor.previewMessage(raw, {
+            clientId: userName,
+            allowPartial: true
+        });
+        if (!preview || !preview.success) {
+            return {
+                ok: false,
+                code: preview && preview.code ? preview.code : 'PREVIEW_VALIDATION_FAILED',
+                message: preview && preview.error ? preview.error : '消息校验失败'
+            };
+        }
+
+        const blockingUnresolvedLines = Array.isArray(preview.result && preview.result.blockingUnresolvedLines)
+            ? preview.result.blockingUnresolvedLines.filter(Boolean)
+            : [];
+        if (blockingUnresolvedLines.length > 0) {
+            return {
+                ok: false,
+                code: 'BLOCKING_UNRESOLVED_LINES',
+                message: `仍有 ${blockingUnresolvedLines.length} 行疑似下注内容未识别，已阻止保存`,
+                blockingUnresolvedLines
+            };
+        }
+
+        return { ok: true, preview };
+    }
+
     getOriginalOrderTotalCached(row) {
         if (!row || typeof row !== 'object') return 0;
         const storedTotal = this.extractOriginalMessageTotal(row.originalEntry);
@@ -605,6 +691,194 @@ class UserManager {
         return total;
     }
 
+    getOriginalParseSummaryCached(row) {
+        if (!row || typeof row !== 'object') {
+            return {
+                status: 'empty_or_noise',
+                statusLabel: '仅噪音/摘要',
+                countedEntryCount: 0,
+                countedAmount: 0,
+                playCount: 0,
+                blockedCount: 0,
+                ignoredCount: 0,
+                issues: [],
+                focusIssues: [],
+                summaryText: '仅噪音/摘要，未参与统计'
+            };
+        }
+        const userName = String(row.userName || '').trim();
+        const regionKey = String(row.regionKey || this.activeRegion || 'new_ao').trim() || 'new_ao';
+        const index = Number.isInteger(row.index) ? row.index : -1;
+        const message = this.extractOriginalMessageText(row.message);
+        const cacheKey = `${userName}|${regionKey}|${index}|${message}`;
+        if (this.originalParseSummaryCache.has(cacheKey)) {
+            return this.originalParseSummaryCache.get(cacheKey);
+        }
+
+        const storedTotal = this.extractOriginalMessageTotal(row.originalEntry);
+        let summary = null;
+        if (window.messageProcessor && typeof window.messageProcessor.previewMessage === 'function') {
+            const preview = window.messageProcessor.previewMessage(message, {
+                clientId: userName,
+                allowPartial: true
+            });
+            if (preview && preview.success && preview.result) {
+                const result = preview.result;
+                const allEntries = Array.isArray(result.entries) ? result.entries.filter(Boolean) : [];
+                const regionEntries = allEntries.filter((entry) => {
+                    const entryRegion = String(entry && entry.regionKey ? entry.regionKey : regionKey).trim() || regionKey;
+                    return entryRegion === regionKey;
+                });
+                const fallbackCountedAmount = Number.isFinite(Number(storedTotal))
+                    ? Number(storedTotal)
+                    : regionEntries.reduce((sum, entry) => sum + (Number(entry && entry.totalAmount) || 0), 0);
+                const regionCountedEntryCount = regionEntries.length > 0
+                    ? regionEntries.length
+                    : ((fallbackCountedAmount > 0 && allEntries.length > 0) ? allEntries.length : 0);
+                const baseSummary = result.summary && typeof result.summary === 'object' ? result.summary : {};
+                const issues = Array.isArray(baseSummary.issues) ? baseSummary.issues.filter(Boolean) : [];
+                const playCount = Number(baseSummary.playCount) || 0;
+                const blockedCount = Number(baseSummary.blockedCount) || 0;
+                const ignoredCount = Number(baseSummary.ignoredCount) || 0;
+                let status = 'empty_or_noise';
+                if (blockedCount > 0) {
+                    status = 'blocked';
+                } else if (regionCountedEntryCount > 0 && playCount === 0 && ignoredCount === 0) {
+                    status = 'complete';
+                } else if (regionCountedEntryCount === 0 && playCount > 0 && ignoredCount === 0) {
+                    status = 'play_only';
+                } else if (regionCountedEntryCount > 0 || playCount > 0 || ignoredCount > 0) {
+                    status = 'partial';
+                } else if (String(baseSummary.status || '').trim()) {
+                    status = String(baseSummary.status).trim();
+                }
+                const statusLabelMap = {
+                    complete: '已完整统计',
+                    partial: '部分统计',
+                    blocked: '待处理',
+                    play_only: '仅未开放玩法',
+                    empty_or_noise: '仅噪音/摘要'
+                };
+                const focusIssues = issues
+                    .filter((issue) => issue && issue.kind !== 'ignored')
+                    .sort((left, right) => {
+                        const order = { blocked: 0, play: 1, ignored: 2 };
+                        const leftOrder = order[String(left && left.kind ? left.kind : 'ignored')] ?? 9;
+                        const rightOrder = order[String(right && right.kind ? right.kind : 'ignored')] ?? 9;
+                        if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+                        const leftLine = Number.isFinite(Number(left && left.lineNo)) ? Number(left.lineNo) : Number.MAX_SAFE_INTEGER;
+                        const rightLine = Number.isFinite(Number(right && right.lineNo)) ? Number(right.lineNo) : Number.MAX_SAFE_INTEGER;
+                        return leftLine - rightLine;
+                    })
+                    .slice(0, 3);
+
+                summary = {
+                    status,
+                    statusLabel: statusLabelMap[status] || '部分统计',
+                    countedEntryCount: regionCountedEntryCount,
+                    countedAmount: fallbackCountedAmount,
+                    playCount,
+                    blockedCount,
+                    ignoredCount,
+                    issues,
+                    focusIssues
+                };
+            } else if (preview && !preview.success) {
+                summary = {
+                    status: 'blocked',
+                    statusLabel: '待处理',
+                    countedEntryCount: 0,
+                    countedAmount: Number.isFinite(Number(storedTotal)) ? Number(storedTotal) : 0,
+                    playCount: 0,
+                    blockedCount: 1,
+                    ignoredCount: 0,
+                    issues: [{
+                        kind: 'blocked',
+                        lineNo: null,
+                        reason: String(preview.error || '消息解析失败').trim() || '消息解析失败',
+                        rawText: message
+                    }],
+                    focusIssues: [{
+                        kind: 'blocked',
+                        lineNo: null,
+                        reason: String(preview.error || '消息解析失败').trim() || '消息解析失败',
+                        rawText: message
+                    }]
+                };
+            }
+        }
+
+        if (!summary) {
+            const fallbackAmount = Number.isFinite(Number(storedTotal)) ? Number(storedTotal) : 0;
+            summary = {
+                status: fallbackAmount > 0 ? 'partial' : 'empty_or_noise',
+                statusLabel: fallbackAmount > 0 ? '部分统计' : '仅噪音/摘要',
+                countedEntryCount: fallbackAmount > 0 ? 1 : 0,
+                countedAmount: fallbackAmount,
+                playCount: 0,
+                blockedCount: 0,
+                ignoredCount: 0,
+                issues: [],
+                focusIssues: []
+            };
+        }
+
+        summary.summaryText = this.buildOriginalParseSummaryText(summary);
+        this.originalParseSummaryCache.set(cacheKey, summary);
+        if (this.originalParseSummaryCache.size > 8000) {
+            const first = this.originalParseSummaryCache.keys().next();
+            if (!first.done) {
+                this.originalParseSummaryCache.delete(first.value);
+            }
+        }
+        return summary;
+    }
+
+    buildOriginalParseSummaryText(summary) {
+        const safeSummary = summary && typeof summary === 'object' ? summary : {};
+        const countedEntryCount = Number(safeSummary.countedEntryCount) || 0;
+        const countedAmount = Number(safeSummary.countedAmount) || 0;
+        const playCount = Number(safeSummary.playCount) || 0;
+        const blockedCount = Number(safeSummary.blockedCount) || 0;
+        const ignoredCount = Number(safeSummary.ignoredCount) || 0;
+
+        if (countedEntryCount <= 0 && playCount <= 0 && blockedCount <= 0 && ignoredCount <= 0) {
+            return '仅噪音/摘要，未参与统计';
+        }
+
+        const parts = [];
+        if (countedEntryCount > 0 || countedAmount > 0) {
+            parts.push(`已计入 ${countedEntryCount} 条 / ${this.formatAmountValue(countedAmount)}`);
+        }
+        if (playCount > 0) {
+            parts.push(`未统计 ${playCount} 条玩法`);
+        }
+        if (blockedCount > 0) {
+            parts.push(`待处理 ${blockedCount} 行`);
+        }
+        if (ignoredCount > 0) {
+            parts.push(`已忽略 ${ignoredCount} 行`);
+        }
+        return parts.join('，');
+    }
+
+    formatOriginalParseIssue(issue) {
+        const kind = String(issue && issue.kind ? issue.kind : 'ignored').trim();
+        const lineNo = Number.isFinite(Number(issue && issue.lineNo)) ? Number(issue.lineNo) : null;
+        const reason = String(issue && issue.reason ? issue.reason : '格式无法识别').trim() || '格式无法识别';
+        const rawText = String(issue && issue.rawText ? issue.rawText : '').replace(/\s+/g, ' ').trim();
+        const prefixMap = {
+            blocked: '待处理',
+            play: '未统计',
+            ignored: '已忽略'
+        };
+        const locationText = lineNo ? `第${lineNo}行` : '未定位';
+        const snippet = rawText && rawText !== reason
+            ? `：${rawText.length > 28 ? `${rawText.slice(0, 28)}...` : rawText}`
+            : '';
+        return `${prefixMap[kind] || '已忽略'} ${locationText} ${reason}${snippet}`;
+    }
+
     hasOriginalDataAt(regionData, index) {
         return !!(regionData
             && Array.isArray(regionData.originalData)
@@ -618,12 +892,10 @@ class UserManager {
             if (!Array.isArray(rawList)) return [];
             return rawList.map((item) => {
                 const message = this.extractOriginalMessageText(item);
+                const createdAt = this.extractOriginalMessageCreatedAt(item);
                 if (item && typeof item === 'object') {
                     const totalAmount = this.extractOriginalMessageTotal(item);
-                    if (totalAmount != null) {
-                        return { message, totalAmount };
-                    }
-                    return { message };
+                    return this.buildStoredOriginalDataEntry(message, totalAmount, createdAt);
                 }
                 return message;
             });
@@ -914,6 +1186,7 @@ class UserManager {
                         index,
                         originalEntry: message,
                         message: this.extractOriginalMessageText(message),
+                        createdAt: this.extractOriginalMessageCreatedAt(message),
                         regionKey,
                         regionLabel: this.getRegionLabel(regionKey)
                     });
@@ -1379,6 +1652,7 @@ class UserManager {
         const originalDataListElement = document.getElementById('originalDataList');
         if (!originalDataListElement) return;
         this.originalOrderTotalCache.clear();
+        this.originalParseSummaryCache.clear();
 
         let rows = [];
         if (this.isSummaryMode) {
@@ -1424,6 +1698,7 @@ class UserManager {
             index,
             originalEntry,
             message: this.extractOriginalMessageText(message),
+            createdAt: this.extractOriginalMessageCreatedAt(originalEntry),
             regionKey,
             regionLabel: regionLabel || this.getRegionLabel(regionKey)
         }));
@@ -1442,6 +1717,7 @@ class UserManager {
                         index,
                         originalEntry: data,
                         message: this.extractOriginalMessageText(data),
+                        createdAt: this.extractOriginalMessageCreatedAt(data),
                         regionKey,
                         regionLabel: this.getRegionLabel(regionKey)
                     });
@@ -1455,11 +1731,16 @@ class UserManager {
         if (!row) return 110;
         const regionLabel = row.regionLabel || this.getRegionLabel(row.regionKey);
         const rawMessage = this.extractOriginalMessageText(row.message);
-        const text = `${row.userName || ''}（${regionLabel || ''}）\n${rawMessage}`.replace(/\r/g, '');
+        const createdAtText = this.formatOriginalMessageCreatedAt(row.createdAt || (row.originalEntry && this.extractOriginalMessageCreatedAt(row.originalEntry)));
+        const parseSummary = this.getOriginalParseSummaryCached(row);
+        const issueText = (Array.isArray(parseSummary.focusIssues) ? parseSummary.focusIssues : [])
+            .map((issue) => this.formatOriginalParseIssue(issue))
+            .join('\n');
+        const text = `${row.userName || ''}（${regionLabel || ''}）\n添加时间：${createdAtText}\n${parseSummary.summaryText || ''}\n${issueText}\n${rawMessage}`.replace(/\r/g, '');
         const logicalLines = text
             .split('\n')
             .reduce((sum, line) => sum + Math.max(1, Math.ceil(String(line || '').length / 32)), 0);
-        const estimated = 52 + (logicalLines * 20);
+        const estimated = 64 + (logicalLines * 20);
         return Math.max(72, Math.min(1400, estimated));
     }
 
@@ -1472,7 +1753,12 @@ class UserManager {
         const orderTotal = this.getOriginalOrderTotalCached(row);
         const totalText = orderTotal == null ? '未识别' : this.formatAmountValue(orderTotal);
         const metaText = `${serialNo} ${row.userName}（${regionLabel}）总：${totalText}`;
-        const fullMessage = `${metaText}\n${rawMessage}`;
+        const createdAtText = this.formatOriginalMessageCreatedAt(row.createdAt || (row.originalEntry && this.extractOriginalMessageCreatedAt(row.originalEntry)));
+        const parseSummary = this.getOriginalParseSummaryCached(row);
+        const issueTooltip = (Array.isArray(parseSummary.focusIssues) ? parseSummary.focusIssues : [])
+            .map((issue) => this.formatOriginalParseIssue(issue))
+            .join('\n');
+        const fullMessage = `${metaText}\n添加时间：${createdAtText}\n状态：${parseSummary.statusLabel || ''}\n${parseSummary.summaryText || ''}${issueTooltip ? `\n${issueTooltip}` : ''}\n${rawMessage}`;
         li.title = fullMessage;
 
         const contentWrap = document.createElement('div');
@@ -1482,20 +1768,60 @@ class UserManager {
         metaSpan.classList.add('message-meta');
         metaSpan.textContent = metaText;
 
+        const timeSpan = document.createElement('span');
+        timeSpan.classList.add('message-time');
+        timeSpan.textContent = `添加时间：${createdAtText}`;
+
+        const summaryWrap = document.createElement('div');
+        summaryWrap.classList.add('message-parse-overview');
+
+        const statusBadge = document.createElement('span');
+        statusBadge.classList.add('message-parse-badge', `status-${parseSummary.status || 'partial'}`);
+        statusBadge.textContent = parseSummary.statusLabel || '部分统计';
+
+        const summaryTextSpan = document.createElement('span');
+        summaryTextSpan.classList.add('message-parse-summary');
+        summaryTextSpan.textContent = parseSummary.summaryText || '暂无统计摘要';
+
+        summaryWrap.appendChild(statusBadge);
+        summaryWrap.appendChild(summaryTextSpan);
+
+        const issueWrap = document.createElement('div');
+        issueWrap.classList.add('message-issue-list');
+        (Array.isArray(parseSummary.focusIssues) ? parseSummary.focusIssues : []).forEach((issue) => {
+            const issueNode = document.createElement('div');
+            issueNode.classList.add('message-issue-item', `kind-${String(issue && issue.kind ? issue.kind : 'ignored').trim() || 'ignored'}`);
+            issueNode.textContent = this.formatOriginalParseIssue(issue);
+            issueWrap.appendChild(issueNode);
+        });
+
         const textSpan = document.createElement('span');
         textSpan.classList.add('message-text');
         textSpan.innerHTML = this.renderOriginalMessageHighlightHtml(rawMessage);
 
         contentWrap.appendChild(metaSpan);
+        contentWrap.appendChild(timeSpan);
+        contentWrap.appendChild(summaryWrap);
+        if (issueWrap.childNodes.length > 0) {
+            contentWrap.appendChild(issueWrap);
+        }
         contentWrap.appendChild(textSpan);
 
         const actions = document.createElement('div');
         actions.classList.add('message-actions');
 
-        const editButton = document.createElement('button');
-        editButton.classList.add('edit-button');
-        editButton.textContent = '编辑';
-        editButton.onclick = () => this.editOriginalData(row.userName, row.index, row.regionKey);
+        const primaryActionButton = document.createElement('button');
+        const primaryIssue = Array.isArray(parseSummary.focusIssues) ? parseSummary.focusIssues[0] : null;
+        const primaryFocusLineNo = Number.isFinite(Number(primaryIssue && primaryIssue.lineNo))
+            ? Number(primaryIssue.lineNo)
+            : null;
+        const needsFollowUp = ['blocked', 'play_only'].includes(String(parseSummary.status || '').trim())
+            || (Array.isArray(parseSummary.focusIssues) && parseSummary.focusIssues.length > 0);
+        primaryActionButton.classList.add(needsFollowUp ? 'continue-button' : 'edit-button');
+        primaryActionButton.textContent = needsFollowUp ? '继续处理' : '编辑';
+        primaryActionButton.onclick = () => this.editOriginalData(row.userName, row.index, row.regionKey, {
+            focusLineNo: primaryFocusLineNo
+        });
 
         const deleteButton = document.createElement('button');
         deleteButton.classList.add('delete-button');
@@ -1510,7 +1836,7 @@ class UserManager {
             }
         };
 
-        actions.appendChild(editButton);
+        actions.appendChild(primaryActionButton);
         actions.appendChild(deleteButton);
         li.appendChild(contentWrap);
         li.appendChild(actions);
@@ -1518,17 +1844,21 @@ class UserManager {
     }
 
     // 编辑原始数据
-    editOriginalData(userName, index, regionKey = this.activeRegion) {
+    editOriginalData(userName, index, regionKey = this.activeRegion, options = {}) {
         const regionData = this.getUserRegionData(userName, regionKey);
         if (!this.hasOriginalDataAt(regionData, index)) return;
         const message = this.extractOriginalMessageText(regionData.originalData[index]);
+        const focusLineNo = Number.isFinite(Number(options && options.focusLineNo))
+            ? Number(options.focusLineNo)
+            : null;
 
         if (typeof window !== 'undefined' && typeof window.openOriginalDataEditInRecognize === 'function') {
             window.openOriginalDataEditInRecognize({
                 userName,
                 index,
                 regionKey,
-                message
+                message,
+                focusLineNo
             });
             return;
         }
@@ -1562,10 +1892,21 @@ class UserManager {
             throw new Error('消息不能为空');
         }
 
+        const validation = this.validateOriginalMessageBeforeSave(message, userName);
+        if (!validation.ok) {
+            const error = new Error(validation.message || '消息校验失败');
+            if (validation.code) {
+                error.code = validation.code;
+            }
+            if (Array.isArray(validation.blockingUnresolvedLines)) {
+                error.blockingUnresolvedLines = validation.blockingUnresolvedLines;
+            }
+            throw error;
+        }
+
         const totalAmount = this.calculateOriginalOrderTotal(message, userName, regionKey);
-        regionData.originalData[index] = totalAmount == null
-            ? { message }
-            : { message, totalAmount };
+        const createdAt = this.extractOriginalMessageCreatedAt(regionData.originalData[index]);
+        regionData.originalData[index] = this.buildStoredOriginalDataEntry(message, totalAmount, createdAt);
         this.recalculateUserData(userName, regionKey);
         this.renderAllSections();
         this.saveUserData();
@@ -1598,8 +1939,12 @@ class UserManager {
             return;
         }
 
-        this.applyEditedOriginalData(userName, index, regionKey, nextValue);
-        this.closeEditOriginalModal();
+        try {
+            this.applyEditedOriginalData(userName, index, regionKey, nextValue);
+            this.closeEditOriginalModal();
+        } catch (error) {
+            alert(error && error.message ? error.message : '保存失败');
+        }
     }
 
     // 删除原始数据
@@ -1690,7 +2035,7 @@ class UserManager {
         // 优先复用统一解析器，确保与录入逻辑一致（支持属性词、生肖、多段金额）
         if (window.messageProcessor && typeof window.messageProcessor.parseMessage === 'function') {
             try {
-                const parsed = window.messageProcessor.parseMessage(sourceMessage, { clientId: userName });
+                const parsed = window.messageProcessor.parseMessage(sourceMessage, { clientId: userName, allowPartial: true });
                 parsed.entries.forEach(entry => {
                     const entryRegion = entry && entry.regionKey ? entry.regionKey : regionKey;
                     if (entryRegion !== regionKey) return;

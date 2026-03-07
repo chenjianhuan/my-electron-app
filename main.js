@@ -429,7 +429,30 @@ function createWindow() {
 
 // 显示错误对话框
 function showErrorDialog(title, message) {
-  dialog.showErrorBox(title, message);
+  const safeTitle = String(title || '错误');
+  let safeMessage = '';
+  if (message instanceof Error) {
+    safeMessage = String(message.stack || message.message || message);
+  } else if (typeof message === 'object' && message !== null) {
+    try {
+      safeMessage = JSON.stringify(message, null, 2);
+    } catch (error) {
+      safeMessage = String(message);
+    }
+  } else {
+    safeMessage = String(message || '');
+  }
+  dialog.showErrorBox(safeTitle, safeMessage);
+}
+
+function isSharpRuntimeLoadError(reason) {
+  const text = String(
+    reason instanceof Error
+      ? (reason.stack || reason.message || reason)
+      : (reason && reason.message ? reason.message : reason || '')
+  );
+  return /Could not load the "sharp" module/i.test(text)
+    || /sharp\.pixelplumbing\.com\/install/i.test(text);
 }
 
 function registerLicenseIpc() {
@@ -760,6 +783,10 @@ process.on('uncaughtException', (error) => {
 // 捕获未处理的Promise拒绝
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  if (isSharpRuntimeLoadError(reason)) {
+    console.warn('Sharp runtime load failed; OCR image enhancement will be degraded until dependency/runtime is fixed.');
+    return;
+  }
   showErrorDialog('未处理的Promise拒绝', reason);
 });
 

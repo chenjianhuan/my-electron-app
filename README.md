@@ -270,6 +270,20 @@ npm start
 npm run dist
 ```
 
+### 本地免费 AI 语义修正（可选）
+
+应用已内置中文小模型 `Qwen2.5-0.5B-Instruct`（`q4f16`），用于免费离线的语义纠错和 OCR 文本修正；不需要单独安装 `Ollama` 或配置云端 API。
+
+```bash
+# 直接启动应用
+npm start
+```
+
+说明：
+- 内置模型资源位于 `assets/ai/models/Mozilla/Qwen2.5-0.5B-Instruct`
+- 打包后会随安装包一起进入 `resources/ai/`
+- 首次调用“本地AI修正”时会加载模型，速度会比后续调用慢一些
+
 ## 项目结构
 
 ```
