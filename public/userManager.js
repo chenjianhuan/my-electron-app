@@ -6,6 +6,7 @@ class UserManager {
         this.lastActiveUser = null;
         this.expandedSettlementUser = '';
         this.isMultiSelectEnabled = false;
+        this.scopeMode = 'single';
         this.activeRegion = 'new_ao'; // 录入地区（弹窗单选）
         this.viewRegions = new Set(['new_ao']); // 统计查看地区（主页面多选）
         this.isSummaryMode = false;
@@ -13,7 +14,22 @@ class UserManager {
         this.virtualListStates = {};
         this.originalOrderTotalCache = new Map();
         this.originalParseSummaryCache = new Map();
+        this.originalRowHeightCache = new Map();
+        this.originalRowsSnapshotCache = {
+            key: '',
+            rows: []
+        };
+        this.originalRowsSnapshotVersion = 0;
+        this.originalDataSearchTimer = null;
         this.originalDataSearchKeyword = '';
+        this.userSearchTimer = null;
+        this.userListDerivedVersion = 0;
+        this.sortedUsersCache = {
+            key: '',
+            users: []
+        };
+        this.userListSummaryCache = new Map();
+        this.userSearchKeyword = '';
     }
 
     getVirtualListKey(container) {
@@ -554,6 +570,9 @@ class UserManager {
             }
         }
 
+        this.invalidateOriginalDataDerivedCaches();
+        this.invalidateUserListDerivedCaches();
+
         if (options.render !== false) {
             this.renderAllSections();
         }
@@ -588,6 +607,7 @@ class UserManager {
         const user = this.users[userName];
         if (!user || typeof user !== 'object') return null;
         user.settlementOdds = this.normalizeSettlementOddsValue(odds, this.getInitialSettlementOdds(userName));
+        this.invalidateUserListDerivedCaches();
         if (options.render !== false) {
             this.renderAllSections();
         }
@@ -619,6 +639,7 @@ class UserManager {
 
         user.settlementOdds = nextOdds;
         user.rebateRate = nextRebateRate;
+        this.invalidateUserListDerivedCaches();
 
         if (options.syncRuleOdds !== false
             && window.messageProcessor
@@ -827,11 +848,74 @@ class UserManager {
             .replace(/'/g, '&#39;');
     }
 
+    cancelPendingOriginalDataSearchRender() {
+        if (this.originalDataSearchTimer == null) return;
+        clearTimeout(this.originalDataSearchTimer);
+        this.originalDataSearchTimer = null;
+    }
+
+    cancelPendingUserListRender() {
+        if (this.userSearchTimer == null) return;
+        clearTimeout(this.userSearchTimer);
+        this.userSearchTimer = null;
+    }
+
+    scheduleOriginalDataSearchRender(delay = 140) {
+        this.cancelPendingOriginalDataSearchRender();
+        this.originalDataSearchTimer = setTimeout(() => {
+            this.originalDataSearchTimer = null;
+            this.renderOriginalData();
+        }, Math.max(0, Number(delay) || 0));
+    }
+
+    scheduleUserListRender(delay = 120) {
+        this.cancelPendingUserListRender();
+        this.userSearchTimer = setTimeout(() => {
+            this.userSearchTimer = null;
+            this.renderUserList();
+        }, Math.max(0, Number(delay) || 0));
+    }
+
+    invalidateOriginalDataDerivedCaches() {
+        this.cancelPendingOriginalDataSearchRender();
+        this.originalOrderTotalCache.clear();
+        this.originalParseSummaryCache.clear();
+        this.originalRowHeightCache.clear();
+        this.originalRowsSnapshotVersion += 1;
+        this.originalRowsSnapshotCache = {
+            key: '',
+            rows: []
+        };
+    }
+
+    invalidateUserListDerivedCaches() {
+        this.cancelPendingUserListRender();
+        this.userListDerivedVersion += 1;
+        this.sortedUsersCache = {
+            key: '',
+            users: []
+        };
+        this.userListSummaryCache.clear();
+    }
+
+    getUserListDerivedBaseKey() {
+        return `${this.userListDerivedVersion}|${this.getViewRegions().join(',')}`;
+    }
+
+    getOriginalRowDerivedCacheKey(row) {
+        if (!row || typeof row !== 'object') return '';
+        const userName = String(row.userName || '').trim();
+        const regionKey = String(row.regionKey || this.activeRegion || 'new_ao').trim() || 'new_ao';
+        const index = Number.isInteger(row.index) ? row.index : -1;
+        const message = this.extractOriginalMessageText(row.message);
+        return `${userName}|${regionKey}|${index}|${message}`;
+    }
+
     setOriginalDataSearchKeyword(keyword = '') {
         const next = String(keyword == null ? '' : keyword);
         if (next === this.originalDataSearchKeyword) return;
         this.originalDataSearchKeyword = next;
-        this.renderOriginalData();
+        this.scheduleOriginalDataSearchRender();
     }
 
     getOriginalDataSearchKeyword() {
@@ -1028,15 +1112,14 @@ class UserManager {
         if (storedTotal != null) {
             return storedTotal;
         }
-        const userName = String(row.userName || '');
-        const regionKey = String(row.regionKey || this.activeRegion || '');
-        const index = Number.isInteger(row.index) ? row.index : -1;
-        const message = this.extractOriginalMessageText(row.message);
-        const cacheKey = `${userName}|${regionKey}|${index}|${message}`;
+        const cacheKey = this.getOriginalRowDerivedCacheKey(row);
         if (this.originalOrderTotalCache.has(cacheKey)) {
             return this.originalOrderTotalCache.get(cacheKey) || 0;
         }
 
+        const userName = String(row.userName || '');
+        const regionKey = String(row.regionKey || this.activeRegion || '');
+        const message = this.extractOriginalMessageText(row.message);
         const total = this.calculateOriginalOrderTotal(message, userName, regionKey);
         this.originalOrderTotalCache.set(cacheKey, total);
         if (this.originalOrderTotalCache.size > 8000) {
@@ -1065,9 +1148,8 @@ class UserManager {
         }
         const userName = String(row.userName || '').trim();
         const regionKey = String(row.regionKey || this.activeRegion || 'new_ao').trim() || 'new_ao';
-        const index = Number.isInteger(row.index) ? row.index : -1;
         const message = this.extractOriginalMessageText(row.message);
-        const cacheKey = `${userName}|${regionKey}|${index}|${message}`;
+        const cacheKey = this.getOriginalRowDerivedCacheKey(row);
         if (this.originalParseSummaryCache.has(cacheKey)) {
             return this.originalParseSummaryCache.get(cacheKey);
         }
@@ -1493,8 +1575,12 @@ class UserManager {
 
     // 初始化用户数据
     init(initialUsers = {}) {
+        this.invalidateOriginalDataDerivedCaches();
+        this.invalidateUserListDerivedCaches();
         this.users = {};
         this.expandedSettlementUser = '';
+        this.scopeMode = 'single';
+        this.userSearchKeyword = '';
         this.activeRegion = 'new_ao';
         this.viewRegions = new Set(['new_ao']);
         Object.entries(initialUsers || {}).forEach(([userName, userRecord]) => {
@@ -1503,10 +1589,7 @@ class UserManager {
         if (typeof window !== 'undefined' && window.__attributeConfigReady === true) {
             this.syncStoredUserParsePreferencesToRules();
         }
-        const toggle = document.getElementById('multiSelectToggle');
-        if (toggle) {
-            toggle.checked = this.isMultiSelectEnabled;
-        }
+        this.applyScopeModeFlags();
         this.renderUserList();
         this.switchToFirstUser();
     }
@@ -1515,20 +1598,132 @@ class UserManager {
     switchToFirstUser() {
         const sortedUsers = this.getSortedUsers();
         if (sortedUsers.length > 0) {
-            this.setSelectedUsers([sortedUsers[0]]);
-            this.lastActiveUser = sortedUsers[0];
-            this.isSummaryMode = false;
-            this.updateCurrentUserDisplay();
-            this.updateTitles();
-            this.renderAllSections();
+            this.setScopeMode('single', {
+                userName: sortedUsers[0]
+            });
         }
     }
 
     // 获取排序后的用户列表
     getSortedUsers() {
-        return Object.keys(this.users).sort((a, b) => 
-            this.getUserTotalInViewRegions(b) - this.getUserTotalInViewRegions(a)
-        );
+        const cacheKey = this.getUserListDerivedBaseKey();
+        if (this.sortedUsersCache.key === cacheKey) {
+            return this.sortedUsersCache.users.slice();
+        }
+
+        const users = Object.keys(this.users).map((userName) => ({
+            userName,
+            totalInView: this.getUserTotalInViewRegions(userName)
+        }));
+        users.sort((left, right) => {
+            if (right.totalInView !== left.totalInView) {
+                return right.totalInView - left.totalInView;
+            }
+            return String(left.userName || '').localeCompare(String(right.userName || ''), 'zh-Hans-CN');
+        });
+
+        const sortedUsers = users.map((item) => item.userName);
+        this.sortedUsersCache = {
+            key: cacheKey,
+            users: sortedUsers
+        };
+        return sortedUsers.slice();
+    }
+
+    normalizeScopeMode(modeRaw) {
+        const mode = String(modeRaw || '').trim();
+        if (mode === 'all') return 'all';
+        if (mode === 'multi') return 'multi';
+        return 'single';
+    }
+
+    applyScopeModeFlags() {
+        this.scopeMode = this.normalizeScopeMode(this.scopeMode);
+        this.isSummaryMode = this.scopeMode === 'all';
+        this.isMultiSelectEnabled = this.scopeMode !== 'single';
+    }
+
+    getScopeMode() {
+        this.applyScopeModeFlags();
+        return this.scopeMode;
+    }
+
+    getScopeUsers() {
+        return this.getScopeMode() === 'all'
+            ? this.getSortedUsers()
+            : this.getSelectedUsers();
+    }
+
+    getScopeSummary() {
+        const mode = this.getScopeMode();
+        const users = this.getScopeUsers();
+        const count = users.length;
+        const joined = users.join('，');
+
+        if (mode === 'all') {
+            return {
+                mode,
+                users,
+                count,
+                titleLabel: '全部客户',
+                statusText: count > 0 ? `当前：全部客户，已选中 ${count} 人` : '当前：全部客户',
+                panelLabel: count > 0 ? `全部客户（${count}人）` : '全部客户'
+            };
+        }
+
+        if (count <= 0) {
+            return {
+                mode,
+                users,
+                count: 0,
+                titleLabel: '未选择客户',
+                statusText: mode === 'multi' ? '当前：多人模式，尚未选择客户' : '当前：单人模式，尚未选择客户',
+                panelLabel: '未选择客户'
+            };
+        }
+
+        if (count === 1) {
+            return {
+                mode,
+                users,
+                count,
+                titleLabel: users[0],
+                statusText: mode === 'multi'
+                    ? `当前：多人模式，已选 1 人（${users[0]}）`
+                    : `当前：${users[0]}`,
+                panelLabel: users[0]
+            };
+        }
+
+        return {
+            mode,
+            users,
+            count,
+            titleLabel: count <= 3 ? joined : `已选${count}人`,
+            statusText: count <= 3 ? `当前：已选 ${count} 人（${joined}）` : `当前：已选 ${count} 人`,
+            panelLabel: count <= 3 ? joined : `已选${count}人`
+        };
+    }
+
+    renderScopeModeControls() {
+        const mode = this.getScopeMode();
+        const summary = this.getScopeSummary();
+        const buttonMap = {
+            single: document.getElementById('scopeModeSingleBtn'),
+            multi: document.getElementById('scopeModeMultiBtn'),
+            all: document.getElementById('scopeModeAllBtn')
+        };
+        Object.entries(buttonMap).forEach(([key, button]) => {
+            if (!button) return;
+            const active = key === mode;
+            button.classList.toggle('is-active', active);
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        const summaryElement = document.getElementById('scopeModeSummary');
+        if (summaryElement) {
+            summaryElement.textContent = summary.statusText;
+        }
     }
 
     getSelectedUsers() {
@@ -1595,48 +1790,75 @@ class UserManager {
         };
     }
 
-    setSelectedUsers(userNames = []) {
-        this.selectedUsers = new Set((userNames || []).filter(name => this.users[name]));
+    setSelectedUsers(userNames = [], options = {}) {
+        const validUsers = new Set((Array.isArray(userNames) ? userNames : []).filter(name => this.users[name]));
+        const orderedUsers = this.getSortedUsers().filter(name => validUsers.has(name));
+        this.selectedUsers = new Set(orderedUsers);
+        if (orderedUsers.length > 0) {
+            if (!this.lastActiveUser || !this.selectedUsers.has(this.lastActiveUser)) {
+                this.lastActiveUser = orderedUsers[0];
+            }
+        } else if (this.lastActiveUser && !this.users[this.lastActiveUser]) {
+            this.lastActiveUser = null;
+        }
+        if (options && options.syncScope !== false) {
+            if (this.getScopeMode() === 'all') {
+                const allUsers = this.getSortedUsers();
+                const isAllSelected = allUsers.length > 0 && orderedUsers.length === allUsers.length;
+                if (!isAllSelected) {
+                    this.scopeMode = orderedUsers.length > 1 ? 'multi' : 'single';
+                }
+            }
+            this.applyScopeModeFlags();
+        }
     }
 
     // 切换用户（多选）
     switchUser(userName) {
         if (!this.users[userName]) return;
+        const scopeMode = this.getScopeMode();
+        const sortedUsers = this.getSortedUsers();
 
-        if (this.isMultiSelectEnabled) {
+        if (scopeMode === 'single') {
+            this.lastActiveUser = userName;
+            this.setSelectedUsers([userName], { syncScope: false });
+        } else if (scopeMode === 'all') {
+            if (sortedUsers.length <= 1) {
+                this.scopeMode = 'single';
+                this.setSelectedUsers([userName], { syncScope: false });
+                this.lastActiveUser = userName;
+            } else {
+                const remainingUsers = sortedUsers.filter(name => name !== userName);
+                this.scopeMode = remainingUsers.length > 1 ? 'multi' : 'single';
+                this.setSelectedUsers(remainingUsers, { syncScope: false });
+                this.lastActiveUser = remainingUsers.includes(this.lastActiveUser) ? this.lastActiveUser : (remainingUsers[0] || null);
+            }
+        } else {
             if (this.selectedUsers.has(userName)) {
-                this.selectedUsers.delete(userName);
+                if (this.selectedUsers.size > 1) {
+                    this.selectedUsers.delete(userName);
+                }
             } else {
                 this.selectedUsers.add(userName);
             }
-        } else {
-            this.setSelectedUsers([userName]);
+            this.lastActiveUser = userName;
         }
-        this.lastActiveUser = userName;
-        this.isSummaryMode = false;
-        
-        // 更新UI
-        this.updateCurrentUserDisplay();
-        this.updateTitles();
+
+        this.applyScopeModeFlags();
         this.renderAllSections();
-        
-        console.log('切换用户选择:', this.getSelectedUsers().join(','));
+
+        console.log('切换用户选择:', this.getScopeUsers().join(','));
     }
 
     // 更新当前用户显示
     updateCurrentUserDisplay() {
         const currentUserElement = document.getElementById('currentUser');
-        const summarySectionTitle = document.getElementById('summarySectionTitle');
-        const selected = this.getSelectedUsers();
+        const summary = this.getScopeSummary();
         const regionLabel = this.getViewRegionLabels().join('、');
         if (currentUserElement) {
-            currentUserElement.textContent = selected.length > 0
-                ? `当前客户(${regionLabel}): ${selected.join('，')}`
-                : `当前客户(${regionLabel}): 无`;
+            currentUserElement.textContent = `号码总览（${regionLabel}）：${summary.panelLabel}`;
         }
-        if (summarySectionTitle) {
-            summarySectionTitle.textContent = `所有客户汇总(${regionLabel})`;
-        }
+        this.renderScopeModeControls();
     }
 
     // 更新标题
@@ -1644,31 +1866,23 @@ class UserManager {
         const sortedResultsTitle = document.getElementById('sortedResultsTitle');
         const originalDataTitle = document.getElementById('originalDataTitle');
         const regionLabel = this.getViewRegionLabels().join('、');
-
-        if (this.isSummaryMode) {
-            const summaryTotal = Object.keys(this.users).reduce((sum, userName) => {
-                return sum + this.getUserTotalInViewRegions(userName);
-            }, 0);
-            const total = Number.isFinite(count) && count > 0 ? count : summaryTotal;
-            sortedResultsTitle.textContent = `所有客户累计值排序（${regionLabel}） (总: ${total})：`;
-            originalDataTitle.textContent = `所有客户的原始输入数据（${regionLabel}）：`;
+        const selectedData = this.getSelectedUserData();
+        const scopeSummary = this.getScopeSummary();
+        const total = Number.isFinite(count) && count > 0 ? count : (selectedData.totalCount || 0);
+        if (selectedData.users.length > 0) {
+            sortedResultsTitle.textContent = `${scopeSummary.titleLabel} 号码累计排行（${regionLabel}） (总: ${total})`;
+            originalDataTitle.textContent = `${scopeSummary.titleLabel} 原始消息（${regionLabel}）`;
         } else {
-            const selectedData = this.getSelectedUserData();
-            if (selectedData.users.length > 0) {
-                const userLabel = selectedData.users.join('，');
-                sortedResultsTitle.textContent = `${userLabel} 累计值排序（${regionLabel}） (总: ${selectedData.totalCount || 0})`;
-                originalDataTitle.textContent = `${userLabel} 原始输入数据（${regionLabel}）：`;
-            } else {
-                sortedResultsTitle.textContent = `没有选择客户（${regionLabel}）`;
-                originalDataTitle.textContent = `没有原始输入数据（${regionLabel}）`;
-            }
+            sortedResultsTitle.textContent = `当前范围暂无客户（${regionLabel}）`;
+            originalDataTitle.textContent = `当前范围暂无原始消息（${regionLabel}）`;
         }
     }
 
     // 渲染所有区域
     renderAllSections() {
+        this.updateCurrentUserDisplay();
+        this.updateTitles();
         this.renderSection('section1');
-        this.renderSection('section2');
         this.renderSortedResults();
         this.renderOriginalData();
         this.renderUserList();
@@ -1707,12 +1921,12 @@ class UserManager {
         }
 
         this.users[userName] = this.createDefaultUserRecord(userName);
-
-        this.setSelectedUsers([userName]);
+        this.invalidateUserListDerivedCaches();
         this.lastActiveUser = userName;
-        this.isSummaryMode = false;
-        this.updateCurrentUserDisplay();
-        this.updateTitles();
+        this.setScopeMode('single', {
+            userName,
+            render: false
+        });
         this.renderAllSections();
         this.saveUserData();
         
@@ -1727,6 +1941,7 @@ class UserManager {
         }
 
         delete this.users[userName];
+        this.invalidateUserListDerivedCaches();
         if (this.expandedSettlementUser === userName) {
             this.expandedSettlementUser = '';
         }
@@ -1748,15 +1963,18 @@ class UserManager {
                 const sortedUsers = remainingUsers.sort((a, b) => 
                     this.getUserTotalInRegion(b) - this.getUserTotalInRegion(a)
                 );
-                this.setSelectedUsers([sortedUsers[0]]);
+                this.scopeMode = 'single';
+                this.setSelectedUsers([sortedUsers[0]], { syncScope: false });
                 this.lastActiveUser = sortedUsers[0];
-                this.isSummaryMode = false;
             }
         } else {
             this.selectedUsers.clear();
             this.lastActiveUser = null;
+            this.scopeMode = 'single';
             this.clearSections();
         }
+
+        this.applyScopeModeFlags();
 
         // 删除后无论当前是否仍有选中客户，都必须统一刷新主页面，
         // 否则右侧累计值/原始消息可能停留在删除前的数据。
@@ -1781,18 +1999,17 @@ class UserManager {
         return sorted.length > 0 ? sorted[0] : '';
     }
 
-    // 清空当前客户数据（仅消息与统计，不删除客户规则偏好）
-    clearCurrentUserData() {
-        const userName = this.resolveActionUserName();
-        if (!userName || !this.users[userName]) {
+    clearUserBetData(userName = '') {
+        const targetUser = String(userName || '').trim() || this.resolveActionUserName();
+        if (!targetUser || !this.users[targetUser]) {
             throw new Error('请先选择客户');
         }
-        const ok = confirm(`确定清空客户 ${userName} 的消息数据吗？\n仅清空号码统计与原始消息，不会删除该客户的锚点偏好规则。`);
+        const ok = confirm(`确定清空客户 ${targetUser} 的投注数据吗？\n仅清空号码统计与原始消息，不会删除该客户的结算设置和解析偏好。`);
         if (!ok) {
-            return { cleared: false, userName };
+            return { cleared: false, userName: targetUser };
         }
 
-        const userRecord = this.users[userName];
+        const userRecord = this.users[targetUser];
         if (!userRecord || typeof userRecord !== 'object') {
             throw new Error('客户数据不存在');
         }
@@ -1803,203 +2020,293 @@ class UserManager {
             userRecord.regions[region.key] = this.createEmptyRegionData();
         });
 
+        this.invalidateOriginalDataDerivedCaches();
+        this.invalidateUserListDerivedCaches();
         this.renderAllSections();
         this.saveUserData();
-        console.log('已清空客户数据:', userName);
-        return { cleared: true, userName };
+        console.log('已清空投注数据:', targetUser);
+        return { cleared: true, userName: targetUser };
+    }
+
+    // 清空当前客户数据（仅消息与统计，不删除客户规则偏好）
+    clearCurrentUserData() {
+        const userName = this.resolveActionUserName();
+        return this.clearUserBetData(userName);
+    }
+
+    setUserSearchKeyword(keyword = '') {
+        const next = String(keyword == null ? '' : keyword);
+        if (next === this.userSearchKeyword) return;
+        this.userSearchKeyword = next;
+        this.scheduleUserListRender();
     }
 
     // 清空区域
     clearSections() {
-        const sections = ['section1', 'section2'];
-        sections.forEach(sectionId => {
-            const section = document.getElementById(sectionId);
-            if (section) {
-                section.innerHTML = '';
+        const section = document.getElementById('section1');
+        if (section) {
+            section.innerHTML = '';
+        }
+    }
+
+    getFilteredUserNames(keyword = this.userSearchKeyword) {
+        const needle = String(keyword || '').trim().toLocaleLowerCase();
+        const sortedUsers = this.getSortedUsers();
+        if (!needle) return sortedUsers;
+        return sortedUsers.filter((userName) => String(userName || '').toLocaleLowerCase().includes(needle));
+    }
+
+    getUserListSummary(userName = '') {
+        const cacheKey = `${this.getUserListDerivedBaseKey()}|${String(userName || '').trim()}`;
+        if (this.userListSummaryCache.has(cacheKey)) {
+            return this.userListSummaryCache.get(cacheKey);
+        }
+
+        const totalInView = this.getUserTotalInViewRegions(userName) || 0;
+        const regionStates = this.getRegionOptions().map((region) => ({
+            key: region.key,
+            label: region.label,
+            total: this.getUserTotalInRegion(userName, region.key)
+        }));
+        const settlementConfig = this.getUserSettlementConfig(userName);
+        const parsePreference = this.getUserParsePreference(userName);
+        const summary = {
+            userName,
+            totalInView,
+            regionStates,
+            settlementConfig,
+            regionModeSummary: this.getUserRegionModeSummary(userName),
+            parsePreference,
+            parsePreferenceText: parsePreference.tailShorthandAsSeparateGroups
+                ? '解析习惯：尾数简写开启'
+                : '解析习惯：默认'
+        };
+        this.userListSummaryCache.set(cacheKey, summary);
+        if (this.userListSummaryCache.size > 4000) {
+            const first = this.userListSummaryCache.keys().next();
+            if (!first.done) {
+                this.userListSummaryCache.delete(first.value);
             }
+        }
+        return summary;
+    }
+
+    createUserListRow(userName = '') {
+        const summary = this.getUserListSummary(userName);
+        const settlementConfig = summary.settlementConfig || this.getUserSettlementConfig(userName);
+        const parsePreference = summary.parsePreference || this.getUserParsePreference(userName);
+        const li = document.createElement('li');
+        li.onclick = () => this.switchUser(userName);
+        if (this.selectedUsers.has(userName)) {
+            li.classList.add('is-selected');
+        }
+
+        const info = document.createElement('div');
+        info.className = 'user-item-info';
+
+        const nameRow = document.createElement('div');
+        nameRow.className = 'user-item-name';
+        nameRow.textContent = `${userName} (总: ${summary.totalInView || 0})`;
+        info.appendChild(nameRow);
+
+        const regionRow = document.createElement('div');
+        regionRow.className = 'user-region-state-row';
+        (summary.regionStates || []).forEach((region) => {
+            const badge = document.createElement('span');
+            badge.className = `user-region-state ${Number(region && region.total) > 0 ? 'has-data' : 'no-data'}`;
+            badge.textContent = region && region.label ? region.label : '-';
+            regionRow.appendChild(badge);
         });
+        info.appendChild(regionRow);
+
+        const settlementSummary = document.createElement('div');
+        settlementSummary.className = 'user-settlement-summary';
+        settlementSummary.textContent = `赔率 ${this.formatAmountValue(settlementConfig.odds)} | 返水 ${this.formatAmountValue(settlementConfig.rebateRate)}%`;
+        info.appendChild(settlementSummary);
+
+        const regionModeSummary = document.createElement('div');
+        regionModeSummary.className = 'user-region-mode-summary';
+        regionModeSummary.textContent = `盘口模式：${summary.regionModeSummary || '按盘口分别统计'}`;
+        info.appendChild(regionModeSummary);
+
+        const parseSummary = document.createElement('div');
+        parseSummary.className = 'user-region-mode-summary';
+        parseSummary.textContent = summary.parsePreferenceText || '解析习惯：默认';
+        info.appendChild(parseSummary);
+
+        if (this.expandedSettlementUser === userName) {
+            const editor = document.createElement('div');
+            editor.className = 'user-settlement-editor';
+            editor.onclick = (event) => {
+                event.stopPropagation();
+            };
+
+            const oddsField = document.createElement('label');
+            oddsField.className = 'user-settlement-field';
+            const oddsLabel = document.createElement('span');
+            oddsLabel.className = 'user-settlement-field-label';
+            oddsLabel.textContent = '赔率';
+            const oddsInput = document.createElement('input');
+            oddsInput.value = this.formatAmountValue(settlementConfig.odds);
+            oddsInput.placeholder = '请输入赔率';
+            this.bindSettlementNumericInput(oddsInput);
+            oddsField.appendChild(oddsLabel);
+            oddsField.appendChild(oddsInput);
+
+            const rebateField = document.createElement('label');
+            rebateField.className = 'user-settlement-field';
+            const rebateLabel = document.createElement('span');
+            rebateLabel.className = 'user-settlement-field-label';
+            rebateLabel.textContent = '返水%';
+            const rebateInput = document.createElement('input');
+            rebateInput.value = this.formatAmountValue(settlementConfig.rebateRate);
+            rebateInput.placeholder = '请输入返水';
+            this.bindSettlementNumericInput(rebateInput);
+            rebateField.appendChild(rebateLabel);
+            rebateField.appendChild(rebateInput);
+
+            const parseField = document.createElement('label');
+            parseField.className = 'user-settlement-field user-settlement-check-field';
+            const parseLabel = document.createElement('span');
+            parseLabel.className = 'user-settlement-field-label';
+            parseLabel.textContent = '尾数简写';
+            const parseControl = document.createElement('span');
+            parseControl.className = 'user-settlement-checkbox';
+            const parseInput = document.createElement('input');
+            parseInput.type = 'checkbox';
+            parseInput.checked = parsePreference.tailShorthandAsSeparateGroups === true;
+            const parseText = document.createElement('span');
+            parseText.textContent = '2468尾按 2尾/4尾/6尾/8尾 解析';
+            parseControl.appendChild(parseInput);
+            parseControl.appendChild(parseText);
+            parseField.appendChild(parseLabel);
+            parseField.appendChild(parseControl);
+
+            const saveButton = document.createElement('button');
+            saveButton.className = 'user-settlement-save';
+            saveButton.textContent = '保存设置';
+            saveButton.onclick = (event) => {
+                event.stopPropagation();
+                const nextOdds = Number(oddsInput.value);
+                const nextRebateRate = Number(rebateInput.value);
+                const nextTailShorthand = parseInput.checked === true;
+                if (!Number.isFinite(nextOdds) || nextOdds <= 0) {
+                    if (window.showError) {
+                        window.showError('保存设置失败', '赔率请输入大于 0 的数字');
+                    }
+                    return;
+                }
+                if (!Number.isFinite(nextRebateRate) || nextRebateRate < 0) {
+                    if (window.showError) {
+                        window.showError('保存设置失败', '返水请输入大于等于 0 的数字');
+                    }
+                    return;
+                }
+                try {
+                    const result = this.updateUserSettlementConfig(userName, {
+                        odds: nextOdds,
+                        rebateRate: nextRebateRate
+                    }, {
+                        keepExpanded: true,
+                        render: false,
+                        save: false
+                    });
+                    const parseResult = this.updateUserParsePreference(userName, {
+                        tailShorthandAsSeparateGroups: nextTailShorthand
+                    }, {
+                        render: false,
+                        save: false
+                    });
+                    this.expandedSettlementUser = '';
+                    this.renderAllSections();
+                    this.saveUserData();
+                    if (window.showSuccess) {
+                        window.showSuccess(`已保存 ${userName}：赔率 ${this.formatAmountValue(result.odds)}，返水 ${this.formatAmountValue(result.rebateRate)}%，尾数简写${parseResult.tailShorthandAsSeparateGroups ? '开' : '关'}`);
+                    }
+                } catch (error) {
+                    if (window.showError) {
+                        window.showError('保存设置失败', error && error.message ? error.message : '未知错误');
+                    }
+                }
+            };
+
+            const clearButton = document.createElement('button');
+            clearButton.className = 'user-settlement-clear';
+            clearButton.textContent = '清空投注数据';
+            clearButton.onclick = (event) => {
+                event.stopPropagation();
+                try {
+                    const result = this.clearUserBetData(userName);
+                    if (result && result.cleared && window.showSuccess) {
+                        window.showSuccess(`已清空 ${userName} 的投注数据`);
+                    }
+                } catch (error) {
+                    if (window.showError) {
+                        window.showError('清空投注数据失败', error && error.message ? error.message : '未知错误');
+                    }
+                }
+            };
+
+            editor.appendChild(oddsField);
+            editor.appendChild(rebateField);
+            editor.appendChild(parseField);
+            editor.appendChild(saveButton);
+            editor.appendChild(clearButton);
+            info.appendChild(editor);
+        }
+
+        const actions = document.createElement('div');
+        actions.className = 'user-item-actions';
+
+        const settlementButton = document.createElement('button');
+        settlementButton.className = 'user-settlement-toggle';
+        settlementButton.textContent = this.expandedSettlementUser === userName ? '收起' : '客户设置';
+        settlementButton.onclick = (event) => {
+            event.stopPropagation();
+            this.toggleSettlementEditor(userName);
+        };
+
+        const deleteButton = document.createElement('button');
+        deleteButton.textContent = '删除';
+        deleteButton.onclick = (event) => {
+            event.stopPropagation();
+            this.deleteUser(userName);
+        };
+
+        actions.appendChild(settlementButton);
+        actions.appendChild(deleteButton);
+        li.appendChild(info);
+        li.appendChild(actions);
+        return li;
     }
 
     // 渲染用户列表
     renderUserList() {
         const userListElement = document.getElementById('userList');
         if (!userListElement) return;
+        this.cancelPendingUserListRender();
+        const userSearchInput = document.getElementById('userSearchInput');
+        if (userSearchInput && userSearchInput.value !== this.userSearchKeyword) {
+            userSearchInput.value = this.userSearchKeyword;
+        }
 
         userListElement.innerHTML = '';
-        const sortedUsers = this.getSortedUsers();
+        const keyword = String(this.userSearchKeyword || '').trim();
+        const sortedUsers = this.getFilteredUserNames(keyword);
 
+        if (sortedUsers.length === 0) {
+            const empty = document.createElement('li');
+            empty.className = 'user-list-empty';
+            empty.textContent = keyword ? '没有匹配的客户' : '暂无客户';
+            userListElement.appendChild(empty);
+            return;
+        }
+
+        const fragment = document.createDocumentFragment();
         sortedUsers.forEach(user => {
-            const li = document.createElement('li');
-            li.onclick = () => this.switchUser(user);
-            if (this.selectedUsers.has(user)) {
-                li.classList.add('is-selected');
-            }
-
-            const info = document.createElement('div');
-            info.className = 'user-item-info';
-
-            const nameRow = document.createElement('div');
-            nameRow.className = 'user-item-name';
-            nameRow.textContent = `${user} (总: ${this.getUserTotalInViewRegions(user) || 0})`;
-            info.appendChild(nameRow);
-
-            const regionRow = document.createElement('div');
-            regionRow.className = 'user-region-state-row';
-            this.getRegionOptions().forEach(region => {
-                const badge = document.createElement('span');
-                const total = this.getUserTotalInRegion(user, region.key);
-                badge.className = `user-region-state ${total > 0 ? 'has-data' : 'no-data'}`;
-                badge.textContent = region.label;
-                regionRow.appendChild(badge);
-            });
-            info.appendChild(regionRow);
-
-            const settlementConfig = this.getUserSettlementConfig(user);
-            const settlementSummary = document.createElement('div');
-            settlementSummary.className = 'user-settlement-summary';
-            settlementSummary.textContent = `赔率 ${this.formatAmountValue(settlementConfig.odds)} | 返水 ${this.formatAmountValue(settlementConfig.rebateRate)}%`;
-            info.appendChild(settlementSummary);
-
-            const regionModeSummary = document.createElement('div');
-            regionModeSummary.className = 'user-region-mode-summary';
-            regionModeSummary.textContent = `盘口模式：${this.getUserRegionModeSummary(user)}`;
-            info.appendChild(regionModeSummary);
-
-            const parsePreference = this.getUserParsePreference(user);
-            const parseSummary = document.createElement('div');
-            parseSummary.className = 'user-region-mode-summary';
-            parseSummary.textContent = parsePreference.tailShorthandAsSeparateGroups
-                ? '解析习惯：尾数简写开启'
-                : '解析习惯：默认';
-            info.appendChild(parseSummary);
-
-            if (this.expandedSettlementUser === user) {
-                const editor = document.createElement('div');
-                editor.className = 'user-settlement-editor';
-                editor.onclick = (event) => {
-                    event.stopPropagation();
-                };
-
-                const oddsField = document.createElement('label');
-                oddsField.className = 'user-settlement-field';
-                const oddsLabel = document.createElement('span');
-                oddsLabel.className = 'user-settlement-field-label';
-                oddsLabel.textContent = '赔率';
-                const oddsInput = document.createElement('input');
-                oddsInput.value = this.formatAmountValue(settlementConfig.odds);
-                oddsInput.placeholder = '请输入赔率';
-                this.bindSettlementNumericInput(oddsInput);
-                oddsField.appendChild(oddsLabel);
-                oddsField.appendChild(oddsInput);
-
-                const rebateField = document.createElement('label');
-                rebateField.className = 'user-settlement-field';
-                const rebateLabel = document.createElement('span');
-                rebateLabel.className = 'user-settlement-field-label';
-                rebateLabel.textContent = '返水%';
-                const rebateInput = document.createElement('input');
-                rebateInput.value = this.formatAmountValue(settlementConfig.rebateRate);
-                rebateInput.placeholder = '请输入返水';
-                this.bindSettlementNumericInput(rebateInput);
-                rebateField.appendChild(rebateLabel);
-                rebateField.appendChild(rebateInput);
-
-                const parseField = document.createElement('label');
-                parseField.className = 'user-settlement-field user-settlement-check-field';
-                const parseLabel = document.createElement('span');
-                parseLabel.className = 'user-settlement-field-label';
-                parseLabel.textContent = '尾数简写';
-                const parseControl = document.createElement('span');
-                parseControl.className = 'user-settlement-checkbox';
-                const parseInput = document.createElement('input');
-                parseInput.type = 'checkbox';
-                parseInput.checked = parsePreference.tailShorthandAsSeparateGroups === true;
-                const parseText = document.createElement('span');
-                parseText.textContent = '2468尾按 2尾/4尾/6尾/8尾 解析';
-                parseControl.appendChild(parseInput);
-                parseControl.appendChild(parseText);
-                parseField.appendChild(parseLabel);
-                parseField.appendChild(parseControl);
-
-                const saveButton = document.createElement('button');
-                saveButton.className = 'user-settlement-save';
-                saveButton.textContent = '保存设置';
-                saveButton.onclick = (event) => {
-                    event.stopPropagation();
-                    const nextOdds = Number(oddsInput.value);
-                    const nextRebateRate = Number(rebateInput.value);
-                    const nextTailShorthand = parseInput.checked === true;
-                    if (!Number.isFinite(nextOdds) || nextOdds <= 0) {
-                        if (window.showError) {
-                            window.showError('保存设置失败', '赔率请输入大于 0 的数字');
-                        }
-                        return;
-                    }
-                    if (!Number.isFinite(nextRebateRate) || nextRebateRate < 0) {
-                        if (window.showError) {
-                            window.showError('保存设置失败', '返水请输入大于等于 0 的数字');
-                        }
-                        return;
-                    }
-                    try {
-                        const result = this.updateUserSettlementConfig(user, {
-                            odds: nextOdds,
-                            rebateRate: nextRebateRate
-                        }, {
-                            keepExpanded: true,
-                            render: false,
-                            save: false
-                        });
-                        const parseResult = this.updateUserParsePreference(user, {
-                            tailShorthandAsSeparateGroups: nextTailShorthand
-                        }, {
-                            render: false,
-                            save: false
-                        });
-                        this.expandedSettlementUser = '';
-                        this.renderAllSections();
-                        this.saveUserData();
-                        if (window.showSuccess) {
-                            window.showSuccess(`已保存 ${user}：赔率 ${this.formatAmountValue(result.odds)}，返水 ${this.formatAmountValue(result.rebateRate)}%，尾数简写${parseResult.tailShorthandAsSeparateGroups ? '开' : '关'}`);
-                        }
-                    } catch (error) {
-                        if (window.showError) {
-                            window.showError('保存设置失败', error && error.message ? error.message : '未知错误');
-                        }
-                    }
-                };
-
-                editor.appendChild(oddsField);
-                editor.appendChild(rebateField);
-                editor.appendChild(parseField);
-                editor.appendChild(saveButton);
-                info.appendChild(editor);
-            }
-
-            const actions = document.createElement('div');
-            actions.className = 'user-item-actions';
-
-            const settlementButton = document.createElement('button');
-            settlementButton.className = 'user-settlement-toggle';
-            settlementButton.textContent = this.expandedSettlementUser === user ? '收起' : '设置';
-            settlementButton.onclick = (event) => {
-                event.stopPropagation();
-                this.toggleSettlementEditor(user);
-            };
-
-            const deleteButton = document.createElement('button');
-            deleteButton.textContent = '删除';
-            deleteButton.onclick = (event) => {
-                event.stopPropagation();
-                this.deleteUser(user);
-            };
-
-            actions.appendChild(settlementButton);
-            actions.appendChild(deleteButton);
-            li.appendChild(info);
-            li.appendChild(actions);
-            userListElement.appendChild(li);
+            fragment.appendChild(this.createUserListRow(user));
         });
+        userListElement.appendChild(fragment);
     }
 
     // 渲染区域
@@ -2011,8 +2318,6 @@ class UserManager {
 
         if (sectionId === 'section1') {
             this.renderCurrentUserSection(section);
-        } else if (sectionId === 'section2') {
-            this.renderSummarySection(section);
         }
     }
 
@@ -2051,11 +2356,13 @@ class UserManager {
         const sortedResultsElement = document.getElementById('sortedResults');
         if (!sortedResultsElement) return;
 
+        const scopeMode = this.getScopeMode();
+        const scopeUsers = this.getScopeUsers();
         let rows = [];
-        if (this.isSummaryMode) {
-            rows = this.buildSummarySortedRows();
-        } else if (this.getSelectedUsers().length > 0) {
-            rows = this.buildUserSortedRows();
+        if (scopeUsers.length > 0) {
+            rows = scopeMode === 'all'
+                ? this.buildSummarySortedRows()
+                : this.buildUserSortedRows();
         }
 
         this.renderVirtualRows(
@@ -2072,63 +2379,66 @@ class UserManager {
         );
     }
 
-    buildUserSortedRows() {
-        const selectedData = this.getSelectedUserData();
-        if (!selectedData.users.length) return [];
+    buildScopedSortedRows(scopedUsers = [], options = {}) {
+        const users = Array.isArray(scopedUsers) ? scopedUsers.filter(userName => this.users[userName]) : [];
+        if (!users.length) return [];
 
-        return selectedData.data
-            .slice()
-            .sort((a, b) => b.value - a.value)
-            .map(item => ({
-                number: item.number,
-                text: item.text,
-                value: item.value,
-                pnl: null,
-                clickable: true
-            }));
-    }
-
-    buildSummarySortedRows() {
         const summaryData = {};
         const viewRegions = this.getViewRegions();
-        const showPnl = this.isSummaryMode && viewRegions.length === 1;
+        const showPnl = (options && options.includePnl !== false) && viewRegions.length === 1;
+        let totalStake = 0;
+        let totalRebate = 0;
 
-        Object.keys(this.users).forEach(userName => {
+        users.forEach(userName => {
+            const settlement = this.getUserSettlementConfig(userName);
+            const odds = Number(settlement && settlement.odds) || 0;
+            const rebateRatio = Number(settlement && settlement.rebateRatio) || 0;
             viewRegions.forEach(regionKey => {
                 const regionData = this.getUserRegionData(userName, regionKey);
                 if (!regionData) return;
-                this.ensureRegionPayoutData(regionData);
-                regionData.data.forEach(item => {
+
+                const regionTotal = Number(regionData.totalCount);
+                const safeRegionTotal = Number.isFinite(regionTotal)
+                    ? regionTotal
+                    : (Array.isArray(regionData.data)
+                        ? regionData.data.reduce((sum, item) => sum + (Number(item && item.value) || 0), 0)
+                        : 0);
+                totalStake += safeRegionTotal;
+                totalRebate += safeRegionTotal * rebateRatio;
+
+                (regionData.data || []).forEach(item => {
                     if (!summaryData[item.number]) {
                         summaryData[item.number] = { text: item.text, value: 0, payout: 0 };
                     }
-                    summaryData[item.number].value += item.value;
-                });
-                (regionData.payoutData || []).forEach(item => {
-                    if (!summaryData[item.number]) {
-                        summaryData[item.number] = { text: item.text, value: 0, payout: 0 };
-                    }
-                    summaryData[item.number].payout += item.value || 0;
+                    const stake = Number(item && item.value) || 0;
+                    summaryData[item.number].value += stake;
+                    summaryData[item.number].payout += stake * odds;
                 });
             });
         });
 
-        const sortedSummaryData = Object.entries(summaryData)
-            .sort((a, b) => b[1].value - a[1].value);
-        const totalValue = showPnl
-            ? sortedSummaryData.reduce((sum, [, data]) => sum + (data.value || 0), 0)
-            : 0;
-
-        return sortedSummaryData.map(([number, data]) => {
-            const payout = Number(data && data.payout);
-            const pnl = showPnl ? (totalValue - (Number.isFinite(payout) ? payout : 0)) : null;
-            return {
+        return Object.entries(summaryData)
+            .sort((a, b) => b[1].value - a[1].value)
+            .map(([number, data]) => ({
                 number,
                 text: data.text,
                 value: data.value,
-                pnl,
-                clickable: false
-            };
+                pnl: showPnl ? (totalStake - totalRebate - (Number(data && data.payout) || 0)) : null,
+                clickable: options && options.clickable === true
+            }));
+    }
+
+    buildUserSortedRows() {
+        return this.buildScopedSortedRows(this.getSelectedUsers(), {
+            clickable: true,
+            includePnl: true
+        });
+    }
+
+    buildSummarySortedRows() {
+        return this.buildScopedSortedRows(this.getSortedUsers(), {
+            clickable: false,
+            includePnl: true
         });
     }
 
@@ -2175,15 +2485,8 @@ class UserManager {
     renderOriginalData() {
         const originalDataListElement = document.getElementById('originalDataList');
         if (!originalDataListElement) return;
-        this.originalOrderTotalCache.clear();
-        this.originalParseSummaryCache.clear();
-
-        let rows = [];
-        if (this.isSummaryMode) {
-            rows = this.collectAllOriginalRows();
-        } else if (this.getSelectedUsers().length > 0) {
-            rows = this.collectSelectedOriginalRows();
-        }
+        this.cancelPendingOriginalDataSearchRender();
+        let rows = this.getOriginalRowsForCurrentScope();
 
         const keyword = String(this.originalDataSearchKeyword || '').trim();
         if (keyword) {
@@ -2214,6 +2517,40 @@ class UserManager {
                 emptyText: '暂无原始消息'
             }
         );
+    }
+
+    getOriginalRowsSnapshotKey() {
+        const scopeMode = this.getScopeMode();
+        const scopeUsers = this.getScopeUsers();
+        const viewRegions = this.getViewRegions();
+        return [
+            this.originalRowsSnapshotVersion,
+            scopeMode,
+            viewRegions.join(','),
+            scopeUsers.join(',')
+        ].join('|');
+    }
+
+    getOriginalRowsForCurrentScope() {
+        const cacheKey = this.getOriginalRowsSnapshotKey();
+        if (this.originalRowsSnapshotCache.key === cacheKey) {
+            return this.originalRowsSnapshotCache.rows;
+        }
+
+        const scopeMode = this.getScopeMode();
+        const scopeUsers = this.getScopeUsers();
+        let rows = [];
+        if (scopeUsers.length > 0) {
+            rows = scopeMode === 'all'
+                ? this.collectAllOriginalRows()
+                : this.collectSelectedOriginalRows();
+        }
+
+        this.originalRowsSnapshotCache = {
+            key: cacheKey,
+            rows
+        };
+        return rows;
     }
 
     collectSelectedOriginalRows() {
@@ -2274,6 +2611,10 @@ class UserManager {
 
     estimateOriginalRowHeight(row) {
         if (!row) return 110;
+        const cacheKey = this.getOriginalRowDerivedCacheKey(row);
+        if (cacheKey && this.originalRowHeightCache.has(cacheKey)) {
+            return this.originalRowHeightCache.get(cacheKey) || 110;
+        }
         const regionLabel = row.regionLabel || this.getRegionLabel(row.regionKey);
         const rawMessage = this.extractOriginalMessageText(row.message);
         const createdAtText = this.formatOriginalMessageCreatedAt(row.createdAt || (row.originalEntry && this.extractOriginalMessageCreatedAt(row.originalEntry)));
@@ -2286,7 +2627,17 @@ class UserManager {
             .split('\n')
             .reduce((sum, line) => sum + Math.max(1, Math.ceil(String(line || '').length / 32)), 0);
         const estimated = 64 + (logicalLines * 20);
-        return Math.max(72, Math.min(1400, estimated));
+        const height = Math.max(72, Math.min(1400, estimated));
+        if (cacheKey) {
+            this.originalRowHeightCache.set(cacheKey, height);
+            if (this.originalRowHeightCache.size > 8000) {
+                const first = this.originalRowHeightCache.keys().next();
+                if (!first.done) {
+                    this.originalRowHeightCache.delete(first.value);
+                }
+            }
+        }
+        return height;
     }
 
     createOriginalDataRow(row, rowIndex = 0) {
@@ -2303,8 +2654,9 @@ class UserManager {
         const issueTooltip = (Array.isArray(parseSummary.focusIssues) ? parseSummary.focusIssues : [])
             .map((issue) => this.formatOriginalParseIssue(issue))
             .join('\n');
-        const fullMessage = `${metaText}\n添加时间：${createdAtText}\n状态：${parseSummary.statusLabel || ''}\n${parseSummary.summaryText || ''}${issueTooltip ? `\n${issueTooltip}` : ''}\n${rawMessage}`;
-        li.title = fullMessage;
+
+        const headerWrap = document.createElement('div');
+        headerWrap.classList.add('message-header');
 
         const contentWrap = document.createElement('div');
         contentWrap.classList.add('message-main');
@@ -2347,10 +2699,6 @@ class UserManager {
         contentWrap.appendChild(metaSpan);
         contentWrap.appendChild(timeSpan);
         contentWrap.appendChild(summaryWrap);
-        if (issueWrap.childNodes.length > 0) {
-            contentWrap.appendChild(issueWrap);
-        }
-        contentWrap.appendChild(textSpan);
 
         const actions = document.createElement('div');
         actions.classList.add('message-actions');
@@ -2372,9 +2720,10 @@ class UserManager {
         deleteButton.classList.add('delete-button');
         deleteButton.textContent = '删除';
         deleteButton.onclick = () => {
-            const scopeLabel = this.isSummaryMode
-                ? `${row.userName}（${regionLabel}）`
-                : '这条';
+            const scopeMode = this.getScopeMode();
+            const scopeLabel = scopeMode === 'single'
+                ? '这条'
+                : `${row.userName}（${regionLabel}）`;
             const ok = confirm(`确认删除${scopeLabel}原始数据吗？删除后将重新统计。`);
             if (ok) {
                 this.deleteOriginalData(row.userName, row.index, row.regionKey);
@@ -2383,8 +2732,15 @@ class UserManager {
 
         actions.appendChild(primaryActionButton);
         actions.appendChild(deleteButton);
-        li.appendChild(contentWrap);
-        li.appendChild(actions);
+
+        headerWrap.appendChild(contentWrap);
+        headerWrap.appendChild(actions);
+
+        li.appendChild(headerWrap);
+        if (issueWrap.childNodes.length > 0) {
+            li.appendChild(issueWrap);
+        }
+        li.appendChild(textSpan);
         return li;
     }
 
@@ -2453,6 +2809,7 @@ class UserManager {
         const createdAt = this.extractOriginalMessageCreatedAt(regionData.originalData[index]);
         const editedAt = new Date().toISOString();
         regionData.originalData[index] = this.buildStoredOriginalDataEntry(message, totalAmount, createdAt, editedAt);
+        this.invalidateOriginalDataDerivedCaches();
         this.recalculateUserData(userName, regionKey);
         this.renderAllSections();
         this.saveUserData();
@@ -2498,6 +2855,7 @@ class UserManager {
         const regionData = this.getUserRegionData(userName, regionKey);
         if (this.hasOriginalDataAt(regionData, index)) {
             regionData.originalData.splice(index, 1);
+            this.invalidateOriginalDataDerivedCaches();
             this.recalculateUserData(userName, regionKey);
             this.renderAllSections();
             this.saveUserData();
@@ -2508,6 +2866,7 @@ class UserManager {
     recalculateUserData(userName, regionKey = this.activeRegion) {
         const regionData = this.getUserRegionData(userName, regionKey);
         if (!regionData) return;
+        this.invalidateUserListDerivedCaches();
 
         // 重置所有值为0
         regionData.data.forEach(item => {
@@ -2596,6 +2955,7 @@ class UserManager {
     }
 
     recalculateAllUsersData() {
+        this.invalidateOriginalDataDerivedCaches();
         if (!window.messageProcessor || typeof window.messageProcessor.processMessageForUser !== 'function') {
             const regionKeys = this.getRegionOptions().map(item => item.key);
             Object.keys(this.users || {}).forEach((userName) => {
@@ -2752,12 +3112,20 @@ class UserManager {
         if (!confirm('确定要清空所有用户数据吗？此操作不可恢复！')) {
             return false;
         }
+        this.invalidateOriginalDataDerivedCaches();
+        this.invalidateUserListDerivedCaches();
         this.users = {};
         this.selectedUsers.clear();
         this.expandedSettlementUser = '';
+        this.scopeMode = 'single';
+        this.userSearchKeyword = '';
         this.activeRegion = 'new_ao';
         this.viewRegions = new Set(['new_ao']);
-        this.isSummaryMode = false;
+        this.applyScopeModeFlags();
+        const userSearchInput = document.getElementById('userSearchInput');
+        if (userSearchInput) {
+            userSearchInput.value = '';
+        }
         this.updateCurrentUserDisplay();
         this.clearSections();
         this.renderAllSections();
@@ -2782,12 +3150,50 @@ class UserManager {
         return this.users;
     }
 
+    setScopeMode(mode, options = {}) {
+        const nextMode = this.normalizeScopeMode(mode);
+        const sortedUsers = this.getSortedUsers();
+
+        this.scopeMode = nextMode;
+        if (nextMode === 'all') {
+            this.setSelectedUsers(sortedUsers, { syncScope: false });
+            if (!this.lastActiveUser || !this.users[this.lastActiveUser]) {
+                this.lastActiveUser = sortedUsers[0] || null;
+            }
+        } else if (nextMode === 'multi') {
+            const selected = this.getSelectedUsers();
+            if (selected.length === 0 && sortedUsers.length > 0) {
+                const keepUser = String(options && options.userName ? options.userName : '').trim();
+                const fallbackUser = (keepUser && this.users[keepUser]) ? keepUser : (this.lastActiveUser && this.users[this.lastActiveUser] ? this.lastActiveUser : sortedUsers[0]);
+                this.setSelectedUsers(fallbackUser ? [fallbackUser] : [], { syncScope: false });
+                this.lastActiveUser = fallbackUser || null;
+            }
+        } else {
+            const keepUser = String(options && options.userName ? options.userName : '').trim();
+            const selected = this.getSelectedUsers();
+            const nextUser = (keepUser && this.users[keepUser])
+                ? keepUser
+                : ((this.lastActiveUser && this.users[this.lastActiveUser] && (selected.includes(this.lastActiveUser) || selected.length === 0))
+                    ? this.lastActiveUser
+                    : (selected[0] || sortedUsers[0] || ''));
+            this.setSelectedUsers(nextUser ? [nextUser] : [], { syncScope: false });
+            this.lastActiveUser = nextUser || null;
+        }
+
+        this.applyScopeModeFlags();
+        if (options && options.render === false) {
+            return;
+        }
+        this.renderAllSections();
+    }
+
     // 设置汇总模式
     setSummaryMode(enabled) {
-        this.isSummaryMode = enabled;
-        this.updateCurrentUserDisplay();
-        this.updateTitles();
-        this.renderAllSections();
+        if (enabled) {
+            this.setScopeMode('all');
+            return;
+        }
+        this.setScopeMode(this.getSelectedUsers().length > 1 ? 'multi' : 'single');
     }
 
     setActiveRegion(regionKey) {
@@ -2824,38 +3230,20 @@ class UserManager {
     }
 
     setMultiSelectEnabled(enabled) {
-        this.isMultiSelectEnabled = !!enabled;
-        const toggle = document.getElementById('multiSelectToggle');
-        if (toggle) {
-            toggle.checked = this.isMultiSelectEnabled;
+        if (enabled) {
+            this.setScopeMode(this.getScopeMode() === 'all' ? 'all' : 'multi');
+            return;
         }
-        if (!this.isMultiSelectEnabled) {
-            const selected = this.getSelectedUsers();
-            if (selected.length > 1) {
-                const keepUser = this.lastActiveUser && selected.includes(this.lastActiveUser)
-                    ? this.lastActiveUser
-                    : selected[0];
-                this.setSelectedUsers(keepUser ? [keepUser] : []);
-            } else if (selected.length === 0) {
-                const sortedUsers = this.getSortedUsers();
-                if (sortedUsers.length > 0) {
-                    this.setSelectedUsers([sortedUsers[0]]);
-                    this.lastActiveUser = sortedUsers[0];
-                }
-            }
-        }
-        this.updateCurrentUserDisplay();
-        this.updateTitles();
-        this.renderAllSections();
+        this.setScopeMode('single');
     }
 
     isMultiSelectMode() {
-        return this.isMultiSelectEnabled;
+        return this.getScopeMode() !== 'single';
     }
 
     // 获取汇总模式状态
     isInSummaryMode() {
-        return this.isSummaryMode;
+        return this.getScopeMode() === 'all';
     }
 }
 

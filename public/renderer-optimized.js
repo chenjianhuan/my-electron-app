@@ -23,6 +23,7 @@ let recognizeSpeechDiscardOnEnd = false;
 let recognizeSpeechManualStop = false;
 let currentLicenseStatus = null;
 let licenseLastUpdatedAt = null;
+let currentOfflineLicenseRequest = null;
 let appAccessStatus = null;
 let currentPlanContext = null;
 let planCatalog = null;
@@ -47,6 +48,7 @@ let realtimePreviewTimer = null;
 let clipboardMonitorStartedAt = 0;
 let recognizeEditContext = null;
 let recognizeAttributePanelVisible = false;
+let recognizeDetectedRegionKeys = [];
 let recognizeSideGroupState = {
     attributes: true,
     anchors: false,
@@ -65,7 +67,6 @@ let recognizePreviewBlocked = false;
 let dashboardSaveState = 'saved';
 let dashboardSaveError = '';
 let ambiguityChoiceState = null;
-let blockedUpgradeAutoShown = false;
 let trialRuntimeWarningDismissed = false;
 let regionWinningNumbers = {
     new_ao: '',
@@ -118,6 +119,38 @@ const ANCHOR_MODE_LABELS = {
     combo_number: '按筛选集合',
     per_animal: '按生肖均分',
 };
+const MESSAGE_TYPE_WHITELIST_CONFIGS = [
+    {
+        key: 'bulk_equals_groups',
+        title: '批量等号单',
+        summary: '整行至少两组“单号=金额”时，直接按普通号码单解析。',
+        example: '例：02=150 04=35 08=35'
+    },
+    {
+        key: 'single_number_amount_shorthand',
+        title: '单号金额 shorthand',
+        summary: '单个号码后直接跟金额，支持连接符、点号和金额单位。',
+        example: '例：09-80元 / 01*10块 / 01.10元'
+    },
+    {
+        key: 'number_pair_with_explicit_anchor',
+        title: '号码对 + 明确锚点',
+        summary: '像 11-23 各150 这种写法，前面的连字符按号码分隔处理。',
+        example: '例：11-23 各150 / 21-22 各50'
+    },
+    {
+        key: 'implicit_amount_rewrite',
+        title: '隐式金额补写',
+        summary: '缺少显式锚点但语义稳定时，自动补成标准写法。',
+        example: '例：35号15块 / 44 100块 / 26。二十'
+    },
+    {
+        key: 'composite_attribute_shorthand',
+        title: '组合属性 shorthand',
+        summary: '红蓝波、0123头 这类组合属性先并组，再和其他属性交集。',
+        example: '例：红蓝波的小单 / 0123头的单数'
+    }
+];
 const ATTRIBUTE_COMBINE_POLICY_LABELS = {
     intersection: '仅交集',
     union: '仅并集',
@@ -393,14 +426,6 @@ function applyAppAccessStatus(status) {
     }
 
     if (!status) return;
-    if (status.mode === 'blocked' && !blockedUpgradeAutoShown) {
-        blockedUpgradeAutoShown = true;
-        // 仅在进入 A 业务页时自动拉起升级弹窗。
-        setTimeout(() => openPlanModal(), 0);
-    }
-    if (status.mode !== 'blocked') {
-        blockedUpgradeAutoShown = false;
-    }
     if (status.mode === 'trial' && status.trial && !trialRuntimeWarningDismissed) {
         showTrialRuntimeWarning(status.trial.remainingDays || 0, status.trial.endAt);
     }
@@ -426,6 +451,7 @@ function syncBlockedUpgradeOverlay(status) {
         || status.machineFingerprint
         || ''
     );
+    const adviceText = '可复制离线授权信息发给管理员签发；管理员返回 license.dat 后，放到本机并点击“刷新状态”即可生效。';
 
     if (!overlay) {
         overlay = document.createElement('div');
@@ -444,13 +470,24 @@ function syncBlockedUpgradeOverlay(status) {
             <div style="max-width: 680px; width: 100%; background: #fff; border-radius: 12px; border: 1px solid #dbe4f0; padding: 16px 18px; color: #1e293b;">
                 <div style="font-size: 20px; font-weight: 800; color: #0f3558; margin-bottom: 8px;">A业务（六合彩统计）需要有效授权</div>
                 <div id="blockedUpgradeReason" style="font-size: 14px; line-height: 1.6; color: #334155;"></div>
+                <div id="blockedUpgradeAdvice" style="font-size: 14px; line-height: 1.6; color: #475569; margin-top: 8px;"></div>
                 <div id="blockedUpgradeFingerprint" style="font-size: 13px; line-height: 1.5; color: #475569; margin-top: 6px; word-break: break-all;"></div>
-                <div style="margin-top: 12px; display: flex; gap: 10px;">
-                    <button id="blockedUpgradeOpenBtn" class="edit-button" type="button">打开套餐升级</button>
+                <div style="margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap;">
+                    <button id="blockedCopyOfflineBtn" class="edit-button" type="button">复制离线授权信息</button>
+                    <button id="blockedOpenLicenseBtn" class="edit-button" type="button">打开授权管理</button>
+                    <button id="blockedUpgradeOpenBtn" class="cancel-button" type="button">打开套餐升级</button>
                 </div>
             </div>
         `;
         document.body.appendChild(overlay);
+        const copyBtn = overlay.querySelector('#blockedCopyOfflineBtn');
+        if (copyBtn) {
+            copyBtn.addEventListener('click', () => copyOfflineLicenseRequest());
+        }
+        const licenseBtn = overlay.querySelector('#blockedOpenLicenseBtn');
+        if (licenseBtn) {
+            licenseBtn.addEventListener('click', () => openLicenseModal());
+        }
         const openBtn = overlay.querySelector('#blockedUpgradeOpenBtn');
         if (openBtn) {
             openBtn.addEventListener('click', () => openPlanModal());
@@ -460,6 +497,10 @@ function syncBlockedUpgradeOverlay(status) {
     const reasonEl = overlay.querySelector('#blockedUpgradeReason');
     if (reasonEl) {
         reasonEl.textContent = `未授权原因：${blockedReason}`;
+    }
+    const adviceEl = overlay.querySelector('#blockedUpgradeAdvice');
+    if (adviceEl) {
+        adviceEl.textContent = adviceText;
     }
     const fingerprintEl = overlay.querySelector('#blockedUpgradeFingerprint');
     if (fingerprintEl) {
@@ -566,12 +607,9 @@ function refreshDashboardStatus() {
         const viewRegions = typeof manager.getViewRegions === 'function' ? manager.getViewRegions() : ['new_ao'];
         const viewRegionLabels = typeof manager.getViewRegionLabels === 'function' ? manager.getViewRegionLabels() : viewRegions;
         const inSummary = typeof manager.isInSummaryMode === 'function' ? manager.isInSummaryMode() : false;
-
-        let activeTotalStake = Number(selectedData.totalCount) || 0;
-        if (inSummary) {
-            const summaryMetrics = collectDashboardSummaryMetrics(manager, viewRegions);
-            activeTotalStake = summaryMetrics.totalStake;
-        }
+        const activeTotalStake = inSummary
+            ? collectDashboardSummaryMetrics(manager, viewRegions).totalStake
+            : (Number(selectedData.totalCount) || 0);
 
         userCountEl.textContent = `${userCount}`;
         totalStakeEl.textContent = formatNumericAmount(activeTotalStake);
@@ -784,7 +822,7 @@ function renderPlanModal() {
             || ''
         );
         const fingerprintText = machineFingerprint ? ` 本机指纹：${machineFingerprint}` : '';
-        banner.textContent = `当前授权不可用（${blockedReason}），请联系升级并导入授权文件。${fingerprintText}`;
+        banner.textContent = `当前授权不可用（${blockedReason}），可复制离线授权信息发给管理员签发，收到 license.dat 后导入并刷新状态。${fingerprintText}`;
     } else if (isTrialMode) {
         banner.textContent = `当前为试用模式，已开放 ${context.name} 能力（可在 Plus / Pro 间自由切换）。试用到期后请购买 Plus 或 Pro 授权。`;
     } else {
@@ -1240,14 +1278,121 @@ async function refreshLicenseStatus() {
         return;
     }
     try {
-        const status = await ipcRenderer.invoke('license:get-status');
+        const [status, offlineRequest] = await Promise.all([
+            ipcRenderer.invoke('license:get-status'),
+            ipcRenderer.invoke('license:build-offline-request').catch(() => null),
+        ]);
+        currentOfflineLicenseRequest = offlineRequest || null;
         applyLicenseStatus(status);
     } catch (error) {
+        currentOfflineLicenseRequest = null;
         applyLicenseStatus({
             authorized: false,
             mode: 'blocked',
             reason: `刷新失败: ${error.message}`
         });
+    }
+}
+
+function getFallbackOfflineLicenseRequest() {
+    const status = currentLicenseStatus || {};
+    const access = appAccessStatus || {};
+    const plan = currentPlanContext || access.plan || {};
+    return {
+        productName: '六合彩统计',
+        version: document.getElementById('settingsVersionValue')
+            ? String(document.getElementById('settingsVersionValue').textContent || '').replace(/^v/i, '').trim()
+            : '',
+        generatedAt: new Date().toISOString(),
+        machineFingerprint: String(
+            status.machineFingerprint
+            || (access.license && access.license.machineFingerprint)
+            || access.machineFingerprint
+            || ''
+        ),
+        customerId: String(status.customerId || (access.license && access.license.customerId) || ''),
+        tier: String(status.tier || plan.tier || 'plus'),
+        tierName: String(status.tierName || plan.name || ''),
+        billingCycle: String(status.billingCycle || plan.billingCycle || 'lifetime'),
+        reason: String(
+            access.reason
+            || (access.license && access.license.reason)
+            || status.reason
+            || '未检测到有效授权'
+        ),
+        platform: '',
+        arch: '',
+        importPaths: [],
+        recommendedFileName: 'license.dat',
+    };
+}
+
+function getOfflineLicenseRequestData() {
+    return currentOfflineLicenseRequest || getFallbackOfflineLicenseRequest();
+}
+
+function renderLicenseOfflineAssist() {
+    const hintEl = document.getElementById('licenseOfflineHint');
+    const pathsEl = document.getElementById('licenseOfflinePaths');
+    if (!hintEl || !pathsEl) return;
+
+    const request = getOfflineLicenseRequestData();
+    const machineFingerprint = String(request.machineFingerprint || '').trim();
+    const tierLabel = request.tierName || (request.tier === 'pro' ? 'Pro' : request.tier === 'plus' ? 'Plus' : request.tier || '-');
+    const cycleLabel = request.billingCycle ? formatBillingCycleLabel(request.billingCycle) : '-';
+    const intro = currentLicenseStatus && currentLicenseStatus.authorized
+        ? '如需改为离线授权，可复制下方离线授权信息发给管理员重新签发。'
+        : '当前可复制本机离线授权信息发给管理员签发。管理员返回 license.dat 后，放到下方任一路径，再点“刷新状态”或重启应用。';
+
+    hintEl.textContent = `${intro}${machineFingerprint ? ` 设备码：${machineFingerprint}` : ''}${tierLabel ? `；当前套餐：${tierLabel}` : ''}${cycleLabel ? `；计费：${cycleLabel}` : ''}`;
+
+    const importPaths = Array.isArray(request.importPaths) ? request.importPaths.filter(Boolean) : [];
+    if (!importPaths.length) {
+        pathsEl.innerHTML = '<div class="license-offline-path">未获取到离线授权落地路径，可先复制离线授权信息发给管理员签发。</div>';
+        return;
+    }
+    pathsEl.innerHTML = importPaths
+        .map(item => `<div class="license-offline-path">导入位置：${escapeHtml(item)}</div>`)
+        .join('');
+}
+
+function buildOfflineLicenseRequestText(request) {
+    const payload = request || getOfflineLicenseRequestData();
+    const lines = [
+        '【离线授权请求】',
+        `软件：${payload.productName || '六合彩统计'}`,
+        payload.version ? `版本：v${payload.version}` : '',
+        `生成时间：${formatTime(payload.generatedAt)}`,
+        `设备码：${payload.machineFingerprint || '-'}`,
+        `客户编号：${payload.customerId || '待填写'}`,
+        `当前套餐：${payload.tierName || payload.tier || '-'}`,
+        `计费周期：${payload.billingCycle ? formatBillingCycleLabel(payload.billingCycle) : '-'}`,
+        `当前原因：${payload.reason || '-'}`,
+        payload.platform || payload.arch ? `系统：${payload.platform || '-'} / ${payload.arch || '-'}` : '',
+        '签发说明：请按上面的设备码签发离线授权 license.dat 并回传。',
+    ].filter(Boolean);
+
+    const importPaths = Array.isArray(payload.importPaths) ? payload.importPaths.filter(Boolean) : [];
+    if (importPaths.length) {
+        lines.push('导入位置：');
+        importPaths.forEach(item => lines.push(`- ${item}`));
+    }
+    return lines.join('\n');
+}
+
+async function copyOfflineLicenseRequest() {
+    try {
+        let request = currentOfflineLicenseRequest;
+        if (!request && ipcRenderer && typeof ipcRenderer.invoke === 'function') {
+            request = await ipcRenderer.invoke('license:build-offline-request');
+            currentOfflineLicenseRequest = request || null;
+            renderLicenseOfflineAssist();
+        }
+        const text = buildOfflineLicenseRequestText(request || null);
+        await copyPlainText(text);
+        showSuccess('离线授权信息已复制');
+    } catch (error) {
+        showError('复制失败', error && error.message ? error.message : '请重试');
     }
 }
 
@@ -1265,6 +1410,7 @@ function renderLicenseStatusPanel() {
     setText('licenseReason', currentLicenseStatus && currentLicenseStatus.reason ? currentLicenseStatus.reason : '-');
     setText('licenseLastUpdated', licenseLastUpdatedAt ? formatTime(licenseLastUpdatedAt.toISOString()) : '-');
     renderLicenseStatusBanner(currentLicenseStatus);
+    renderLicenseOfflineAssist();
 }
 
 function renderLicenseStatusBanner(status) {
@@ -1281,7 +1427,7 @@ function renderLicenseStatusBanner(status) {
 
     if (!status.authorized) {
         banner.classList.add('license-status-invalid');
-        banner.textContent = '授权无效';
+        banner.textContent = '当前授权不可用，请复制离线授权信息发给管理员签发';
         return;
     }
 
@@ -1340,6 +1486,25 @@ function setText(id, value) {
     const el = document.getElementById(id);
     if (!el) return;
     el.textContent = value == null ? '-' : String(value);
+}
+
+async function copyPlainText(text) {
+    const normalized = String(text || '').trim();
+    if (!normalized) {
+        throw new Error('没有可复制的内容');
+    }
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(normalized);
+        return;
+    }
+
+    const area = document.createElement('textarea');
+    area.value = normalized;
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand('copy');
+    document.body.removeChild(area);
 }
 
 function initLegalNotice() {
@@ -2480,6 +2645,16 @@ function initAnchorAliasFilterControls() {
         node.dataset.bound = '1';
         node.addEventListener('input', () => {
             renderBlockedPlayKeywordState();
+            renderMessageTypeWhitelistState();
+        });
+    });
+
+    MESSAGE_TYPE_WHITELIST_CONFIGS.forEach(({ key }) => {
+        const node = document.getElementById(`messageTypeWhitelist_${key}`);
+        if (!node || node.dataset.bound === '1') return;
+        node.dataset.bound = '1';
+        node.addEventListener('change', () => {
+            renderMessageTypeWhitelistState();
         });
     });
 
@@ -2911,6 +3086,11 @@ function setAnchorRuleControlsEnabled(enabled) {
         'regionAccountingDefaultRegion',
         'blockedPlayKeywordInput_pingte_xiao',
         'blockedPlayKeywordInput_lian_play',
+        'messageTypeWhitelist_bulk_equals_groups',
+        'messageTypeWhitelist_single_number_amount_shorthand',
+        'messageTypeWhitelist_number_pair_with_explicit_anchor',
+        'messageTypeWhitelist_implicit_amount_rewrite',
+        'messageTypeWhitelist_composite_attribute_shorthand',
         'defaultOddsInput',
         'saveAnchorParseModeBtn',
         'resetAnchorParseModeBtn',
@@ -2920,6 +3100,8 @@ function setAnchorRuleControlsEnabled(enabled) {
         'resetRegionAccountingPolicyBtn',
         'saveBlockedPlayKeywordBtn',
         'resetBlockedPlayKeywordBtn',
+        'saveMessageTypeWhitelistBtn',
+        'resetMessageTypeWhitelistBtn',
         'saveDefaultOddsBtn',
         'resetDefaultOddsBtn',
         'createAnchorRuleBtn',
@@ -3131,6 +3313,7 @@ function handleAnchorRuleScopeChange() {
     renderAttributeCombinePolicyState();
     renderRegionAccountingPolicyState();
     renderBlockedPlayKeywordState();
+    renderMessageTypeWhitelistState();
     renderAnchorImpactPreview();
     renderAnchorStrategyGuide();
 }
@@ -3394,6 +3577,10 @@ function getBlockedPlayKeywordFamilyLabel(family) {
     return '玩法类';
 }
 
+function getMessageTypeWhitelistConfig(typeKey) {
+    return MESSAGE_TYPE_WHITELIST_CONFIGS.find(item => item.key === typeKey) || null;
+}
+
 function getRegionAccountingPolicyExplainMeta(info = {}) {
     const mode = String(info.mode || 'split').trim() === 'merged' ? 'merged' : 'split';
     const defaultRegionLabel = String(info.defaultRegionLabel || '新奥').trim() || '新奥';
@@ -3484,6 +3671,21 @@ function renderBlockedPlayKeywordExplain(info = {}) {
     explainEl.innerHTML = `
         <div class="anchor-policy-explain-current">当前生效：命中这些关键词后，会按“未开放玩法”拦截，不参与号码统计。</div>
         <div class="anchor-policy-explain-line">适用场景：避免“平/连肖/二连/三连/复式连肖”这类消息被误统进普通号码单。</div>
+        ${lines.map(line => `<div class="anchor-policy-explain-line">${escapeHtml(line)}</div>`).join('')}
+    `;
+}
+
+function renderMessageTypeWhitelistExplain(info = {}) {
+    const explainEl = document.getElementById('messageTypeWhitelistExplain');
+    if (!explainEl) return;
+    if (info.unavailable) {
+        explainEl.innerHTML = `<div class="anchor-policy-explain-line">${escapeHtml(info.message || '当前无法读取消息类型白名单说明')}</div>`;
+        return;
+    }
+    const lines = Array.isArray(info.lines) ? info.lines.filter(Boolean) : [];
+    explainEl.innerHTML = `
+        <div class="anchor-policy-explain-current">当前生效：只对这些“系统认为安全”的 shorthand 开放自动解析；关闭后会优先阻止自动入账。</div>
+        <div class="anchor-policy-explain-line">原则：宁愿不统计，也不要统计错。这里关闭的是自动兼容能力，不影响已经写得很标准的消息。</div>
         ${lines.map(line => `<div class="anchor-policy-explain-line">${escapeHtml(line)}</div>`).join('')}
     `;
 }
@@ -6036,6 +6238,7 @@ function toggleAnchorAliasStatus(token, shouldEnable, preferredMode = 'per_numbe
             renderAttributeCombinePolicyState();
             renderRegionAccountingPolicyState();
             renderBlockedPlayKeywordState();
+            renderMessageTypeWhitelistState();
             refreshRegionPnlPanel();
         }
         previewMessage({ silent: true });
@@ -6098,6 +6301,7 @@ function saveAnchorAliasRule() {
             renderAttributeCombinePolicyState();
             renderRegionAccountingPolicyState();
             renderBlockedPlayKeywordState();
+            renderMessageTypeWhitelistState();
             refreshRegionPnlPanel();
         }
         previewMessage({ silent: true });
@@ -6131,6 +6335,7 @@ function removeAnchorAliasRule(token) {
             renderAttributeCombinePolicyState();
             renderRegionAccountingPolicyState();
             renderBlockedPlayKeywordState();
+            renderMessageTypeWhitelistState();
             refreshRegionPnlPanel();
         }
         previewMessage({ silent: true });
@@ -6163,6 +6368,7 @@ function resetAnchorAliasRules() {
             renderAttributeCombinePolicyState();
             renderRegionAccountingPolicyState();
             renderBlockedPlayKeywordState();
+            renderMessageTypeWhitelistState();
             refreshRegionPnlPanel();
         }
         previewMessage({ silent: true });
@@ -6199,6 +6405,7 @@ function resetClientRuleProfile() {
             renderAttributeCombinePolicyState();
             renderRegionAccountingPolicyState();
             renderBlockedPlayKeywordState();
+            renderMessageTypeWhitelistState();
             refreshRegionPnlPanel();
         }
         previewMessage({ silent: true });
@@ -6471,6 +6678,108 @@ function renderBlockedPlayKeywordState() {
     renderBlockedPlayKeywordExplain({ lines: explainLines });
 }
 
+function collectMessageTypeWhitelistInputs() {
+    const result = {};
+    MESSAGE_TYPE_WHITELIST_CONFIGS.forEach(({ key }) => {
+        const node = document.getElementById(`messageTypeWhitelist_${key}`);
+        if (!node) return;
+        result[key] = !!node.checked;
+    });
+    return result;
+}
+
+function renderMessageTypeWhitelistState() {
+    const stateEl = document.getElementById('messageTypeWhitelistState');
+    if (!stateEl) return;
+
+    if (!window.messageProcessor
+        || typeof window.messageProcessor.getEffectiveMessageTypeWhitelist !== 'function'
+        || typeof window.messageProcessor.getSystemMessageTypeWhitelist !== 'function'
+    ) {
+        stateEl.textContent = '当前版本不支持消息类型白名单';
+        MESSAGE_TYPE_WHITELIST_CONFIGS.forEach(({ key }) => {
+            const node = document.getElementById(`messageTypeWhitelist_${key}`);
+            if (node) node.disabled = true;
+        });
+        renderMessageTypeWhitelistExplain({ unavailable: true, message: '当前版本不支持消息类型白名单说明。' });
+        return;
+    }
+
+    const { scope, clientId } = getRuleContext();
+    if (scope === 'client' && !clientId) {
+        stateEl.textContent = '请选择目标客户后再设置客户专属消息类型白名单';
+        MESSAGE_TYPE_WHITELIST_CONFIGS.forEach(({ key }) => {
+            const node = document.getElementById(`messageTypeWhitelist_${key}`);
+            if (node) node.disabled = true;
+        });
+        renderMessageTypeWhitelistExplain({ unavailable: true, message: '当前是客户层，但未选择客户。' });
+        return;
+    }
+
+    const systemProfile = window.messageProcessor.getSystemRuleProfile
+        ? window.messageProcessor.getSystemRuleProfile()
+        : {};
+    const globalProfile = window.messageProcessor.getGlobalRuleProfile
+        ? window.messageProcessor.getGlobalRuleProfile()
+        : {};
+    const clientProfile = clientId && window.messageProcessor.getClientRuleProfile
+        ? window.messageProcessor.getClientRuleProfile(clientId)
+        : {};
+    const systemWhitelist = systemProfile && systemProfile.messageTypeWhitelist
+        ? systemProfile.messageTypeWhitelist
+        : (window.messageProcessor.getSystemMessageTypeWhitelist() || {});
+    const globalWhitelist = globalProfile && globalProfile.messageTypeWhitelist
+        ? globalProfile.messageTypeWhitelist
+        : {};
+    const clientWhitelist = clientProfile && clientProfile.messageTypeWhitelist
+        ? clientProfile.messageTypeWhitelist
+        : {};
+    const scopedWhitelist = scope === 'client' ? clientWhitelist : globalWhitelist;
+    const effectiveWhitelist = window.messageProcessor.getEffectiveMessageTypeWhitelist(clientId || '');
+
+    MESSAGE_TYPE_WHITELIST_CONFIGS.forEach(({ key }) => {
+        const node = document.getElementById(`messageTypeWhitelist_${key}`);
+        if (!node) return;
+        node.disabled = false;
+        if (document.activeElement !== node) {
+            const scopedValue = Object.prototype.hasOwnProperty.call(scopedWhitelist, key)
+                ? scopedWhitelist[key]
+                : effectiveWhitelist[key] !== false;
+            node.checked = scopedValue !== false;
+        }
+    });
+
+    const currentDraft = collectMessageTypeWhitelistInputs();
+    const enabledCount = MESSAGE_TYPE_WHITELIST_CONFIGS.reduce((sum, item) => sum + (effectiveWhitelist[item.key] !== false ? 1 : 0), 0);
+    const scopedCount = MESSAGE_TYPE_WHITELIST_CONFIGS.reduce((sum, item) => (
+        sum + (Object.prototype.hasOwnProperty.call(scopedWhitelist, item.key) ? 1 : 0)
+    ), 0);
+    const changedDraftCount = MESSAGE_TYPE_WHITELIST_CONFIGS.reduce((sum, item) => {
+        const effectiveValue = effectiveWhitelist[item.key] !== false;
+        return sum + ((currentDraft[item.key] !== effectiveValue) ? 1 : 0);
+    }, 0);
+
+    const lines = MESSAGE_TYPE_WHITELIST_CONFIGS.map((item) => {
+        const effectiveValue = effectiveWhitelist[item.key] !== false;
+        let source = 'system';
+        if (clientId && Object.prototype.hasOwnProperty.call(clientWhitelist, item.key)) {
+            source = 'client';
+        } else if (Object.prototype.hasOwnProperty.call(globalWhitelist, item.key)) {
+            source = 'global';
+        } else if (Object.prototype.hasOwnProperty.call(systemWhitelist, item.key)) {
+            source = 'system';
+        }
+        return `${item.title}：${effectiveValue ? '已开启' : '已关闭'}（来源：${getAnchorRuleSourceLabel(source)}）`;
+    });
+
+    const scopedTip = scopedCount > 0
+        ? `本层已显式设置 ${scopedCount} 项。`
+        : '本层未单独设置，继承上层与系统默认。';
+    const draftTip = changedDraftCount > 0 ? ` 当前有 ${changedDraftCount} 项改动待保存。` : '';
+    stateEl.textContent = `当前生效：${enabledCount}/${MESSAGE_TYPE_WHITELIST_CONFIGS.length} 类安全写法已开启。${scopedTip}${draftTip}`;
+    renderMessageTypeWhitelistExplain({ lines });
+}
+
 function saveAttributeCombinePolicyRule() {
     try {
         if (!window.messageProcessor || typeof window.messageProcessor.setAttributeCombinePolicy !== 'function') {
@@ -6486,6 +6795,7 @@ function saveAttributeCombinePolicyRule() {
         renderAttributeCombinePolicyState();
         renderRegionAccountingPolicyState();
         renderBlockedPlayKeywordState();
+        renderMessageTypeWhitelistState();
         previewMessage({ silent: true });
         showSuccess(`${getScopeDisplayName(scope)}属性叠加策略已保存：${getAttributeCombinePolicyLabel(policy)}`);
         if (scope === 'global') {
@@ -6517,6 +6827,7 @@ function saveRegionAccountingPolicyRule() {
         }
         renderRegionAccountingPolicyState();
         renderBlockedPlayKeywordState();
+        renderMessageTypeWhitelistState();
         previewMessage({ silent: true });
         showSuccess(`${getScopeDisplayName(scope)}盘口规则已保存：${getRegionAccountingModeLabel(saved.mode)}，默认盘口 ${window.userManager && typeof window.userManager.getRegionLabel === 'function' ? window.userManager.getRegionLabel(saved.defaultRegion) : saved.defaultRegion}`);
     } catch (error) {
@@ -6536,6 +6847,7 @@ function resetAttributeCombinePolicyRule() {
         renderAttributeCombinePolicyState();
         renderRegionAccountingPolicyState();
         renderBlockedPlayKeywordState();
+        renderMessageTypeWhitelistState();
         previewMessage({ silent: true });
         showSuccess(`${getScopeDisplayName(scope)}层属性叠加策略已恢复默认`);
     } catch (error) {
@@ -6558,6 +6870,7 @@ function resetRegionAccountingPolicyRule() {
         }
         renderRegionAccountingPolicyState();
         renderBlockedPlayKeywordState();
+        renderMessageTypeWhitelistState();
         previewMessage({ silent: true });
         showSuccess(`${getScopeDisplayName(scope)}层盘口规则已恢复默认`);
     } catch (error) {
@@ -6595,6 +6908,7 @@ function saveBlockedPlayKeywordRule() {
             window.userManager.renderAllSections();
         }
         renderBlockedPlayKeywordState();
+        renderMessageTypeWhitelistState();
         previewMessage({ silent: true });
         const pingteCount = Array.isArray(saved && saved.pingte_xiao) ? saved.pingte_xiao.length : 0;
         const lianCount = Array.isArray(saved && saved.lian_play) ? saved.lian_play.length : 0;
@@ -6618,10 +6932,53 @@ function resetBlockedPlayKeywordRule() {
             window.userManager.renderAllSections();
         }
         renderBlockedPlayKeywordState();
+        renderMessageTypeWhitelistState();
         previewMessage({ silent: true });
         showSuccess(`${getScopeDisplayName(scope)}层未开放玩法关键词已恢复默认`);
     } catch (error) {
         showError('恢复玩法关键词失败', error.message || '未知错误');
+    }
+}
+
+function saveMessageTypeWhitelistRule() {
+    try {
+        if (!window.messageProcessor || typeof window.messageProcessor.setMessageTypeWhitelist !== 'function') {
+            throw new Error('当前版本不支持消息类型白名单');
+        }
+        const { scope, clientId } = getRuleContext({ requireClientForClientScope: true });
+        const whitelistMap = collectMessageTypeWhitelistInputs();
+        const saved = window.messageProcessor.setMessageTypeWhitelist(whitelistMap, { scope, clientId });
+        recalculateAllUsersByRuleChange();
+        if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
+            window.userManager.renderAllSections();
+        }
+        renderMessageTypeWhitelistState();
+        previewMessage({ silent: true });
+        const enabledCount = MESSAGE_TYPE_WHITELIST_CONFIGS.reduce((sum, item) => sum + (saved[item.key] !== false ? 1 : 0), 0);
+        showSuccess(`${getScopeDisplayName(scope)}消息类型白名单已保存：开启 ${enabledCount}/${MESSAGE_TYPE_WHITELIST_CONFIGS.length} 类`);
+    } catch (error) {
+        showError('保存消息类型白名单失败', error.message || '未知错误');
+    }
+}
+
+function resetMessageTypeWhitelistRule() {
+    try {
+        if (!window.messageProcessor || typeof window.messageProcessor.clearMessageTypeWhitelist !== 'function') {
+            throw new Error('当前版本不支持恢复消息类型白名单');
+        }
+        const { scope, clientId } = getRuleContext({ requireClientForClientScope: true });
+        const ok = confirm(`确定恢复${getScopeDisplayName(scope)}层的消息类型白名单为上层默认吗？`);
+        if (!ok) return;
+        window.messageProcessor.clearMessageTypeWhitelist({ scope, clientId });
+        recalculateAllUsersByRuleChange();
+        if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
+            window.userManager.renderAllSections();
+        }
+        renderMessageTypeWhitelistState();
+        previewMessage({ silent: true });
+        showSuccess(`${getScopeDisplayName(scope)}层消息类型白名单已恢复默认`);
+    } catch (error) {
+        showError('恢复消息类型白名单失败', error.message || '未知错误');
     }
 }
 
@@ -6740,6 +7097,7 @@ function applyUndeterminedAnchorModeChoice(ambiguity, optionId, fallbackClientId
     renderAttributeCombinePolicyState();
     renderRegionAccountingPolicyState();
     renderBlockedPlayKeywordState();
+    renderMessageTypeWhitelistState();
 }
 
 function openAmbiguityChoiceModal(ambiguity) {
@@ -7234,6 +7592,7 @@ function setupRecognizeMessageInput() {
         clearMessageLineError();
         syncRecognizeMessageAutoHeight();
         renderMessageLineNumbers();
+        syncRecognizeRegionSelectionFromMessage(messageTextarea.value);
         scheduleRealtimePreview();
     });
     messageTextarea.addEventListener('focus', () => {
@@ -7258,6 +7617,7 @@ function setupRecognizeMessageInput() {
             normalizeMessageTextareaWhitespace(messageTextarea, { preserveSelection: true });
             syncRecognizeMessageAutoHeight();
             renderMessageLineNumbers();
+            syncRecognizeRegionSelectionFromMessage(messageTextarea.value);
             previewMessage({ silent: true, realtime: true });
         }, 0);
     });
@@ -7276,6 +7636,7 @@ function setupRecognizeMessageInput() {
 
     syncRecognizeMessageAutoHeight();
     renderMessageLineNumbers();
+    syncRecognizeRegionSelectionFromMessage(messageTextarea.value);
     syncLineNumbersScroll();
     updateOcrHint();
 }
@@ -7779,6 +8140,7 @@ function applyRecognizeMessageText(nextText) {
     messageTextarea.focus();
     messageTextarea.setSelectionRange(messageTextarea.value.length, messageTextarea.value.length);
     renderMessageLineNumbers();
+    syncRecognizeRegionSelectionFromMessage(messageTextarea.value);
 }
 
 async function tryEnhanceOcrCandidatesWithLocalAi(rankedCandidates) {
@@ -8613,6 +8975,7 @@ async function pullClipboardSnapshotOnce() {
         clearMessageLineError();
         syncRecognizeMessageAutoHeight();
         renderMessageLineNumbers();
+        syncRecognizeRegionSelectionFromMessage(messageTextarea.value);
         previewMessage({ silent: true });
     } catch (error) {
         // ignore clipboard snapshot failures
@@ -8718,6 +9081,78 @@ function getActiveRecognizeRegionKey() {
         return window.userManager.getActiveRegion() || 'new_ao';
     }
     return 'new_ao';
+}
+
+function normalizeRecognizeDetectedRegionKeys(regionKeys = []) {
+    const rawKeys = Array.isArray(regionKeys) ? regionKeys : [];
+    const validKeys = window.userManager && typeof window.userManager.getRegionOptions === 'function'
+        ? window.userManager.getRegionOptions()
+            .map((item) => String(item && item.key ? item.key : '').trim())
+            .filter(Boolean)
+        : ['new_ao', 'old_ao', 'hongkong'];
+    const validKeySet = new Set(validKeys);
+    return Array.from(new Set(
+        rawKeys
+            .map((key) => String(key || '').trim())
+            .filter((key) => validKeySet.has(key))
+    ));
+}
+
+function detectRecognizeMessageRegionKeys(message = '') {
+    const text = String(message || '');
+    if (!text.trim()) return [];
+    if (!window.messageProcessor
+        || typeof window.messageProcessor.getRegionMarkerRegex !== 'function'
+        || typeof window.messageProcessor.resolveRegionFromToken !== 'function') {
+        return [];
+    }
+
+    try {
+        const markerRegex = window.messageProcessor.getRegionMarkerRegex(true);
+        if (!(markerRegex instanceof RegExp)) return [];
+        markerRegex.lastIndex = 0;
+        const matchedRegionKeys = [];
+        let match = null;
+        while ((match = markerRegex.exec(text)) !== null) {
+            const token = String(match[0] || '').trim();
+            const regionKey = String(window.messageProcessor.resolveRegionFromToken(token, '') || '').trim();
+            if (regionKey) {
+                matchedRegionKeys.push(regionKey);
+            }
+            if (!match[0]) {
+                markerRegex.lastIndex += 1;
+            }
+        }
+        return normalizeRecognizeDetectedRegionKeys(matchedRegionKeys);
+    } catch (error) {
+        return [];
+    }
+}
+
+function syncRecognizeRegionSelectionFromMessage(message = null, options = {}) {
+    const messageTextarea = document.getElementById('message');
+    const rawMessage = typeof message === 'string'
+        ? message
+        : (messageTextarea ? String(messageTextarea.value || '') : '');
+    const detectedRegionKeys = detectRecognizeMessageRegionKeys(rawMessage);
+    recognizeDetectedRegionKeys = detectedRegionKeys;
+
+    if (detectedRegionKeys.length === 1
+        && window.userManager
+        && typeof window.userManager.setActiveRegion === 'function') {
+        const nextRegionKey = detectedRegionKeys[0];
+        const currentRegionKey = typeof window.userManager.getActiveRegion === 'function'
+            ? window.userManager.getActiveRegion()
+            : '';
+        if (currentRegionKey !== nextRegionKey) {
+            window.userManager.setActiveRegion(nextRegionKey);
+        }
+    }
+
+    if (!options || options.skipRender !== true) {
+        renderRecognizeRegionButtons();
+    }
+    return detectedRegionKeys;
 }
 
 function extractRegionKeysForDuplicate(message, clientId = '') {
@@ -9043,6 +9478,7 @@ async function handleClipboardTextChanged(payload) {
     clearMessageLineError();
     syncRecognizeMessageAutoHeight();
     renderMessageLineNumbers();
+    syncRecognizeRegionSelectionFromMessage(messageTextarea.value);
     previewMessage({ silent: true });
 }
 
@@ -9056,6 +9492,7 @@ function updateMessageWithAttributeIntersection() {
         messageTextarea.value = '';
         syncRecognizeMessageAutoHeight();
         renderMessageLineNumbers();
+        syncRecognizeRegionSelectionFromMessage('');
         return;
     }
 
@@ -9075,10 +9512,12 @@ function updateMessageWithAttributeIntersection() {
     messageTextarea.value = formatted;
     syncRecognizeMessageAutoHeight();
     renderMessageLineNumbers();
+    syncRecognizeRegionSelectionFromMessage(messageTextarea.value);
 }
 
 function resetRecognizeModalState() {
     selectedAttributes.clear();
+    recognizeDetectedRegionKeys = [];
     renderAttributePicker();
     const messageTextarea = document.getElementById('message');
     const resultElement = document.getElementById('result');
@@ -9110,6 +9549,7 @@ function resetRecognizeModalState() {
     }
     closeAnchorRuleDrawer();
     clearOcrImage();
+    renderRecognizeRegionButtons();
 }
 
 // 应用初始化
@@ -9147,12 +9587,17 @@ function renderRecognizeRegionButtons() {
 
     container.innerHTML = '';
     const regions = window.userManager.getRegionOptions();
+    const activeRegionKey = window.userManager.getActiveRegion && window.userManager.getActiveRegion();
+    const detectedRegionKeySet = new Set(normalizeRecognizeDetectedRegionKeys(recognizeDetectedRegionKeys));
     regions.forEach(region => {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'region-chip';
         button.textContent = region.label;
-        if (window.userManager.getActiveRegion && window.userManager.getActiveRegion() === region.key) {
+        const shouldHighlight = detectedRegionKeySet.size > 0
+            ? detectedRegionKeySet.has(region.key)
+            : activeRegionKey === region.key;
+        if (shouldHighlight) {
             button.classList.add('active');
         }
         button.onclick = () => {
@@ -9278,9 +9723,11 @@ function getCurrentSettlementScopeUsers() {
         }
     }
     const manager = window.userManager;
-    const selectedUsers = manager && typeof manager.getSelectedUsers === 'function'
-        ? manager.getSelectedUsers()
-        : [];
+    const selectedUsers = manager && typeof manager.getScopeUsers === 'function'
+        ? manager.getScopeUsers()
+        : (manager && typeof manager.getSelectedUsers === 'function'
+            ? manager.getSelectedUsers()
+            : []);
     return {
         users: Array.isArray(selectedUsers) ? selectedUsers : [],
         scopeLabel: '当前选择客户范围'
@@ -9408,8 +9855,50 @@ function refreshRegionPnlPanel() {
     const summary = document.getElementById('regionPnlSummary');
     if (!head || !rows || !summary) return;
 
+    const renderOverviewMessage = (contextText, message) => {
+        summary.className = 'region-pnl-overview is-empty';
+        summary.innerHTML = `
+            <div class="region-pnl-overview-context">${escapeHtml(contextText)}</div>
+            <div class="region-pnl-overview-note">${escapeHtml(message)}</div>
+        `;
+    };
+
+    const renderOverviewResult = ({ contextText, computedCount, totalStake, totalPayout, totalRebate, totalPnl }) => {
+        const summaryClass = Math.abs(totalPnl) < 1e-9 ? 'even' : (totalPnl > 0 ? 'profit' : 'loss');
+        summary.className = 'region-pnl-overview';
+        summary.innerHTML = `
+            <div class="region-pnl-overview-context">${escapeHtml(contextText)}</div>
+            <div class="region-pnl-overview-head">
+                <span class="region-pnl-overview-count">已计算 ${computedCount} 个盘口</span>
+            </div>
+            <div class="region-pnl-overview-metrics">
+                <span class="region-pnl-overview-metric">
+                    <span class="region-pnl-overview-metric-label">总注</span>
+                    <span class="region-pnl-overview-metric-value">${escapeHtml(formatNumericAmount(totalStake))}</span>
+                </span>
+                <span class="region-pnl-overview-metric">
+                    <span class="region-pnl-overview-metric-label">总派彩</span>
+                    <span class="region-pnl-overview-metric-value">${escapeHtml(formatNumericAmount(totalPayout))}</span>
+                </span>
+                <span class="region-pnl-overview-metric">
+                    <span class="region-pnl-overview-metric-label">总返水</span>
+                    <span class="region-pnl-overview-metric-value">${escapeHtml(formatNumericAmount(totalRebate))}</span>
+                </span>
+            </div>
+            <div class="region-pnl-overview-total">
+                <span class="region-pnl-overview-total-label">合计盈亏</span>
+                <span class="region-pnl-overview-total-value ${summaryClass}">${escapeHtml(formatSignedAmount(totalPnl))}</span>
+            </div>
+        `;
+    };
+
     const scopeInfo = getCurrentSettlementScopeUsers();
     head.textContent = '盘口庄家盈亏（按客户赔率/返水结算）';
+    const manager = window.userManager;
+    const viewRegionLabels = manager && typeof manager.getViewRegionLabels === 'function'
+        ? manager.getViewRegionLabels()
+        : [];
+    const contextText = `当前范围：${String(scopeInfo && scopeInfo.scopeLabel ? scopeInfo.scopeLabel : '未选择客户')}｜查看盘口：${(Array.isArray(viewRegionLabels) && viewRegionLabels.length > 0 ? viewRegionLabels.join('、') : '未选择盘口')}`;
 
     const regionOptions = window.userManager && typeof window.userManager.getRegionOptions === 'function'
         ? window.userManager.getRegionOptions()
@@ -9421,7 +9910,7 @@ function refreshRegionPnlPanel() {
 
     rows.innerHTML = '';
     if (!Array.isArray(scopeInfo.users) || scopeInfo.users.length <= 0) {
-        summary.textContent = '请先选择至少一个客户后再查看庄家盈亏。';
+        renderOverviewMessage(contextText, '请先选择至少一个客户后再查看庄家盈亏。');
         return;
     }
 
@@ -9502,14 +9991,20 @@ function refreshRegionPnlPanel() {
 
     saveRegionWinningNumbersPreference();
     if (computedCount === 0) {
-        summary.textContent = invalidCount > 0
+        renderOverviewMessage(contextText, invalidCount > 0
             ? `当前范围总注 ${formatNumericAmount(visibleStakeTotal)}，总返水 ${formatNumericAmount(visibleRebateTotal)}；存在无效中奖号，请输入 01-49。`
-            : `当前范围总注 ${formatNumericAmount(visibleStakeTotal)}，总返水 ${formatNumericAmount(visibleRebateTotal)}；输入中奖号后可继续计算派彩与盈亏。`;
+            : `当前范围总注 ${formatNumericAmount(visibleStakeTotal)}，总返水 ${formatNumericAmount(visibleRebateTotal)}；输入中奖号后可继续计算派彩与盈亏。`);
         return;
     }
 
-    const summaryClass = Math.abs(totalPnl) < 1e-9 ? 'even' : (totalPnl > 0 ? 'profit' : 'loss');
-    summary.innerHTML = `已计算 ${computedCount} 个盘口：总注 ${formatNumericAmount(totalStake)}，总派彩 ${formatNumericAmount(totalPayout)}，总返水 ${formatNumericAmount(totalRebate)}，<span class="region-pnl-status ${summaryClass}">合计盈亏 ${formatSignedAmount(totalPnl)}</span>`;
+    renderOverviewResult({
+        contextText,
+        computedCount,
+        totalStake,
+        totalPayout,
+        totalRebate,
+        totalPnl
+    });
 }
 
 // 设置事件监听器
@@ -9550,6 +10045,7 @@ function setupEventListeners() {
             renderAttributeCombinePolicyState();
             renderRegionAccountingPolicyState();
             renderBlockedPlayKeywordState();
+            renderMessageTypeWhitelistState();
             if (window.userManager
                 && typeof window.userManager.hasIncompletePayoutData === 'function'
                 && window.userManager.hasIncompletePayoutData()
@@ -9600,6 +10096,7 @@ function setupEventListeners() {
             renderAttributeCombinePolicyState();
             renderRegionAccountingPolicyState();
             renderBlockedPlayKeywordState();
+            renderMessageTypeWhitelistState();
             if (window.userManager && typeof window.userManager.syncStoredUserParsePreferencesToRules === 'function') {
                 window.userManager.syncStoredUserParsePreferencesToRules();
             }
@@ -9909,14 +10406,18 @@ function handleSummary() {
             showError('汇总失败', '当前没有客户可汇总');
             return;
         }
-        if (userManager && typeof userManager.setMultiSelectEnabled === 'function') {
-            userManager.setMultiSelectEnabled(true);
+        if (userManager && typeof userManager.setScopeMode === 'function') {
+            userManager.setScopeMode('all');
+        } else {
+            if (userManager && typeof userManager.setMultiSelectEnabled === 'function') {
+                userManager.setMultiSelectEnabled(true);
+            }
+            if (userManager && typeof userManager.setSelectedUsers === 'function') {
+                userManager.setSelectedUsers(sortedUsers);
+            }
+            userManager.setSummaryMode(true);
         }
-        if (userManager && typeof userManager.setSelectedUsers === 'function') {
-            userManager.setSelectedUsers(sortedUsers);
-        }
-        userManager.setSummaryMode(true);
-        console.log('进入汇总模式');
+        console.log('进入全部客户范围');
     } catch (error) {
         showError('汇总失败', error.message);
     }
@@ -9929,13 +10430,20 @@ function handleOriginalDataSearchInput(value) {
     window.userManager.setOriginalDataSearchKeyword(value);
 }
 
+function handleUserSearchInput(value) {
+    if (!window.userManager || typeof window.userManager.setUserSearchKeyword !== 'function') {
+        return;
+    }
+    window.userManager.setUserSearchKeyword(value);
+}
+
 // 清空用户数据
 function clearUserData() {
     try {
         if (userManager && typeof userManager.clearCurrentUserData === 'function') {
             const result = userManager.clearCurrentUserData();
             if (result && result.cleared) {
-                showSuccess(`客户 ${result.userName} 数据已清空（偏好保留）`);
+                showSuccess(`客户 ${result.userName} 的投注数据已清空（设置保留）`);
             }
             return;
         }
@@ -9945,7 +10453,7 @@ function clearUserData() {
             : false;
         if (cleared) {
             clearClipboardDupLedger();
-            showSuccess('所有客户数据已清空');
+            showSuccess('所有客户投注数据已清空');
         }
     } catch (error) {
         showError('清空失败', error.message);
@@ -10031,7 +10539,7 @@ function clampMainUserWidth(width) {
     const splitter1 = getMainSplitterWidth(mainResizerUser, 12);
     const splitter2 = getMainSplitterWidth(mainResizerMiddle, 12);
     const minUser = window.innerWidth <= 1280 ? 220 : 240;
-    const minMiddle = window.innerWidth <= 1280 ? 280 : 340;
+    const minMiddle = 60;
     const minRight = window.innerWidth <= 1280 ? 500 : 560;
     const maxUser = Math.max(minUser, totalWidth - splitter1 - splitter2 - minMiddle - minRight);
     return Math.min(Math.max(width, minUser), maxUser);
@@ -10045,7 +10553,7 @@ function clampMainMiddleWidth(width) {
     const userWidth = userPanel.getBoundingClientRect().width;
     const splitter1 = getMainSplitterWidth(mainResizerUser, 12);
     const splitter2 = getMainSplitterWidth(mainResizerMiddle, 12);
-    const minMiddle = window.innerWidth <= 1280 ? 280 : 340;
+    const minMiddle = 60;
     const minRight = window.innerWidth <= 1280 ? 500 : 560;
     const maxMiddle = Math.max(minMiddle, totalWidth - splitter1 - splitter2 - userWidth - minRight);
     return Math.min(Math.max(width, minMiddle), maxMiddle);
@@ -10200,6 +10708,7 @@ function bindMainSplitResizer(config = {}) {
     const applyWidth = typeof config.applyWidth === 'function' ? config.applyWidth : null;
     const storageKey = String(config.storageKey || '').trim();
     const reset = typeof config.reset === 'function' ? config.reset : null;
+    const deltaDirection = Number(config.deltaDirection) === -1 ? -1 : 1;
     if (!resizer || !container || !getWidth || !applyWidth || !storageKey) return;
     if (resizer.dataset.bound === '1') return;
     resizer.dataset.bound = '1';
@@ -10247,7 +10756,7 @@ function bindMainSplitResizer(config = {}) {
     resizer.addEventListener('pointermove', (event) => {
         if (!dragState.active || dragState.pointerId !== event.pointerId) return;
         const delta = event.clientX - dragState.startX;
-        applyWidth(dragState.startWidth + delta);
+        applyWidth(dragState.startWidth + (delta * deltaDirection));
     });
 
     resizer.addEventListener('pointerup', stopDrag);
@@ -10295,6 +10804,7 @@ function initMainLayoutResizers() {
         container: mainContent,
         getWidth: () => (leftPanel ? leftPanel.getBoundingClientRect().width : 0),
         applyWidth: applyMainMiddleWidth,
+        deltaDirection: -1,
         storageKey: MAIN_SPLIT_MIDDLE_WIDTH_KEY,
         reset: () => {
             mainContent.style.removeProperty('--main-middle-width');
@@ -10806,6 +11316,7 @@ function toggleRecognizeSideGroup(groupKey) {
             renderAttributeCombinePolicyState();
             renderRegionAccountingPolicyState();
             renderBlockedPlayKeywordState();
+            renderMessageTypeWhitelistState();
         } else if (groupKey === 'anchors') {
             renderDefaultOddsState();
             renderAnchorParseModeState();
@@ -10874,6 +11385,7 @@ function openOriginalDataEditInRecognize(payload = {}) {
         messageTextarea.focus();
         messageTextarea.setSelectionRange(messageTextarea.value.length, messageTextarea.value.length);
     }
+    syncRecognizeRegionSelectionFromMessage(message);
     clearMessageLineError();
     renderMessageLineNumbers();
     Promise.resolve(previewMessage({ silent: true })).finally(() => {
@@ -10902,9 +11414,9 @@ function openModal(modalType, options = {}) {
         if (!options.keepActiveRegion && window.userManager && typeof window.userManager.setActiveRegion === 'function') {
             window.userManager.setActiveRegion('new_ao');
         }
+        resetRecognizeModalState();
         renderRecognizeRegionButtons();
         applyRecognizeAttributePanelVisible(recognizeAttributePanelVisible);
-        resetRecognizeModalState();
         syncRecognizeModalActionMode();
     }
 
@@ -11206,6 +11718,18 @@ function focusRecognizeMessageLine(encodedLineNo) {
     return true;
 }
 
+function handleRecognizeGoEditLine(encodedLineNo) {
+    if (focusRecognizeMessageLine(encodedLineNo)) {
+        return;
+    }
+    const lineNo = Number.parseInt(decodeRecognizeActionArg(encodedLineNo), 10);
+    if (Number.isFinite(lineNo) && lineNo > 0) {
+        showError('定位失败', `无法定位第 ${lineNo} 行原始消息`);
+        return;
+    }
+    showError('定位失败', '当前内容没有可定位的原始消息');
+}
+
 function replaceRecognizeMessageLine(lineNo, nextText) {
     const textarea = document.getElementById('message');
     if (!textarea) return false;
@@ -11219,6 +11743,7 @@ function replaceRecognizeMessageLine(lineNo, nextText) {
     textarea.value = lines.join('\n');
     syncRecognizeMessageAutoHeight();
     renderMessageLineNumbers();
+    syncRecognizeRegionSelectionFromMessage(textarea.value);
     focusRecognizeMessageLine(normalizedLineNo);
     previewMessage({ silent: true });
     return true;
@@ -11438,12 +11963,21 @@ function formatRecognizePreviewLineLabel(lineNo, fallback = '未定位') {
 }
 
 function renderRecognizePreviewSourceCell(row) {
+    const lineNo = Number.parseInt(row && row.lineNo, 10);
+    const canLocate = Number.isFinite(lineNo) && lineNo > 0;
     return `
         <div class="recognize-preview-source-cell">
             <div class="recognize-preview-source-meta">
                 <span class="recognize-preview-line-tag">${escapeHtml(formatRecognizePreviewLineLabel(row && row.lineNo, '未定位段'))}</span>
             </div>
             ${renderCompareCellValue(row && row.sourceText, '（无法定位到原文）')}
+            <div class="recognize-preview-source-actions">
+                <button
+                    type="button"
+                    class="parse-issue-action-button"
+                    ${canLocate ? `onclick="handleRecognizeGoEditLine('${encodeRecognizeActionArg(lineNo)}'); return false;"` : 'disabled'}
+                >去修改</button>
+            </div>
         </div>
     `;
 }
@@ -11924,6 +12458,7 @@ async function confirmEdit() {
             syncRecognizeMessageAutoHeight();
             messageTextarea.focus();
         }
+        syncRecognizeRegionSelectionFromMessage('');
         if (resultElement) {
             resultElement.innerHTML = '';
         }
@@ -11977,9 +12512,13 @@ function collectCurrentLotteryScopeData() {
         return { ok: false, reason: '用户管理器未就绪，请重试' };
     }
 
-    const inSummaryMode = typeof manager.isInSummaryMode === 'function'
-        ? manager.isInSummaryMode()
-        : false;
+    const scopeMode = typeof manager.getScopeMode === 'function'
+        ? manager.getScopeMode()
+        : ((typeof manager.isInSummaryMode === 'function' && manager.isInSummaryMode()) ? 'all' : 'single');
+    const inSummaryMode = scopeMode === 'all';
+    const scopeSummary = typeof manager.getScopeSummary === 'function'
+        ? manager.getScopeSummary()
+        : null;
     const viewRegions = typeof manager.getViewRegions === 'function'
         ? manager.getViewRegions()
         : ['new_ao'];
@@ -11987,10 +12526,13 @@ function collectCurrentLotteryScopeData() {
         ? manager.getViewRegionLabels()
         : viewRegions;
 
-    let scopedUsers = [];
-    if (inSummaryMode && typeof manager.getSortedUsers === 'function') {
+    let scopedUsers = typeof manager.getScopeUsers === 'function'
+        ? manager.getScopeUsers()
+        : [];
+    if ((!Array.isArray(scopedUsers) || scopedUsers.length <= 0) && inSummaryMode && typeof manager.getSortedUsers === 'function') {
         scopedUsers = manager.getSortedUsers();
-    } else if (typeof manager.getSelectedUsers === 'function') {
+    }
+    if ((!Array.isArray(scopedUsers) || scopedUsers.length <= 0) && typeof manager.getSelectedUsers === 'function') {
         scopedUsers = manager.getSelectedUsers();
     }
 
@@ -12018,7 +12560,9 @@ function collectCurrentLotteryScopeData() {
             viewRegions,
             viewRegionLabels,
             inSummaryMode,
-            scopeLabel: inSummaryMode ? '所有客户汇总范围' : '当前选择客户范围',
+            scopeLabel: scopeSummary && scopeSummary.panelLabel
+                ? scopeSummary.panelLabel
+                : (inSummaryMode ? '全部客户' : '当前选择客户范围'),
             exportedAt: new Date().toLocaleString('zh-CN')
         }
     };
@@ -12347,7 +12891,7 @@ function openHedgeReportModal() {
         if (scopeResult.ok) {
             const scope = scopeResult.scopeData;
             const usersLabel = scope.inSummaryMode
-                ? '所有客户汇总'
+                ? '全部客户'
                 : (Array.isArray(scope.users) ? scope.users.join('、') : '-');
             const regionsLabel = Array.isArray(scope.viewRegionLabels) ? scope.viewRegionLabels.join('、') : '-';
             scopeTextEl.textContent = `范围：${usersLabel}｜盘口：${regionsLabel}`;
@@ -12617,7 +13161,7 @@ function computeOriginalRowExportPnl(row, winningConfigs = {}) {
         orderTotal = null;
     }
 
-    let winLoss = '-';
+    let bankerOutcome = '-';
     let payoutValue = null;
     let rebateValue = Number.isFinite(orderTotal) ? Number(orderTotal) * settlement.rebateRatio : null;
     let pnlValue = null;
@@ -12625,17 +13169,25 @@ function computeOriginalRowExportPnl(row, winningConfigs = {}) {
 
     if (winning.numberText) {
         if (parseError) {
-            winLoss = '无法计算';
+            bankerOutcome = '无法计算';
         } else {
             const totalStake = Number.isFinite(orderTotal) ? Number(orderTotal) : parsedRegionTotal;
             payoutValue = payout;
             rebateValue = Number.isFinite(totalStake) ? totalStake * settlement.rebateRatio : null;
             pnlValue = totalStake - payout - (Number(rebateValue) || 0);
-            winLoss = hitStake > 0 ? '赢' : '输';
             computable = Number.isFinite(pnlValue);
+            if (computable) {
+                if (Math.abs(pnlValue) < 1e-9) {
+                    bankerOutcome = '打和';
+                } else if (pnlValue > 0) {
+                    bankerOutcome = '庄赢';
+                } else {
+                    bankerOutcome = '庄亏';
+                }
+            }
         }
     } else if (winning.error) {
-        winLoss = '中奖号无效';
+        bankerOutcome = '中奖号无效';
     }
 
     return {
@@ -12646,7 +13198,7 @@ function computeOriginalRowExportPnl(row, winningConfigs = {}) {
         rebate: rebateValue,
         payout: payoutValue,
         pnl: pnlValue,
-        winLoss,
+        bankerOutcome,
         winningNumber: winning.numberText || '',
         pnlComputable: computable
     };
@@ -12718,6 +13270,57 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
         })
         .filter(Boolean)
         .join('，') || '-';
+    const regionPnlRows = (viewRegions.length > 0 ? viewRegions : ['new_ao', 'old_ao', 'hongkong']).map((regionKey) => {
+        const config = winningConfigs[regionKey] || {};
+        const metrics = collectRegionPnlMetrics(regionKey, config.number, users);
+        let statusText = '待输入中奖号';
+        let statusClass = 'muted';
+        if (config.error) {
+            statusText = config.error;
+        } else if (Number.isInteger(config.number)) {
+            if (Math.abs(metrics.pnl) < 1e-9) {
+                statusText = '打和';
+                statusClass = 'pnl-even';
+            } else if (metrics.pnl > 0) {
+                statusText = '庄赢';
+                statusClass = 'pnl-profit';
+            } else {
+                statusText = '庄亏';
+                statusClass = 'pnl-loss';
+            }
+        }
+        return {
+            regionKey,
+            regionLabel: getExportRegionLabel(regionKey),
+            winningNumber: config.numberText || '-',
+            totalStake: metrics.totalStake,
+            hitStake: Number.isInteger(config.number) ? metrics.hitStake : null,
+            payout: Number.isInteger(config.number) ? metrics.payout : null,
+            rebate: metrics.rebate,
+            pnl: Number.isInteger(config.number) ? metrics.pnl : null,
+            statusText,
+            statusClass
+        };
+    });
+    const regionPnlRowsHtml = regionPnlRows.length > 0
+        ? regionPnlRows.map((row) => {
+            const pnlText = Number.isFinite(row.pnl) ? formatSignedAmount(row.pnl) : '-';
+            const hitText = Number.isFinite(row.hitStake) ? formatNumericAmount(row.hitStake) : '-';
+            const payoutText = Number.isFinite(row.payout) ? formatNumericAmount(row.payout) : '-';
+            return `
+            <tr>
+                <td>${escapeHtml(row.regionLabel || '-')}</td>
+                <td style="text-align:right">${escapeHtml(row.winningNumber || '-')}</td>
+                <td style="text-align:right">${escapeHtml(formatNumericAmount(row.totalStake))}</td>
+                <td style="text-align:right">${escapeHtml(hitText)}</td>
+                <td style="text-align:right">${escapeHtml(payoutText)}</td>
+                <td style="text-align:right">${escapeHtml(formatNumericAmount(row.rebate))}</td>
+                <td style="text-align:right" class="${escapeHtml(Number.isFinite(row.pnl) ? row.statusClass : 'muted')}">${escapeHtml(pnlText)}</td>
+                <td class="${escapeHtml(row.statusClass || 'muted')}">${escapeHtml(row.statusText || '-')}</td>
+            </tr>
+        `;
+        }).join('')
+        : '<tr><td colspan="8">暂无盘口庄家盈亏数据</td></tr>';
 
     const rowsWithWinning = exportOriginalRows.filter((item) => {
         const config = winningConfigs[item.regionKey];
@@ -12759,16 +13362,16 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
             const pnlClass = Number.isFinite(pnl)
                 ? (Math.abs(pnl) < 1e-9 ? 'pnl-even' : (pnl > 0 ? 'pnl-profit' : 'pnl-loss'))
                 : 'muted';
-            const winLossClass = item.winLoss === '赢'
+            const bankerOutcomeClass = item.bankerOutcome === '庄赢'
                 ? 'result-win'
-                : (item.winLoss === '输' ? 'result-loss' : 'muted');
+                : (item.bankerOutcome === '庄亏' ? 'result-loss' : 'muted');
             return `
             <tr>
                 <td style="text-align:right">${item.serialNo}</td>
                 <td>${escapeHtml(item.userName || '-')}</td>
                 <td>${escapeHtml(item.regionLabel || item.regionKey || '-')}</td>
                 <td style="text-align:right">${escapeHtml(item.winningNumber || '-')}</td>
-                <td class="${winLossClass}">${escapeHtml(item.winLoss || '-')}</td>
+                <td class="${bankerOutcomeClass}">${escapeHtml(item.bankerOutcome || '-')}</td>
                 <td style="text-align:right">${escapeHtml(totalText)}</td>
                 <td style="text-align:right">${escapeHtml(oddsText)}</td>
                 <td style="text-align:right">${escapeHtml(rebateText)}</td>
@@ -12783,7 +13386,7 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
     const originalSummaryRowHtml = hasWinningRows
         ? `
             <tr class="summary-row">
-                <td colspan="5">盈亏合计（${escapeHtml(`${computablePnlRows.length}/${rowsWithWinning.length}`)}）</td>
+                <td colspan="5">庄家盈亏合计（${escapeHtml(`${computablePnlRows.length}/${rowsWithWinning.length}`)}）</td>
                 <td style="text-align:right">${escapeHtml(computablePnlRows.length > 0 ? formatNumericAmount(totalOrderForPnl) : '-')}</td>
                 <td style="text-align:right">-</td>
                 <td style="text-align:right">${escapeHtml(computablePnlRows.length > 0 ? formatNumericAmount(totalRebateForPnl) : '-')}</td>
@@ -12818,23 +13421,32 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
   </style>
 </head>
 <body>
-  <h1>客户统计导出（${escapeHtml(formatLabel)}）</h1>
+    <h1>客户统计导出（${escapeHtml(formatLabel)}）</h1>
   <div class="meta">
     导出范围：${escapeHtml(scopeData.scopeLabel || '-')}<br>
     客户：${escapeHtml(users.join('，') || '-')}<br>
     查看盘口：${escapeHtml(regionLabels.join('、') || '-')}<br>
-    总数：${escapeHtml(scopeData.totalCount || 0)}<br>
+    结算口径：庄家盈亏 = 总注 - 派彩 - 返水<br>
+    当前范围总注：${escapeHtml(formatNumericAmount(scopeData.totalCount || 0))}<br>
     总返水：${escapeHtml(formatNumericAmount(totalRebateAll))}<br>
     中奖号：${escapeHtml(winningSummaryText)}<br>
-    总盈亏：<span class="${totalPnlMetaClass}">${escapeHtml(totalPnlMetaText)}</span><br>
-    盈亏计算条数：${escapeHtml(pnlCoverageMetaText)}<br>
+    庄家合计盈亏：<span class="${totalPnlMetaClass}">${escapeHtml(totalPnlMetaText)}</span><br>
+    庄家盈亏计算条数：${escapeHtml(pnlCoverageMetaText)}<br>
     导出时间：${escapeHtml(scopeData.exportedAt || new Date().toLocaleString('zh-CN'))}
   </div>
 
-  <h2>客户总数分布</h2>
+  <h2>庄家盈亏汇总</h2>
   <table>
     <thead>
-      <tr><th>客户</th><th>累计值</th><th>赔率</th><th>返水%</th></tr>
+      <tr><th>盘口</th><th>中奖号</th><th>当前总注</th><th>当前命中</th><th>当前派彩</th><th>当前返水</th><th>庄家盈亏</th><th>状态</th></tr>
+    </thead>
+    <tbody>${regionPnlRowsHtml}</tbody>
+  </table>
+
+  <h2>客户注额分布</h2>
+  <table>
+    <thead>
+      <tr><th>客户</th><th>当前总注</th><th>赔率</th><th>返水%</th></tr>
     </thead>
     <tbody>${userRowsHtml}</tbody>
   </table>
@@ -12855,10 +13467,10 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
     <tbody>${detailRowsHtml}</tbody>
   </table>
 
-  <h2>原始消息</h2>
+  <h2>原始消息结算明细（庄家视角）</h2>
   <table>
     <thead>
-      <tr><th>序号</th><th>客户</th><th>盘口</th><th>中奖号</th><th>输赢</th><th>本条总注</th><th>结算赔率</th><th>本条返水</th><th>本条派彩</th><th>本条盈亏</th><th>内容</th></tr>
+      <tr><th>序号</th><th>客户</th><th>盘口</th><th>中奖号</th><th>庄家结果</th><th>本条总注</th><th>结算赔率</th><th>本条返水</th><th>本条派彩</th><th>庄家本条盈亏</th><th>内容</th></tr>
     </thead>
     <tbody>${originalRowsHtml}${originalSummaryRowHtml}</tbody>
   </table>
@@ -13319,6 +13931,8 @@ window.saveRegionAccountingPolicyRule = saveRegionAccountingPolicyRule;
 window.resetRegionAccountingPolicyRule = resetRegionAccountingPolicyRule;
 window.saveBlockedPlayKeywordRule = saveBlockedPlayKeywordRule;
 window.resetBlockedPlayKeywordRule = resetBlockedPlayKeywordRule;
+window.saveMessageTypeWhitelistRule = saveMessageTypeWhitelistRule;
+window.resetMessageTypeWhitelistRule = resetMessageTypeWhitelistRule;
 window.saveDefaultOddsRule = saveDefaultOddsRule;
 window.resetDefaultOddsRule = resetDefaultOddsRule;
 window.confirmAmbiguityChoice = confirmAmbiguityChoice;
@@ -13348,6 +13962,7 @@ window.pickOcrImage = pickOcrImage;
 window.runOcrFromSelectedImage = runOcrFromSelectedImage;
 window.rewriteMessageWithLocalAi = rewriteMessageWithLocalAi;
 window.focusRecognizeMessageLine = focusRecognizeMessageLine;
+window.handleRecognizeGoEditLine = handleRecognizeGoEditLine;
 window.applyRecognizeSuggestedLineRewrite = applyRecognizeSuggestedLineRewrite;
 window.handleRecognizeQuickAddAnchor = handleRecognizeQuickAddAnchor;
 window.handleRecognizeQuickAddAmountUnit = handleRecognizeQuickAddAmountUnit;

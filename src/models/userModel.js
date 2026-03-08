@@ -469,6 +469,22 @@ class UserModel {
       });
       return safeMap;
     };
+    const sanitizeMessageTypeWhitelist = (rawWhitelist) => {
+      const safeMap = {};
+      const allowedKeys = [
+        'bulk_equals_groups',
+        'single_number_amount_shorthand',
+        'number_pair_with_explicit_anchor',
+        'implicit_amount_rewrite',
+        'composite_attribute_shorthand'
+      ];
+      if (!rawWhitelist || typeof rawWhitelist !== 'object') return safeMap;
+      allowedKeys.forEach((key) => {
+        if (typeof rawWhitelist[key] !== 'boolean') return;
+        safeMap[key] = rawWhitelist[key];
+      });
+      return safeMap;
+    };
     const isSupportedAnchorToken = (rawToken) => {
       const token = normalizeAnchorToken(rawToken);
       if (!token || token.length > 12) return false;
@@ -629,6 +645,11 @@ class UserModel {
       const blockedPlayKeywords = sanitizeBlockedPlayKeywordMap(profile.blockedPlayKeywords);
       if (Object.keys(blockedPlayKeywords).length > 0) {
         safeProfile.blockedPlayKeywords = blockedPlayKeywords;
+      }
+
+      const messageTypeWhitelist = sanitizeMessageTypeWhitelist(profile.messageTypeWhitelist);
+      if (Object.keys(messageTypeWhitelist).length > 0) {
+        safeProfile.messageTypeWhitelist = messageTypeWhitelist;
       }
 
       if (typeof profile.tailShorthandAsSeparateGroups === 'boolean') {

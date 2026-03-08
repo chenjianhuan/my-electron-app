@@ -9,12 +9,10 @@
 <body>
     <div class="top-menu">
         <div class="top-menu-primary">
-            <button onclick="openModal('recognize')">识别客户消息</button>
-            <button onclick="handleSummary()">所有客户汇总</button>
-            <button onclick="copyClientData()">复制客户统计</button>
-            <button onclick="exportClientDataDocument()">导出统计文档</button>
+            <button onclick="openModal('recognize')">消息识别</button>
+            <button onclick="copyClientData()">复制当前范围</button>
+            <button onclick="exportClientDataDocument()">导出当前范围</button>
             <button onclick="openHedgeReportModal()">吃单上报</button>
-            <button onclick="clearUserData()">清空客户数据</button>
         </div>
         <div class="top-menu-meta">
             <span id="planBadge" class="plan-badge">套餐: -</span>
@@ -22,54 +20,23 @@
         </div>
     </div>
 
-    <div class="dashboard-status-bar" style="display: none;">
-        <div class="dashboard-stat">
-            <span class="stat-label">客户数</span>
-            <span id="dashboardUserCount" class="stat-value">0</span>
-        </div>
-        <div class="dashboard-stat">
-            <span class="stat-label">总注</span>
-            <span id="dashboardTotalStake" class="stat-value">0</span>
-        </div>
-        <div class="dashboard-stat">
-            <span class="stat-label">查看盘口</span>
-            <span id="dashboardViewRegions" class="stat-value">-</span>
-        </div>
-        <div class="dashboard-stat">
-            <span class="stat-label">识别问题</span>
-            <span id="dashboardPreviewErrors" class="stat-value">0</span>
-        </div>
-        <div class="dashboard-stat save-state">
-            <span class="stat-label">保存状态</span>
-            <span id="dashboardSaveState" class="stat-value save-badge is-saved">已保存</span>
-        </div>
-    </div>
-
     <div class="main-content">
         <aside class="user-list panel-shell">
             <div class="panel-head">
                 <h3>客户列表</h3>
-                <span class="panel-head-hint">左侧维护客户赔率和返水</span>
             </div>
             <div class="panel-body">
                 <div class="user-add-row">
                     <input type="text" id="newUserName" placeholder="输入新客户名称">
                     <button onclick="addUser()">添加客户</button>
                 </div>
-                <div class="selection-mode-row">
-                    <span class="selection-mode-label">统计人数</span>
-                    <label class="mode-slider">
-                        <input id="multiSelectToggle" type="checkbox" onchange="userManager.setMultiSelectEnabled(this.checked)">
-                        <span class="mode-slider-track">
-                            <span class="mode-slider-label mode-single">单人</span>
-                            <span class="mode-slider-label mode-multi">多人</span>
-                            <span class="mode-slider-thumb"></span>
-                        </span>
-                    </label>
-                </div>
-                <div class="view-region-row">
-                    <span class="selection-mode-label">查看盘口</span>
-                    <div id="viewRegionGroup" class="region-chip-group"></div>
+                <div class="user-search-row">
+                    <input
+                        id="userSearchInput"
+                        type="text"
+                        placeholder="搜索客户名称"
+                        oninput="handleUserSearchInput(this.value)"
+                    >
                 </div>
                 <ul id="userList"></ul>
             </div>
@@ -77,46 +44,35 @@
 
         <div id="mainResizerUser" class="main-page-resizer" role="separator" aria-orientation="vertical" aria-label="调整左侧列表宽度"></div>
 
-        <section class="left-side panel-shell">
-            <div class="zodiac-compare-grid">
-                <section class="zodiac-panel">
-                    <div class="subpanel-shell panel-shell">
-                        <div class="subpanel-head">
-                            <h3 id="currentUser">当前客户: 无</h3>
-                        </div>
-                        <div class="section" id="section1"></div>
-                    </div>
-                </section>
-
-                <div id="zodiacResizer" class="main-page-resizer main-page-resizer-inner" role="separator" aria-orientation="vertical" aria-label="调整中间生肖对比宽度"></div>
-
-                <section class="zodiac-panel">
-                    <div class="subpanel-shell panel-shell">
-                        <div class="subpanel-head">
-                            <div class="title" id="summarySectionTitle">所有客户汇总</div>
-                        </div>
-                        <div class="section" id="section2"></div>
-                    </div>
-                </section>
-            </div>
-        </section>
-
-        <div id="mainResizerMiddle" class="main-page-resizer" role="separator" aria-orientation="vertical" aria-label="调整中间与右侧面板宽度"></div>
-
         <section class="right-side panel-shell">
             <div class="right-columns">
                 <section class="right-column right-column-rank">
                     <div class="right-column-head panel-head right-column-head-with-pnl">
-                        <div class="right-column-head-title-row">
-                            <h2 id="sortedResultsTitle">累计值排序</h2>
+                        <h3>结果总览</h3>
+                        <div id="regionPnlSummary" class="region-pnl-overview">输入新奥、老奥、香港中奖号后可按客户赔率和返水计算各盘口盈亏。</div>
+                        <div class="rank-control-grid">
+                            <div class="view-region-row rank-control-block">
+                                <span class="selection-mode-label">查看盘口</span>
+                                <div id="viewRegionGroup" class="region-chip-group"></div>
+                            </div>
+                            <div class="selection-mode-row rank-control-block">
+                                <span class="selection-mode-label">统计范围</span>
+                                <div class="scope-mode-group" role="group" aria-label="统计范围">
+                                    <button id="scopeModeSingleBtn" type="button" class="scope-mode-btn region-chip" onclick="userManager.setScopeMode('single')">单人</button>
+                                    <button id="scopeModeMultiBtn" type="button" class="scope-mode-btn region-chip" onclick="userManager.setScopeMode('multi')">多人</button>
+                                    <button id="scopeModeAllBtn" type="button" class="scope-mode-btn region-chip" onclick="userManager.setScopeMode('all')">全部</button>
+                                </div>
+                            </div>
                         </div>
                         <div class="region-pnl-panel">
                             <div id="regionPnlHead" class="region-pnl-head">盘口庄家盈亏</div>
                             <div id="regionPnlRows" class="region-pnl-rows"></div>
-                            <div id="regionPnlSummary" class="region-pnl-summary">输入新奥、老奥、香港中奖号后可按客户赔率和返水计算各盘口盈亏。</div>
                         </div>
                     </div>
                     <div class="right-column-body">
+                        <div class="rank-list-head">
+                            <h2 id="sortedResultsTitle">号码累计排行</h2>
+                        </div>
                         <ul id="sortedResults"></ul>
                     </div>
                 </section>
@@ -126,7 +82,7 @@
                 <section class="right-column right-column-original">
                     <div class="right-column-head panel-head">
                         <div class="original-data-head">
-                            <h3 id="originalDataTitle">原始数据列表</h3>
+                            <h3 id="originalDataTitle">原始消息</h3>
                             <div class="original-data-search-row">
                                 <input
                                     id="originalDataSearchInput"
@@ -142,6 +98,21 @@
                         <div class="original-data">
                             <ul id="originalDataList"></ul>
                         </div>
+                    </div>
+                </section>
+            </div>
+        </section>
+
+        <div id="mainResizerMiddle" class="main-page-resizer" role="separator" aria-orientation="vertical" aria-label="调整统计区与号码总览宽度"></div>
+
+        <section class="left-side panel-shell">
+            <div class="zodiac-compare-grid zodiac-single-grid">
+                <section class="zodiac-panel">
+                    <div class="subpanel-shell panel-shell">
+                        <div class="subpanel-head">
+                            <h3 id="currentUser">号码总览：未选择客户</h3>
+                        </div>
+                        <div class="section" id="section1"></div>
                     </div>
                 </section>
             </div>
@@ -301,6 +272,53 @@
                                     </div>
                                     <div id="blockedPlayKeywordState" class="anchor-policy-state"></div>
                                     <div id="blockedPlayKeywordExplain" class="anchor-policy-explain"></div>
+                                </div>
+                                <div class="anchor-console-card">
+                                    <div class="anchor-alias-title">消息类型白名单</div>
+                                    <div class="anchor-alias-subtitle">把系统当前默认支持的安全 shorthand 显式展示出来；你可以按全局或客户专属关闭某一类解析，减少误统风险。</div>
+                                    <div class="message-type-whitelist-list">
+                                        <label class="message-type-whitelist-item">
+                                            <input id="messageTypeWhitelist_bulk_equals_groups" type="checkbox">
+                                            <span class="message-type-whitelist-content">
+                                                <span class="message-type-whitelist-title">批量等号单</span>
+                                                <span class="message-type-whitelist-meta">例：02=150 04=35 08=35</span>
+                                            </span>
+                                        </label>
+                                        <label class="message-type-whitelist-item">
+                                            <input id="messageTypeWhitelist_single_number_amount_shorthand" type="checkbox">
+                                            <span class="message-type-whitelist-content">
+                                                <span class="message-type-whitelist-title">单号金额 shorthand</span>
+                                                <span class="message-type-whitelist-meta">例：09-80元 / 01*10块 / 01.10元</span>
+                                            </span>
+                                        </label>
+                                        <label class="message-type-whitelist-item">
+                                            <input id="messageTypeWhitelist_number_pair_with_explicit_anchor" type="checkbox">
+                                            <span class="message-type-whitelist-content">
+                                                <span class="message-type-whitelist-title">号码对 + 明确锚点</span>
+                                                <span class="message-type-whitelist-meta">例：11-23 各150 / 21-22 各50</span>
+                                            </span>
+                                        </label>
+                                        <label class="message-type-whitelist-item">
+                                            <input id="messageTypeWhitelist_implicit_amount_rewrite" type="checkbox">
+                                            <span class="message-type-whitelist-content">
+                                                <span class="message-type-whitelist-title">隐式金额补写</span>
+                                                <span class="message-type-whitelist-meta">例：35号15块 / 44 100块 / 26。二十</span>
+                                            </span>
+                                        </label>
+                                        <label class="message-type-whitelist-item">
+                                            <input id="messageTypeWhitelist_composite_attribute_shorthand" type="checkbox">
+                                            <span class="message-type-whitelist-content">
+                                                <span class="message-type-whitelist-title">组合属性 shorthand</span>
+                                                <span class="message-type-whitelist-meta">例：红蓝波的小单 / 0123头的单数</span>
+                                            </span>
+                                        </label>
+                                    </div>
+                                    <div class="anchor-alias-actions">
+                                        <button id="saveMessageTypeWhitelistBtn" class="confirm-button" type="button" onclick="saveMessageTypeWhitelistRule()">保存白名单</button>
+                                        <button id="resetMessageTypeWhitelistBtn" class="cancel-button" type="button" onclick="resetMessageTypeWhitelistRule()">恢复默认</button>
+                                    </div>
+                                    <div id="messageTypeWhitelistState" class="anchor-policy-state"></div>
+                                    <div id="messageTypeWhitelistExplain" class="anchor-policy-explain"></div>
                                 </div>
                             </div>
                         </section>
@@ -703,6 +721,10 @@
                     <div id="licenseFilePath">-</div>
                 </div>
                 <div class="license-field full-width">
+                    <label>离线授权设备码</label>
+                    <div id="licenseMachineFingerprint">-</div>
+                </div>
+                <div class="license-field full-width">
                     <label>状态说明</label>
                     <div id="licenseReason">-</div>
                 </div>
@@ -711,7 +733,13 @@
                     <div id="licenseLastUpdated">-</div>
                 </div>
             </div>
+            <div class="license-offline-box">
+                <div class="license-offline-title">离线授权协助</div>
+                <div id="licenseOfflineHint" class="license-offline-hint">可复制本机离线授权信息发给管理员签发。</div>
+                <div id="licenseOfflinePaths" class="license-offline-paths"></div>
+            </div>
             <div class="modal-buttons">
+                <button class="edit-button" onclick="copyOfflineLicenseRequest()">复制离线授权信息</button>
                 <button class="edit-button" onclick="refreshLicenseStatus()">刷新状态</button>
                 <button class="cancel-button" onclick="closeLicenseModal()">关闭</button>
             </div>
@@ -787,9 +815,9 @@
             <h3>软件使用说明</h3>
             <ol>
                 <li>先在左侧添加并选择客户；单人/多人模式可切换统计范围。</li>
-                <li>点击“识别客户消息”打开录入面板，输入原始消息后会自动解析预览，再点“添加”入库。</li>
+                <li>点击“消息识别”打开录入面板，输入原始消息后会自动解析预览，再点“添加”入库。</li>
                 <li>可在录入消息中写盘口关键字（如新奥/老奥/香港）；客户若设为“不分盘口”，则统一记到默认盘口。</li>
-                <li>右侧显示累计排序、各盘口盈亏与原始消息，可编辑/删除并自动重算。</li>
+                <li>右侧显示号码累计排行、各盘口盈亏与原始消息，可编辑/删除并自动重算。</li>
                 <li>识别页右侧支持号码属性、金额分配词、不入账规则、金额单位等配置，并可实时预览解析效果。</li>
                 <li>数据保存在本机，不上传云端。建议定期备份应用数据目录，避免设备故障导致数据丢失。</li>
             </ol>

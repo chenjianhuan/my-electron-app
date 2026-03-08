@@ -57,8 +57,8 @@ class MessageProcessor {
             '红波': [1, 2, 7, 8, 12, 13, 18, 19, 23, 24, 29, 30, 34, 35, 40, 45, 46],
             '蓝波': [3, 4, 9, 10, 14, 15, 20, 25, 26, 31, 36, 37, 41, 42, 47, 48],
             '绿波': [5, 6, 11, 16, 17, 21, 22, 27, 28, 32, 33, 38, 39, 43, 44, 49],
-            '家禽': [5, 7, 8, 9, 11, 12, 17, 19, 20, 21, 23, 24, 29, 31, 32, 33, 35, 36, 41, 43, 44, 45, 47, 48],
-            '野兽': [1, 2, 3, 4, 6, 10, 13, 14, 15, 16, 18, 22, 25, 26, 27, 28, 30, 34, 37, 38, 39, 40, 42, 46, 49],
+            '家禽': [1, 6, 8, 9, 10, 12, 13, 18, 20, 21, 22, 24, 25, 30, 32, 33, 34, 36, 37, 42, 44, 45, 46, 48, 49],
+            '野兽': [2, 3, 4, 5, 7, 11, 14, 15, 16, 17, 19, 23, 26, 27, 28, 29, 31, 35, 38, 39, 40, 41, 43, 47],
             '红单': [1, 7, 13, 19, 23, 29, 35, 45],
             '红双': [2, 8, 12, 18, 24, 30, 34, 40, 46],
             '蓝单': [3, 9, 15, 25, 31, 37, 41, 47],
@@ -283,6 +283,7 @@ class MessageProcessor {
             ambiguityPolicy: 'confirm',
             anchorParseMode: 'strict',
             blockedPlayKeywords: this.getSystemBlockedPlayKeywordMap(),
+            messageTypeWhitelist: this.getSystemMessageTypeWhitelist(),
             regionPolicy: {
                 defaultRegion: 'new_ao',
                 separateStatsByRegion: true,
@@ -345,6 +346,26 @@ class MessageProcessor {
                 '复式四连', '复试四连',
                 '复式五连', '复试五连'
             ]
+        };
+    }
+
+    getAllowedMessageTypeWhitelistKeys() {
+        return [
+            'bulk_equals_groups',
+            'single_number_amount_shorthand',
+            'number_pair_with_explicit_anchor',
+            'implicit_amount_rewrite',
+            'composite_attribute_shorthand'
+        ];
+    }
+
+    getSystemMessageTypeWhitelist() {
+        return {
+            bulk_equals_groups: true,
+            single_number_amount_shorthand: true,
+            number_pair_with_explicit_anchor: true,
+            implicit_amount_rewrite: true,
+            composite_attribute_shorthand: true
         };
     }
 
@@ -411,6 +432,23 @@ class MessageProcessor {
         return merged;
     }
 
+    sanitizeMessageTypeWhitelist(rawWhitelist) {
+        const safe = {};
+        if (!rawWhitelist || typeof rawWhitelist !== 'object') return safe;
+        this.getAllowedMessageTypeWhitelistKeys().forEach((key) => {
+            if (typeof rawWhitelist[key] !== 'boolean') return;
+            safe[key] = rawWhitelist[key];
+        });
+        return safe;
+    }
+
+    mergeMessageTypeWhitelist(baseWhitelist, patchWhitelist) {
+        return {
+            ...this.sanitizeMessageTypeWhitelist(baseWhitelist || {}),
+            ...this.sanitizeMessageTypeWhitelist(patchWhitelist || {})
+        };
+    }
+
     getResolvedGlobalRuleProfile() {
         const resolved = this.mergeRuleProfiles(
             this.getDefaultGlobalRuleProfile(),
@@ -431,6 +469,10 @@ class MessageProcessor {
         resolved.amountUnits = this.sanitizeAmountUnits(resolved.amountUnits || []);
         if (resolved.amountUnits.length === 0) {
             delete resolved.amountUnits;
+        }
+        resolved.messageTypeWhitelist = this.sanitizeMessageTypeWhitelist(resolved.messageTypeWhitelist || {});
+        if (Object.keys(resolved.messageTypeWhitelist).length === 0) {
+            delete resolved.messageTypeWhitelist;
         }
         return resolved;
     }
@@ -1163,6 +1205,23 @@ class MessageProcessor {
         return this.mergeBlockedPlayKeywordMap(this.getSystemBlockedPlayKeywordMap(), customKeywords);
     }
 
+    getEffectiveMessageTypeWhitelist(clientId = '') {
+        const effectiveProfile = clientId
+            ? this.getEffectiveRuleProfile(clientId)
+            : this.getActiveRuleProfile();
+        const customWhitelist = effectiveProfile && effectiveProfile.messageTypeWhitelist
+            ? effectiveProfile.messageTypeWhitelist
+            : {};
+        return this.mergeMessageTypeWhitelist(this.getSystemMessageTypeWhitelist(), customWhitelist);
+    }
+
+    isMessageTypeWhitelistEnabled(typeKey, clientId = '') {
+        const key = String(typeKey || '').trim();
+        if (!this.getAllowedMessageTypeWhitelistKeys().includes(key)) return false;
+        const effective = this.getEffectiveMessageTypeWhitelist(clientId);
+        return effective[key] !== false;
+    }
+
     sanitizeAnchorRuleItem(rawRule, token = '') {
         if (!rawRule || typeof rawRule !== 'object') {
             return null;
@@ -1273,6 +1332,11 @@ class MessageProcessor {
             safe.blockedPlayKeywords = blockedPlayKeywords;
         }
 
+        const messageTypeWhitelist = this.sanitizeMessageTypeWhitelist(profile.messageTypeWhitelist);
+        if (Object.keys(messageTypeWhitelist).length > 0) {
+            safe.messageTypeWhitelist = messageTypeWhitelist;
+        }
+
         if (typeof profile.tailShorthandAsSeparateGroups === 'boolean') {
             safe.tailShorthandAsSeparateGroups = profile.tailShorthandAsSeparateGroups;
         }
@@ -1375,6 +1439,13 @@ class MessageProcessor {
                 );
                 return;
             }
+            if (key === 'messageTypeWhitelist' && value && typeof value === 'object') {
+                merged.messageTypeWhitelist = this.mergeMessageTypeWhitelist(
+                    merged.messageTypeWhitelist || {},
+                    value
+                );
+                return;
+            }
             merged[key] = value;
         });
 
@@ -1424,6 +1495,10 @@ class MessageProcessor {
         effective.blockedPlayKeywords = this.sanitizeBlockedPlayKeywordMap(
             effective.blockedPlayKeywords || {},
             { rejectSystemTokens: true }
+        );
+        effective.messageTypeWhitelist = this.mergeMessageTypeWhitelist(
+            this.getSystemMessageTypeWhitelist(),
+            effective.messageTypeWhitelist || {}
         );
         effective.noiseRules = this.sanitizeNoiseRules(effective.noiseRules || []);
         effective.amountUnits = this.sanitizeAmountUnits(effective.amountUnits || this.getSystemAmountUnits());
@@ -1968,6 +2043,36 @@ class MessageProcessor {
         return normalizedMap;
     }
 
+    setMessageTypeWhitelist(whitelistMap = {}, options = {}) {
+        const normalizedMap = this.sanitizeMessageTypeWhitelist(whitelistMap || {});
+        const scope = options && options.scope === 'client' ? 'client' : 'global';
+        const applyWhitelist = (targetProfile = {}) => {
+            const nextProfile = targetProfile && typeof targetProfile === 'object'
+                ? JSON.parse(JSON.stringify(targetProfile))
+                : {};
+            nextProfile.messageTypeWhitelist = normalizedMap;
+            return this.sanitizeRuleProfile(nextProfile, { forOverride: true });
+        };
+
+        if (scope === 'global') {
+            this.globalRuleProfile = applyWhitelist(this.globalRuleProfile || {});
+        } else {
+            const clientId = this.normalizeRuleClientId(options && options.clientId ? options.clientId : '');
+            if (!clientId) {
+                throw new Error('请先选择客户后再设置消息类型白名单');
+            }
+            const current = this.clientRuleProfiles[clientId] || {};
+            const next = applyWhitelist(current);
+            if (this.isRuleProfileEmpty(next)) {
+                delete this.clientRuleProfiles[clientId];
+            } else {
+                this.clientRuleProfiles[clientId] = next;
+            }
+        }
+        this.persistAttributeConfig();
+        return normalizedMap;
+    }
+
     clearBlockedPlayKeywordMap(options = {}) {
         const scope = options && options.scope === 'client' ? 'client' : 'global';
         const clearKeywords = (profile) => {
@@ -1993,6 +2098,37 @@ class MessageProcessor {
         const profile = this.clientRuleProfiles[clientId];
         if (!profile) return;
         clearKeywords(profile);
+        if (this.isRuleProfileEmpty(profile)) {
+            delete this.clientRuleProfiles[clientId];
+        }
+        this.persistAttributeConfig();
+    }
+
+    clearMessageTypeWhitelist(options = {}) {
+        const scope = options && options.scope === 'client' ? 'client' : 'global';
+        const clearWhitelist = (profile) => {
+            if (!profile || typeof profile !== 'object') return;
+            if (Object.prototype.hasOwnProperty.call(profile, 'messageTypeWhitelist')) {
+                delete profile.messageTypeWhitelist;
+            }
+        };
+
+        if (scope === 'global') {
+            clearWhitelist(this.globalRuleProfile);
+            if (this.isRuleProfileEmpty(this.globalRuleProfile)) {
+                this.globalRuleProfile = {};
+            }
+            this.persistAttributeConfig();
+            return;
+        }
+
+        const clientId = this.normalizeRuleClientId(options && options.clientId ? options.clientId : '');
+        if (!clientId) {
+            throw new Error('请先选择客户后再恢复消息类型白名单');
+        }
+        const profile = this.clientRuleProfiles[clientId];
+        if (!profile) return;
+        clearWhitelist(profile);
         if (this.isRuleProfileEmpty(profile)) {
             delete this.clientRuleProfiles[clientId];
         }
@@ -2697,6 +2833,7 @@ class MessageProcessor {
                 }
                 this.assertNoAmbiguousSingleNumberShorthand(trimmedSourceLine, currentLineNo);
                 this.assertNoUnknownAnchorLikeTokens(trimmedSourceLine, currentLineNo);
+                this.assertNoDisabledCompositeAttributeShorthand(trimmedSourceLine, currentLineNo);
                 const amountMatches = this.scanLineForAmountAnchors(line);
                 let lastCursor = 0;
                 let hasAmountAnchor = false;
@@ -3534,6 +3671,9 @@ class MessageProcessor {
     rewriteImplicitAmountLine(line) {
         const raw = String(line || '').trim();
         if (!raw) return '';
+        if (!this.isMessageTypeWhitelistEnabled('implicit_amount_rewrite', this.activeRuleClientId || '')) {
+            return raw;
+        }
         if (this.containsConfiguredAnchor(raw)) return raw;
         const amountSuffixPattern = this.buildAmountSuffixPattern({ includeGeneric: true });
         const suffixChars = amountSuffixPattern
@@ -3692,6 +3832,9 @@ class MessageProcessor {
     }
 
     extractBulkEqualsChunks(text) {
+        if (!this.isMessageTypeWhitelistEnabled('bulk_equals_groups', this.activeRuleClientId || '')) {
+            return [];
+        }
         const raw = String(text || '').trim();
         if (!raw || this.containsConfiguredAnchor(raw)) return [];
         const chunkRegex = new RegExp(
@@ -3706,6 +3849,9 @@ class MessageProcessor {
     }
 
     parseSafeSingleNumberImplicitChunk(text) {
+        if (!this.isMessageTypeWhitelistEnabled('single_number_amount_shorthand', this.activeRuleClientId || '')) {
+            return null;
+        }
         const raw = String(text || '').trim();
         if (!raw || this.containsConfiguredAnchor(raw)) return null;
         const normalized = raw
@@ -3826,6 +3972,9 @@ class MessageProcessor {
             this.stripTrailingSummaryTail(String(text || '').trim())
         );
         if (!raw) return [];
+        if (this.extractBulkEqualsChunks(raw).length > 0) {
+            return [];
+        }
         const amountPattern = `(?:${this.getImplicitShorthandAmountPatternSource()})`;
         const candidateRegex = new RegExp(
             `\\d{1,2}\\s*(?:[-=/#*])\\s*${amountPattern}(?:[#*\`'"$￥¥]*)`,
@@ -3863,6 +4012,9 @@ class MessageProcessor {
     }
 
     isLikelyNumberPairBeforeExplicitAnchor(rawText, startIndex, endIndex) {
+        if (!this.isMessageTypeWhitelistEnabled('number_pair_with_explicit_anchor', this.activeRuleClientId || '')) {
+            return false;
+        }
         const raw = String(rawText || '');
         if (!raw) return false;
         const anchorMatches = this.scanLineForAmountAnchors(raw);
@@ -3894,6 +4046,41 @@ class MessageProcessor {
         const error = new Error(`第 ${lineNo} 行检测到未配置锚点：${detail}`);
         error.code = 'UNKNOWN_ANCHOR_TOKEN';
         error.unknownAnchorTokens = unknownTokens;
+        throw error;
+    }
+
+    findCompositeStructuredTokens(text) {
+        const compact = String(text || '')
+            .replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 65248))
+            .replace(/[^0-9A-Za-z\u4e00-\u9fa5]/g, '');
+        if (!compact) return [];
+        const attrMap = this.getAttributeMap();
+        const matched = [];
+        let index = 0;
+        while (index < compact.length) {
+            const compositeMatch = this.matchCompositeWaveToken(compact, index, attrMap)
+                || this.matchCompositeHeadToken(compact, index, attrMap)
+                || null;
+            if (!compositeMatch || !compositeMatch.item || !compositeMatch.item.key) {
+                index += 1;
+                continue;
+            }
+            matched.push(compositeMatch.item.key);
+            index += Math.max(compositeMatch.length, 1);
+        }
+        return Array.from(new Set(matched));
+    }
+
+    assertNoDisabledCompositeAttributeShorthand(text, lineNo) {
+        if (this.isMessageTypeWhitelistEnabled('composite_attribute_shorthand', this.activeRuleClientId || '')) {
+            return;
+        }
+        const tokens = this.findCompositeStructuredTokens(text);
+        if (tokens.length === 0) return;
+        const detail = tokens.join('、');
+        const error = new Error(`第 ${lineNo} 行检测到组合属性 shorthand：${detail}，当前已在消息类型白名单中关闭`);
+        error.code = 'DISABLED_COMPOSITE_ATTRIBUTE_SHORTHAND';
+        error.compositeTokens = tokens;
         throw error;
     }
 
@@ -4684,6 +4871,9 @@ class MessageProcessor {
     }
 
     matchCompositeStructuredToken(compact, index, attrMap) {
+        if (!this.isMessageTypeWhitelistEnabled('composite_attribute_shorthand', this.activeRuleClientId || '')) {
+            return null;
+        }
         return this.matchCompositeWaveToken(compact, index, attrMap)
             || this.matchCompositeHeadToken(compact, index, attrMap)
             || null;
@@ -5024,6 +5214,13 @@ class MessageProcessor {
                 });
                 userData.totalCount = userData.data.reduce((sum, item) => sum + item.value, 0);
             });
+
+            if (userManager && typeof userManager.invalidateOriginalDataDerivedCaches === 'function' && touchedRegionKeys.size > 0) {
+                userManager.invalidateOriginalDataDerivedCaches();
+            }
+            if (userManager && typeof userManager.invalidateUserListDerivedCaches === 'function' && touchedRegionKeys.size > 0) {
+                userManager.invalidateUserListDerivedCaches();
+            }
 
             // 保存数据
             if (!options || options.persist !== false) {

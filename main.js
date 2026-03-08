@@ -459,6 +459,41 @@ function registerLicenseIpc() {
   ipcMain.handle('license:get-status', () => {
     return licenseGuard ? licenseGuard.getStatus() : { authorized: false, reason: '授权未初始化' };
   });
+  ipcMain.handle('license:build-offline-request', () => {
+    const status = licenseGuard ? (licenseGuard.getStatus() || {}) : {};
+    const access = appAccessStatus || {};
+    const plan = access.plan || {};
+    const machineFingerprint = String(
+      status.machineFingerprint
+      || (access.license && access.license.machineFingerprint)
+      || access.machineFingerprint
+      || ''
+    );
+    const importPaths = licenseGuard && typeof licenseGuard.resolveLocalLicensePaths === 'function'
+      ? licenseGuard.resolveLocalLicensePaths()
+      : [];
+    return {
+      requestType: 'offline-license-request',
+      productName: app.getName(),
+      version: app.getVersion(),
+      generatedAt: new Date().toISOString(),
+      machineFingerprint,
+      customerId: String(status.customerId || (access.license && access.license.customerId) || ''),
+      tier: String(status.tier || plan.tier || 'plus'),
+      tierName: String(status.tierName || plan.name || ''),
+      billingCycle: String(status.billingCycle || plan.billingCycle || 'lifetime'),
+      reason: String(
+        access.reason
+        || (access.license && access.license.reason)
+        || status.reason
+        || '未检测到有效授权'
+      ),
+      platform: process.platform,
+      arch: os.arch(),
+      importPaths,
+      recommendedFileName: 'license.dat',
+    };
+  });
   ipcMain.handle('app:get-version', () => {
     return app.getVersion();
   });
