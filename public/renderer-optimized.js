@@ -180,14 +180,8 @@ const ANCHOR_SOURCE_HINTS = {
     global: '全局层，对所有客户生效',
     system: '系统层，兜底默认'
 };
-const ANCHOR_SUBGROUP_CONFIGS = [
-    { key: 'advanced', toggleId: 'anchorSubgroupToggle_advanced', bodyId: 'anchorSubgroupBody_advanced', rootId: 'anchorSubgroup_advanced' },
-    { key: 'library', toggleId: 'anchorSubgroupToggle_library', bodyId: 'anchorSubgroupBody_library', rootId: 'anchorSubgroup_library' }
-];
-let anchorSubgroupState = {
-    advanced: true,
-    library: false
-};
+const ANCHOR_SUBGROUP_CONFIGS = [];
+let anchorSubgroupState = {};
 let anchorStrategyActiveTab = 'per_number';
 let anchorRuleDrawerState = {
     open: false,
@@ -1942,7 +1936,6 @@ function createDefaultAnchorGuideState() {
         dismissed: false,
         completed: {
             anchor: false,
-            parseMode: false,
             combinePolicy: false
         }
     };
@@ -1960,7 +1953,6 @@ function sanitizeAnchorGuideState(rawState) {
 
     const completed = rawState.completed && typeof rawState.completed === 'object' ? rawState.completed : {};
     safe.completed.anchor = completed.anchor === true;
-    safe.completed.parseMode = completed.parseMode === true;
     safe.completed.combinePolicy = completed.combinePolicy === true;
     return safe;
 }
@@ -1988,20 +1980,17 @@ function saveAnchorGuideState() {
 function areAllAnchorGuideStepsCompleted() {
     if (!anchorGuideState || !anchorGuideState.completed) return false;
     return anchorGuideState.completed.anchor === true
-        && anchorGuideState.completed.parseMode === true
         && anchorGuideState.completed.combinePolicy === true;
 }
 
 function getAnchorGuideCurrentStep() {
     const loginCount = Number(anchorGuideState && anchorGuideState.loginCount ? anchorGuideState.loginCount : 0);
     if (loginCount <= 1) return 1;
-    if (loginCount === 2) return 2;
-    return 3;
+    return 2;
 }
 
 function getAnchorGuideStepKey(step) {
     if (step === 1) return 'anchor';
-    if (step === 2) return 'parseMode';
     return 'combinePolicy';
 }
 
@@ -2089,31 +2078,11 @@ function getAnchorGuideStepConfig(step) {
             ]
         };
     }
-    if (step === 2) {
-        const done = isAnchorGuideStepDone('parseMode');
-        return {
-            title: '第 2 步：选择锚点解析模式',
-            summary: done
-                ? '本步已完成。后续可按业务稳定性在严格/宽松之间切换。'
-                : '严格模式更稳，宽松模式更快。建议先全局保存“严格模式”。',
-            examples: [
-                '严格模式：必须出现锚点词（如“每个/各肖”）才入账。',
-                '宽松模式：未写锚点也可补全（如“09.21 10元”自动补锚点）。',
-                '推荐：新客户先严格，熟悉后再按客户切宽松。'
-            ],
-            focusIds: ['anchorParseMode', 'saveAnchorParseModeBtn', 'clipboardAssistToggle'],
-            actions: [
-                { label: '一键保存：严格模式（推荐）', action: 'set_parse_mode', mode: 'strict', primary: true },
-                { label: '一键保存：宽松模式', action: 'set_parse_mode', mode: 'loose' },
-                { label: '开启微信剪贴板监听', action: 'enable_clipboard' }
-            ]
-        };
-    }
     const done = isAnchorGuideStepDone('combinePolicy');
     return {
-        title: '第 3 步：选择属性词叠加策略',
+        title: '第 2 步：选择属性词叠加策略',
         summary: done
-            ? '本步已完成。你已具备“锚点词 + 模式 + 策略”的完整配置。'
+            ? '本步已完成。你已具备“锚点词 + 属性叠加策略”的完整配置。'
             : '当同段出现多个属性词时，先定义叠加策略，避免误判。',
         examples: [
             '先交集，空则并集：稳健默认，优先减少误识别。',
@@ -2216,25 +2185,12 @@ function handleAnchorGuideAction(action, payload = {}) {
         saveAnchorAliasRule();
         return;
     }
-    if (action === 'set_parse_mode') {
-        if (typeof setAnchorConsoleTab === 'function') {
-            setAnchorConsoleTab('parse_mode');
-        }
-        if (typeof setAnchorRuleScope === 'function') {
-            setAnchorRuleScope('global');
-        }
-        const modeInput = document.getElementById('anchorParseMode');
-        const mode = String(payload.mode || '').trim();
-        if (modeInput && modeInput.querySelector(`option[value="${mode}"]`)) {
-            modeInput.value = mode;
-        }
-        saveAnchorParseModeRule();
-        return;
-    }
     if (action === 'set_attribute_policy') {
-        if (typeof setAnchorConsoleTab === 'function') {
-            setAnchorConsoleTab('advanced');
-        }
+        Object.keys(recognizeSideGroupState).forEach((key) => {
+            recognizeSideGroupState[key] = key === 'attributes';
+        });
+        applyRecognizeSideGroups();
+        saveRecognizeSideGroupState();
         if (typeof setAnchorRuleScope === 'function') {
             setAnchorRuleScope('global');
         }
@@ -2515,6 +2471,18 @@ function initAnchorAliasFilterControls() {
         });
     }
 
+    const blockedKeywordNodes = [
+        document.getElementById('blockedPlayKeywordInput_pingte_xiao'),
+        document.getElementById('blockedPlayKeywordInput_lian_play')
+    ];
+    blockedKeywordNodes.forEach((node) => {
+        if (!node || node.dataset.bound === '1') return;
+        node.dataset.bound = '1';
+        node.addEventListener('input', () => {
+            renderBlockedPlayKeywordState();
+        });
+    });
+
     const drawerInputs = [
         document.getElementById('anchorRuleDrawerScope'),
         document.getElementById('anchorRuleDrawerToken'),
@@ -2535,7 +2503,6 @@ function initAnchorAliasFilterControls() {
     if (defaultOddsInput && defaultOddsInput.dataset.bound !== '1') {
         defaultOddsInput.dataset.bound = '1';
         defaultOddsInput.addEventListener('input', () => {
-            if (!window.messageProcessor || typeof window.messageProcessor.getEffectiveDefaultOdds !== 'function') return;
             const input = parsePositiveNumericInput(defaultOddsInput.value);
             if (input.empty) return;
             if (Number.isFinite(input.value)) {
@@ -2543,13 +2510,11 @@ function initAnchorAliasFilterControls() {
             }
         });
     }
+
 }
 
 function sanitizeAnchorSubgroupState(rawState) {
-    const safe = {
-        advanced: true,
-        library: false
-    };
+    const safe = {};
     if (!rawState || typeof rawState !== 'object') {
         return safe;
     }
@@ -2581,8 +2546,7 @@ function saveAnchorSubgroupState() {
 }
 
 function getAnchorSubgroupConfig(key) {
-    const normalizedKey = key === 'parse_mode' ? 'advanced' : key;
-    return ANCHOR_SUBGROUP_CONFIGS.find(item => item.key === normalizedKey) || ANCHOR_SUBGROUP_CONFIGS[0];
+    return ANCHOR_SUBGROUP_CONFIGS.find(item => item.key === key) || null;
 }
 
 function collectAnchorRuleDrawerState() {
@@ -2615,28 +2579,11 @@ function isAnchorRuleDrawerDirty() {
         || current.enabled !== !!anchorRuleDrawerSnapshot.enabled;
 }
 
-function isAnchorParseModeDirty() {
-    const modeInput = document.getElementById('anchorParseMode');
-    if (!modeInput) return false;
-    const baseline = String(modeInput.dataset.baselineValue || '').trim();
-    return baseline && String(modeInput.value || '').trim() !== baseline;
-}
-
 function isAttributeCombinePolicyDirty() {
     const policyInput = document.getElementById('attributeCombinePolicy');
     if (!policyInput) return false;
     const baseline = String(policyInput.dataset.baselineValue || '').trim();
     return baseline && String(policyInput.value || '').trim() !== baseline;
-}
-
-function isDefaultOddsDirty() {
-    const oddsInput = document.getElementById('defaultOddsInput');
-    if (!oddsInput) return false;
-    const baseline = String(oddsInput.dataset.baselineValue || '').trim();
-    if (!baseline) return false;
-    const current = parsePositiveNumericInput(oddsInput.value);
-    if (current.empty || !Number.isFinite(current.value)) return true;
-    return formatNumericAmount(current.value) !== baseline;
 }
 
 function collectNoiseRuleEditorState() {
@@ -2652,64 +2599,15 @@ function isNoiseRuleEditorDirty() {
 }
 
 function getAnchorSubgroupClosePrompt(key) {
-    if (key === 'library' && isAnchorRuleDrawerDirty()) {
-        return '规则词库中有未保存的锚点词编辑，确定关闭该分组吗？';
-    }
-    if (key === 'advanced' && (isAnchorParseModeDirty() || isAttributeCombinePolicyDirty() || isDefaultOddsDirty())) {
-        return '默认赔率、属性叠加策略或解析模式有未保存修改，确定关闭该分组吗？';
-    }
     return '';
 }
 
 function renderAnchorSubgroups() {
-    ANCHOR_SUBGROUP_CONFIGS.forEach((item) => {
-        const isOpen = !!anchorSubgroupState[item.key];
-        const root = document.getElementById(item.rootId);
-        const toggle = document.getElementById(item.toggleId);
-        const body = document.getElementById(item.bodyId);
-        if (root) {
-            root.classList.toggle('expanded', isOpen);
-            root.classList.toggle('collapsed', !isOpen);
-        }
-        if (toggle) {
-            // 二级折叠入口必须始终可点击，不受规则层禁用状态影响
-            toggle.disabled = false;
-            toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-        }
-        if (body) {
-            body.hidden = !isOpen;
-            body.style.display = isOpen ? '' : 'none';
-            body.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
-        }
-    });
+    // Anchor management is now a flat workspace with no nested subgroup UI.
 }
 
 function toggleAnchorSubgroup(key) {
-    const config = getAnchorSubgroupConfig(key);
-    const current = !!anchorSubgroupState[config.key];
-    if (current) {
-        const promptText = getAnchorSubgroupClosePrompt(config.key);
-        if (promptText) {
-            const ok = confirm(promptText);
-            if (!ok) return;
-        }
-        if (config.key === 'library') {
-            closeAnchorRuleDrawer();
-        }
-        anchorSubgroupState[config.key] = false;
-    } else {
-        anchorSubgroupState[config.key] = true;
-        if (config.key === 'library') {
-            renderAnchorAliasList();
-            renderAnchorImpactPreview();
-        } else {
-            renderAnchorParseModeState();
-            renderAttributeCombinePolicyState();
-            renderAnchorNoviceGuide();
-        }
-    }
-    saveAnchorSubgroupState();
-    renderAnchorSubgroups();
+    // No nested subgroup UI remains; keep this as a harmless no-op.
 }
 
 function getAnchorRuleClientCandidates() {
@@ -3009,11 +2907,19 @@ function setAnchorRuleControlsEnabled(enabled) {
     const nodeIds = [
         'anchorParseMode',
         'attributeCombinePolicy',
+        'regionAccountingMode',
+        'regionAccountingDefaultRegion',
+        'blockedPlayKeywordInput_pingte_xiao',
+        'blockedPlayKeywordInput_lian_play',
         'defaultOddsInput',
         'saveAnchorParseModeBtn',
         'resetAnchorParseModeBtn',
         'saveAttributeCombinePolicyBtn',
         'resetAttributeCombinePolicyBtn',
+        'saveRegionAccountingPolicyBtn',
+        'resetRegionAccountingPolicyBtn',
+        'saveBlockedPlayKeywordBtn',
+        'resetBlockedPlayKeywordBtn',
         'saveDefaultOddsBtn',
         'resetDefaultOddsBtn',
         'createAnchorRuleBtn',
@@ -3223,7 +3129,8 @@ function handleAnchorRuleScopeChange() {
     renderDefaultOddsState();
     renderAnchorParseModeState();
     renderAttributeCombinePolicyState();
-    renderAnchorNoviceGuide();
+    renderRegionAccountingPolicyState();
+    renderBlockedPlayKeywordState();
     renderAnchorImpactPreview();
     renderAnchorStrategyGuide();
 }
@@ -3321,12 +3228,12 @@ function renderAmountUnitScopeExplain(scope, clientId) {
 function getAnchorParseModeExplainMeta(mode) {
     if (mode === 'loose') {
         return {
-            effect: '宽松模式：未写锚点词时也尝试补锚点，识别更“快”。',
-            example: '例：`09.21 10元` 也可能入账为标准格式（但建议复核）。'
+            effect: '宽松模式：未写锚点词时也尝试补锚点，识别更快，但建议复核。',
+            example: '例：`09.21 10元` 也可能直接入账为标准格式。'
         };
     }
     return {
-        effect: '严格模式：必须出现锚点词（如“各/各号/买”）才入账，最稳。',
+        effect: '严格模式：必须出现锚点词（如“各/各号/买”）才入账，结果更稳。',
         example: '例：`09.21 10元` 会提示缺少锚点；`09.21各10` 正常入账。'
     };
 }
@@ -3425,6 +3332,83 @@ function getAttributeCombinePolicyExplainMeta(policy) {
     };
 }
 
+function getRegionAccountingModeLabel(mode) {
+    return mode === 'merged' ? '不分盘口，统一入账' : '按盘口区分统计';
+}
+
+function parseRegionAliasInputValue(rawValue = '') {
+    return String(rawValue || '')
+        .split(/[\n,，、]/)
+        .map(item => item.replace(/\s+/g, '').trim())
+        .filter(Boolean);
+}
+
+function formatRegionAliasList(tokens = []) {
+    return (Array.isArray(tokens) ? tokens : [])
+        .map(item => String(item || '').trim())
+        .filter(Boolean)
+        .join('、');
+}
+
+function collectRegionAliasInputs() {
+    return {
+        new_ao: parseRegionAliasInputValue(document.getElementById('regionAliasInput_new_ao')?.value || ''),
+        old_ao: parseRegionAliasInputValue(document.getElementById('regionAliasInput_old_ao')?.value || ''),
+        hongkong: parseRegionAliasInputValue(document.getElementById('regionAliasInput_hongkong')?.value || '')
+    };
+}
+
+function normalizeBlockedPlayKeywordInputToken(token) {
+    if (window.messageProcessor && typeof window.messageProcessor.normalizeBlockedPlayKeywordToken === 'function') {
+        return String(window.messageProcessor.normalizeBlockedPlayKeywordToken(token) || '').trim();
+    }
+    return String(token || '').replace(/\s+/g, '').trim();
+}
+
+function parseBlockedPlayKeywordInputValue(rawValue = '') {
+    return String(rawValue || '')
+        .split(/[\n,，、]/)
+        .map(item => normalizeBlockedPlayKeywordInputToken(item))
+        .filter(Boolean);
+}
+
+function collectBlockedPlayKeywordInputs() {
+    return {
+        pingte_xiao: parseBlockedPlayKeywordInputValue(document.getElementById('blockedPlayKeywordInput_pingte_xiao')?.value || ''),
+        lian_play: parseBlockedPlayKeywordInputValue(document.getElementById('blockedPlayKeywordInput_lian_play')?.value || '')
+    };
+}
+
+function formatBlockedPlayKeywordList(tokens = []) {
+    return (Array.isArray(tokens) ? tokens : [])
+        .map(item => normalizeBlockedPlayKeywordInputToken(item))
+        .filter(Boolean)
+        .join('、');
+}
+
+function getBlockedPlayKeywordFamilyLabel(family) {
+    if (family === 'pingte_xiao') return '平特类';
+    if (family === 'te_xiao') return '特肖类';
+    if (family === 'yi_xiao') return '一肖类';
+    if (family === 'lian_play') return '连肖/连码类';
+    return '玩法类';
+}
+
+function getRegionAccountingPolicyExplainMeta(info = {}) {
+    const mode = String(info.mode || 'split').trim() === 'merged' ? 'merged' : 'split';
+    const defaultRegionLabel = String(info.defaultRegionLabel || '新奥').trim() || '新奥';
+    if (mode === 'merged') {
+        return {
+            effect: `不分盘口：消息里即使写了“新奥/老奥/香港”，最终也统一记到默认盘口 ${defaultRegionLabel}。`,
+            example: '例：`香港09各10 老奥11各20` 会统一记到默认盘口，不拆分三个账本。'
+        };
+    }
+    return {
+        effect: '按盘口区分：消息里识别到的新奥/老奥/香港会分别入账；未写盘口时落到默认盘口。',
+        example: '例：`香港09各10 老奥11各20` 会分别记到香港和老奥。'
+    };
+}
+
 function renderAnchorParseModeExplain(info = {}) {
     const explainEl = document.getElementById('anchorParseModeExplain');
     if (!explainEl) return;
@@ -3456,6 +3440,51 @@ function renderAttributeCombinePolicyExplain(info = {}) {
         <div class="anchor-policy-explain-line">效果：${escapeHtml(meta.effect)}</div>
         <div class="anchor-policy-explain-line">${escapeHtml(meta.example)}</div>
         ${detailLines}
+    `;
+}
+
+function renderRegionAccountingPolicyExplain(info = {}) {
+    const explainEl = document.getElementById('regionAccountingPolicyExplain');
+    if (!explainEl) return;
+    if (info.unavailable) {
+        explainEl.innerHTML = `<div class="anchor-policy-explain-line">${escapeHtml(info.message || '当前无法读取盘口规则说明')}</div>`;
+        return;
+    }
+    const meta = getRegionAccountingPolicyExplainMeta(info);
+    const aliasLines = ['new_ao', 'old_ao', 'hongkong']
+        .map((regionKey) => {
+            const label = window.userManager && typeof window.userManager.getRegionLabel === 'function'
+                ? window.userManager.getRegionLabel(regionKey)
+                : regionKey;
+            const tokens = info.effectiveRegionAliases && Array.isArray(info.effectiveRegionAliases[regionKey])
+                ? info.effectiveRegionAliases[regionKey]
+                : [];
+            if (!tokens.length) return '';
+            return `<div class="anchor-policy-explain-line">${escapeHtml(`${label}识别词：${formatRegionAliasList(tokens)}`)}</div>`;
+        })
+        .filter(Boolean)
+        .join('');
+    explainEl.innerHTML = `
+        <div class="anchor-policy-explain-current">当前生效：${escapeHtml(getRegionAccountingModeLabel(info.mode))}（来源：${escapeHtml(info.modeSourceLabel || '-')})</div>
+        <div class="anchor-policy-explain-line">统一入账盘口：${escapeHtml(info.defaultRegionLabel || '新奥')}（来源：${escapeHtml(info.defaultRegionSourceLabel || '-')})</div>
+        <div class="anchor-policy-explain-line">效果：${escapeHtml(meta.effect)}</div>
+        <div class="anchor-policy-explain-line">${escapeHtml(meta.example)}</div>
+        ${aliasLines}
+    `;
+}
+
+function renderBlockedPlayKeywordExplain(info = {}) {
+    const explainEl = document.getElementById('blockedPlayKeywordExplain');
+    if (!explainEl) return;
+    if (info.unavailable) {
+        explainEl.innerHTML = `<div class="anchor-policy-explain-line">${escapeHtml(info.message || '当前无法读取未开放玩法关键词说明')}</div>`;
+        return;
+    }
+    const lines = Array.isArray(info.lines) ? info.lines.filter(Boolean) : [];
+    explainEl.innerHTML = `
+        <div class="anchor-policy-explain-current">当前生效：命中这些关键词后，会按“未开放玩法”拦截，不参与号码统计。</div>
+        <div class="anchor-policy-explain-line">适用场景：避免“平/连肖/二连/三连/复式连肖”这类消息被误统进普通号码单。</div>
+        ${lines.map(line => `<div class="anchor-policy-explain-line">${escapeHtml(line)}</div>`).join('')}
     `;
 }
 
@@ -3544,10 +3573,18 @@ function saveDefaultOddsRule() {
             throw new Error('请输入大于0的默认赔率');
         }
         const odds = window.messageProcessor.setDefaultOdds(parsed.value, { scope, clientId });
+        if (scope === 'client'
+            && clientId
+            && window.userManager
+            && typeof window.userManager.syncUserSettlementOddsFromRule === 'function') {
+            window.userManager.syncUserSettlementOddsFromRule(clientId, odds, {
+                render: false,
+                save: false
+            });
+        }
         renderDefaultOddsState();
         renderAnchorAliasList();
         renderAnchorImpactPreview();
-        renderAnchorNoviceGuide();
         recalculateAllUsersByRuleChange();
         if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
             window.userManager.renderAllSections();
@@ -3570,10 +3607,22 @@ function resetDefaultOddsRule() {
         const ok = confirm(`确定恢复${getScopeDisplayName(scope)}层的默认赔率为上层默认吗？`);
         if (!ok) return;
         window.messageProcessor.clearDefaultOdds({ scope, clientId });
+        if (scope === 'client'
+            && clientId
+            && window.userManager
+            && typeof window.userManager.syncUserSettlementOddsFromRule === 'function'
+            && typeof window.messageProcessor.getEffectiveDefaultOdds === 'function') {
+            const effectiveOdds = Number(window.messageProcessor.getEffectiveDefaultOdds(clientId));
+            if (Number.isFinite(effectiveOdds) && effectiveOdds > 0) {
+                window.userManager.syncUserSettlementOddsFromRule(clientId, effectiveOdds, {
+                    render: false,
+                    save: false
+                });
+            }
+        }
         renderDefaultOddsState();
         renderAnchorAliasList();
         renderAnchorImpactPreview();
-        renderAnchorNoviceGuide();
         recalculateAllUsersByRuleChange();
         if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
             window.userManager.renderAllSections();
@@ -3585,55 +3634,6 @@ function resetDefaultOddsRule() {
     } catch (error) {
         showError('恢复默认赔率失败', error.message || '未知错误');
     }
-}
-
-function renderAnchorNoviceGuide() {
-    const summaryEl = document.getElementById('anchorNoviceGuideSummary');
-    const examplesEl = document.getElementById('anchorNoviceGuideExamples');
-    if (!summaryEl || !examplesEl) return;
-    const { scope, clientId } = getRuleContext();
-    if (scope === 'client' && !clientId) {
-        summaryEl.textContent = '当前正在修改：客户层（未选择客户）。生效优先级：客户专属 > 全局 > 系统默认（系统级只读）。';
-        examplesEl.innerHTML = `
-            <div class="anchor-novice-guide-line">请先选择一个客户，再查看该客户当前生效的解析模式和属性叠加策略。</div>
-            <div class="anchor-novice-guide-line">你也可以先切回“修改全局”，先配置全局默认策略。</div>
-        `;
-        return;
-    }
-    const modeInput = document.getElementById('anchorParseMode');
-    const policyInput = document.getElementById('attributeCombinePolicy');
-    const oddsInput = document.getElementById('defaultOddsInput');
-    const effectiveMode = modeInput
-        ? String(modeInput.dataset.effectiveValue || modeInput.value || 'strict').trim() || 'strict'
-        : 'strict';
-    const effectivePolicy = policyInput
-        ? String(policyInput.dataset.effectiveValue || policyInput.value || 'intersection_then_union_fallback').trim() || 'intersection_then_union_fallback'
-        : 'intersection_then_union_fallback';
-    const modeSource = modeInput ? String(modeInput.dataset.effectiveSource || 'system').trim() : 'system';
-    const policySource = policyInput ? String(policyInput.dataset.effectiveSource || 'system').trim() : 'system';
-    const effectiveOdds = oddsInput
-        ? String(oddsInput.dataset.effectiveValue || oddsInput.value || '47').trim() || '47'
-        : '47';
-    const oddsSource = oddsInput ? String(oddsInput.dataset.effectiveSource || 'system').trim() : 'system';
-
-    const scopeText = scope === 'client'
-        ? (clientId ? `当前正在修改：客户「${clientId}」层` : '当前正在修改：客户层（未选择客户）')
-        : '当前正在修改：全局层（所有客户）';
-    summaryEl.textContent = `${scopeText}。生效优先级：客户专属 > 全局 > 系统默认（系统级只读）。`;
-
-    const modeMeta = getAnchorParseModeExplainMeta(effectiveMode);
-    const policyMeta = getAttributeCombinePolicyExplainMeta(effectivePolicy);
-    const policyDetailLines = Array.isArray(policyMeta.details) ? policyMeta.details.slice(0, 5) : [];
-    examplesEl.innerHTML = `
-        <div class="anchor-novice-guide-line">解析模式：${escapeHtml(getAnchorParseModeLabel(effectiveMode))}（来源：${escapeHtml(getAnchorRuleSourceLabel(modeSource))}）</div>
-        <div class="anchor-novice-guide-line">${escapeHtml(modeMeta.effect)}</div>
-        <div class="anchor-novice-guide-line">${escapeHtml(modeMeta.example)}</div>
-        <div class="anchor-novice-guide-line">叠加策略：${escapeHtml(getAttributeCombinePolicyLabel(effectivePolicy))}（来源：${escapeHtml(getAnchorRuleSourceLabel(policySource))}）</div>
-        <div class="anchor-novice-guide-line">${escapeHtml(policyMeta.effect)}</div>
-        <div class="anchor-novice-guide-line">${escapeHtml(policyMeta.example)}</div>
-        <div class="anchor-novice-guide-line">默认赔率：${escapeHtml(effectiveOdds)}（来源：${escapeHtml(getAnchorRuleSourceLabel(oddsSource))}，锚点可单独覆盖）</div>
-        ${policyDetailLines.map((line) => `<div class="anchor-novice-guide-line">${escapeHtml(line)}</div>`).join('')}
-    `;
 }
 
 function renderAnchorParseModeState() {
@@ -3715,12 +3715,8 @@ function saveAnchorParseModeRule() {
         }
         window.messageProcessor.setAnchorParseMode(mode, { scope, clientId });
         renderAnchorParseModeState();
-        renderAnchorNoviceGuide();
         previewMessage({ silent: true });
         showSuccess(`${getScopeDisplayName(scope)}解析模式已保存：${getAnchorParseModeLabel(mode)}`);
-        if (scope === 'global') {
-            markAnchorGuideStepCompleted('parseMode');
-        }
     } catch (error) {
         showError('保存解析模式失败', error.message || '未知错误');
     }
@@ -3736,7 +3732,6 @@ function resetAnchorParseModeRule() {
         if (!ok) return;
         window.messageProcessor.clearAnchorParseMode({ scope, clientId });
         renderAnchorParseModeState();
-        renderAnchorNoviceGuide();
         previewMessage({ silent: true });
         showSuccess(`${getScopeDisplayName(scope)}层解析模式已恢复默认`);
     } catch (error) {
@@ -3749,18 +3744,8 @@ function getAnchorStrategyConfig(mode) {
 }
 
 function setAnchorConsoleTab(tabKey) {
-    const config = getAnchorSubgroupConfig(tabKey);
-    anchorSubgroupState[config.key] = true;
-    saveAnchorSubgroupState();
-    renderAnchorSubgroups();
-    if (config.key === 'library') {
-        renderAnchorAliasList();
-        renderAnchorImpactPreview();
-    } else {
-        renderAnchorParseModeState();
-        renderAttributeCombinePolicyState();
-        renderAnchorNoviceGuide();
-    }
+    renderAnchorAliasList();
+    renderAnchorImpactPreview();
 }
 
 function setAnchorStrategyTab(mode) {
@@ -5454,7 +5439,7 @@ function openAnchorRuleDrawer(options = {}) {
     if (typeof setAnchorConsoleTab === 'function') {
         setAnchorConsoleTab('library');
     }
-    const libraryBody = document.getElementById('anchorSubgroupBody_library');
+    const libraryBody = document.getElementById('anchorLibraryWorkspace');
     const drawer = document.getElementById('anchorRuleDrawer');
     const titleEl = document.getElementById('anchorRuleDrawerTitle');
     const scopeSelect = document.getElementById('anchorRuleDrawerScope');
@@ -5509,7 +5494,7 @@ function openAnchorRuleDrawer(options = {}) {
 }
 
 function closeAnchorRuleDrawer() {
-    const libraryBody = document.getElementById('anchorSubgroupBody_library');
+    const libraryBody = document.getElementById('anchorLibraryWorkspace');
     const drawer = document.getElementById('anchorRuleDrawer');
     if (!drawer) return;
     drawer.classList.remove('open');
@@ -6046,8 +6031,11 @@ function toggleAnchorAliasStatus(token, shouldEnable, preferredMode = 'per_numbe
         } else {
             renderAnchorAliasList();
             renderAnchorImpactPreview();
-            renderAttributeCombinePolicyState();
             renderDefaultOddsState();
+            renderAnchorParseModeState();
+            renderAttributeCombinePolicyState();
+            renderRegionAccountingPolicyState();
+            renderBlockedPlayKeywordState();
             refreshRegionPnlPanel();
         }
         previewMessage({ silent: true });
@@ -6105,8 +6093,11 @@ function saveAnchorAliasRule() {
         } else {
             renderAnchorAliasList();
             renderAnchorImpactPreview();
-            renderAttributeCombinePolicyState();
             renderDefaultOddsState();
+            renderAnchorParseModeState();
+            renderAttributeCombinePolicyState();
+            renderRegionAccountingPolicyState();
+            renderBlockedPlayKeywordState();
             refreshRegionPnlPanel();
         }
         previewMessage({ silent: true });
@@ -6135,8 +6126,11 @@ function removeAnchorAliasRule(token) {
         } else {
             renderAnchorAliasList();
             renderAnchorImpactPreview();
-            renderAttributeCombinePolicyState();
             renderDefaultOddsState();
+            renderAnchorParseModeState();
+            renderAttributeCombinePolicyState();
+            renderRegionAccountingPolicyState();
+            renderBlockedPlayKeywordState();
             refreshRegionPnlPanel();
         }
         previewMessage({ silent: true });
@@ -6164,8 +6158,11 @@ function resetAnchorAliasRules() {
         } else {
             renderAnchorAliasList();
             renderAnchorImpactPreview();
-            renderAttributeCombinePolicyState();
             renderDefaultOddsState();
+            renderAnchorParseModeState();
+            renderAttributeCombinePolicyState();
+            renderRegionAccountingPolicyState();
+            renderBlockedPlayKeywordState();
             refreshRegionPnlPanel();
         }
         previewMessage({ silent: true });
@@ -6187,6 +6184,9 @@ function resetClientRuleProfile() {
         const ok = confirm(`确定将客户 ${clientId} 的专属规则恢复为全局规则吗？`);
         if (!ok) return;
         window.messageProcessor.resetClientRules(clientId);
+        if (window.userManager && typeof window.userManager.syncStoredUserParsePreferencesToRules === 'function') {
+            window.userManager.syncStoredUserParsePreferencesToRules();
+        }
         recalculateAllUsersByRuleChange();
         closeAnchorRuleDrawer();
         if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
@@ -6194,10 +6194,11 @@ function resetClientRuleProfile() {
         } else {
             renderAnchorAliasList();
             renderAnchorImpactPreview();
+            renderDefaultOddsState();
             renderAnchorParseModeState();
             renderAttributeCombinePolicyState();
-            renderDefaultOddsState();
-            renderAnchorNoviceGuide();
+            renderRegionAccountingPolicyState();
+            renderBlockedPlayKeywordState();
             refreshRegionPnlPanel();
         }
         previewMessage({ silent: true });
@@ -6274,6 +6275,202 @@ function renderAttributeCombinePolicyState() {
     renderAttributeCombinePolicyExplain({ policy: effectivePolicy, sourceLabel });
 }
 
+function renderRegionAccountingPolicyState() {
+    const stateEl = document.getElementById('regionAccountingPolicyState');
+    const modeInput = document.getElementById('regionAccountingMode');
+    const defaultRegionInput = document.getElementById('regionAccountingDefaultRegion');
+    const aliasInputs = {
+        new_ao: document.getElementById('regionAliasInput_new_ao'),
+        old_ao: document.getElementById('regionAliasInput_old_ao'),
+        hongkong: document.getElementById('regionAliasInput_hongkong')
+    };
+    if (!stateEl || !modeInput || !defaultRegionInput) return;
+
+    if (!window.messageProcessor
+        || typeof window.messageProcessor.getEffectiveRuleProfile !== 'function'
+        || typeof window.messageProcessor.getEffectiveRegionAccountingInfo !== 'function'
+    ) {
+        stateEl.textContent = '当前版本不支持盘口统计模式';
+        modeInput.disabled = true;
+        defaultRegionInput.disabled = true;
+        Object.values(aliasInputs).forEach((node) => { if (node) node.disabled = true; });
+        renderRegionAccountingPolicyExplain({ unavailable: true, message: '当前版本不支持盘口规则说明。' });
+        return;
+    }
+
+    const { scope, clientId } = getRuleContext();
+    if (scope === 'client' && !clientId) {
+        stateEl.textContent = '请选择目标客户后再设置客户专属盘口规则';
+        modeInput.disabled = true;
+        defaultRegionInput.disabled = true;
+        Object.values(aliasInputs).forEach((node) => { if (node) node.disabled = true; });
+        renderRegionAccountingPolicyExplain({ unavailable: true, message: '当前是客户层，但未选择客户。' });
+        return;
+    }
+    modeInput.disabled = false;
+    defaultRegionInput.disabled = false;
+    Object.values(aliasInputs).forEach((node) => { if (node) node.disabled = false; });
+
+    const systemProfile = window.messageProcessor.getSystemRuleProfile
+        ? window.messageProcessor.getSystemRuleProfile()
+        : {};
+    const globalProfile = window.messageProcessor.getGlobalRuleProfile
+        ? window.messageProcessor.getGlobalRuleProfile()
+        : {};
+    const clientProfile = clientId && window.messageProcessor.getClientRuleProfile
+        ? window.messageProcessor.getClientRuleProfile(clientId)
+        : {};
+    const effectiveInfo = window.messageProcessor.getEffectiveRegionAccountingInfo(clientId || '');
+
+    const systemRegionPolicy = systemProfile && systemProfile.regionPolicy ? systemProfile.regionPolicy : {};
+    const globalRegionPolicy = globalProfile && globalProfile.regionPolicy ? globalProfile.regionPolicy : {};
+    const clientRegionPolicy = clientProfile && clientProfile.regionPolicy ? clientProfile.regionPolicy : {};
+    const scopedRegionPolicy = scope === 'client' ? clientRegionPolicy : globalRegionPolicy;
+    const scopedRegionAliases = scopedRegionPolicy && scopedRegionPolicy.regionAliases && typeof scopedRegionPolicy.regionAliases === 'object'
+        ? scopedRegionPolicy.regionAliases
+        : {};
+
+    const effectiveMode = effectiveInfo && effectiveInfo.separateStatsByRegion === false ? 'merged' : 'split';
+    const effectiveDefaultRegion = String(effectiveInfo && effectiveInfo.defaultRegion ? effectiveInfo.defaultRegion : 'new_ao').trim() || 'new_ao';
+
+    const scopedMode = Object.prototype.hasOwnProperty.call(scopedRegionPolicy, 'separateStatsByRegion')
+        ? (scopedRegionPolicy.separateStatsByRegion === false ? 'merged' : 'split')
+        : '';
+    const scopedDefaultRegion = String(scopedRegionPolicy.defaultRegion || '').trim();
+
+    const modeSource = Object.prototype.hasOwnProperty.call(clientRegionPolicy, 'separateStatsByRegion')
+        ? 'client'
+        : (Object.prototype.hasOwnProperty.call(globalRegionPolicy, 'separateStatsByRegion') ? 'global' : 'system');
+    const defaultRegionSource = clientRegionPolicy.defaultRegion
+        ? 'client'
+        : (globalRegionPolicy.defaultRegion ? 'global' : 'system');
+
+    if (modeInput.querySelector(`option[value="${scopedMode || effectiveMode}"]`)) {
+        modeInput.value = scopedMode || effectiveMode;
+    }
+    if (defaultRegionInput.querySelector(`option[value="${scopedDefaultRegion || effectiveDefaultRegion}"]`)) {
+        defaultRegionInput.value = scopedDefaultRegion || effectiveDefaultRegion;
+    }
+    ['new_ao', 'old_ao', 'hongkong'].forEach((regionKey) => {
+        const node = aliasInputs[regionKey];
+        if (!node) return;
+        const scopedAliases = Array.isArray(scopedRegionAliases[regionKey]) ? scopedRegionAliases[regionKey] : [];
+        node.value = scopedAliases.join(',');
+    });
+
+    const aliasScopedCount = ['new_ao', 'old_ao', 'hongkong']
+        .reduce((sum, regionKey) => sum + (Array.isArray(scopedRegionAliases[regionKey]) ? scopedRegionAliases[regionKey].length : 0), 0);
+    const modeScopeTip = scopedMode
+        ? `本层已设置：${getRegionAccountingModeLabel(scopedMode)}。`
+        : '本层未设置盘口统计模式，继承上层。';
+    const defaultRegionScopeTip = scopedDefaultRegion
+        ? `本层已设置默认盘口：${window.userManager && typeof window.userManager.getRegionLabel === 'function' ? window.userManager.getRegionLabel(scopedDefaultRegion) : scopedDefaultRegion}。`
+        : '本层未设置默认盘口，继承上层。';
+    const aliasScopeTip = aliasScopedCount > 0
+        ? `本层已追加 ${aliasScopedCount} 个盘口别名。`
+        : '本层未追加盘口别名，继承系统/上层识别词。';
+    const effectiveDefaultRegionLabel = window.userManager && typeof window.userManager.getRegionLabel === 'function'
+        ? window.userManager.getRegionLabel(effectiveDefaultRegion)
+        : effectiveDefaultRegion;
+
+    stateEl.textContent = `当前生效：${getRegionAccountingModeLabel(effectiveMode)}；统一入账盘口：${effectiveDefaultRegionLabel}。${modeScopeTip}${defaultRegionScopeTip}${aliasScopeTip}`;
+    renderRegionAccountingPolicyExplain({
+        mode: effectiveMode,
+        defaultRegion: effectiveDefaultRegion,
+        defaultRegionLabel: effectiveDefaultRegionLabel,
+        modeSourceLabel: getAnchorRuleSourceLabel(modeSource),
+        defaultRegionSourceLabel: getAnchorRuleSourceLabel(defaultRegionSource),
+        effectiveRegionAliases: effectiveInfo && effectiveInfo.regionAliases ? effectiveInfo.regionAliases : {}
+    });
+}
+
+function renderBlockedPlayKeywordState() {
+    const stateEl = document.getElementById('blockedPlayKeywordState');
+    const pingteInput = document.getElementById('blockedPlayKeywordInput_pingte_xiao');
+    const lianInput = document.getElementById('blockedPlayKeywordInput_lian_play');
+    if (!stateEl || !pingteInput || !lianInput) return;
+
+    if (!window.messageProcessor
+        || typeof window.messageProcessor.getEffectiveRuleProfile !== 'function'
+        || typeof window.messageProcessor.getEffectiveBlockedPlayKeywordMap !== 'function'
+        || typeof window.messageProcessor.getSystemBlockedPlayKeywordMap !== 'function'
+    ) {
+        stateEl.textContent = '当前版本不支持未开放玩法关键词';
+        pingteInput.disabled = true;
+        lianInput.disabled = true;
+        renderBlockedPlayKeywordExplain({ unavailable: true, message: '当前版本不支持未开放玩法关键词说明。' });
+        return;
+    }
+
+    const { scope, clientId } = getRuleContext();
+    if (scope === 'client' && !clientId) {
+        stateEl.textContent = '请选择目标客户后再设置客户专属未开放玩法关键词';
+        pingteInput.disabled = true;
+        lianInput.disabled = true;
+        renderBlockedPlayKeywordExplain({ unavailable: true, message: '当前是客户层，但未选择客户。' });
+        return;
+    }
+
+    pingteInput.disabled = false;
+    lianInput.disabled = false;
+
+    const systemProfile = window.messageProcessor.getSystemRuleProfile
+        ? window.messageProcessor.getSystemRuleProfile()
+        : {};
+    const globalProfile = window.messageProcessor.getGlobalRuleProfile
+        ? window.messageProcessor.getGlobalRuleProfile()
+        : {};
+    const clientProfile = clientId && window.messageProcessor.getClientRuleProfile
+        ? window.messageProcessor.getClientRuleProfile(clientId)
+        : {};
+    const effectiveKeywordMap = window.messageProcessor.getEffectiveBlockedPlayKeywordMap(clientId || '');
+    const systemKeywordMap = systemProfile && systemProfile.blockedPlayKeywords
+        ? systemProfile.blockedPlayKeywords
+        : (window.messageProcessor.getSystemBlockedPlayKeywordMap() || {});
+    const globalKeywordMap = globalProfile && globalProfile.blockedPlayKeywords
+        ? globalProfile.blockedPlayKeywords
+        : {};
+    const clientKeywordMap = clientProfile && clientProfile.blockedPlayKeywords
+        ? clientProfile.blockedPlayKeywords
+        : {};
+    const scopedKeywordMap = scope === 'client' ? clientKeywordMap : globalKeywordMap;
+
+    const scopedPingteTokens = Array.isArray(scopedKeywordMap.pingte_xiao) ? scopedKeywordMap.pingte_xiao : [];
+    const scopedLianTokens = Array.isArray(scopedKeywordMap.lian_play) ? scopedKeywordMap.lian_play : [];
+    if (document.activeElement !== pingteInput) {
+        pingteInput.value = scopedPingteTokens.join(',');
+    }
+    if (document.activeElement !== lianInput) {
+        lianInput.value = scopedLianTokens.join(',');
+    }
+    const currentDraft = collectBlockedPlayKeywordInputs();
+    const hasDraft = currentDraft.pingte_xiao.length > 0 || currentDraft.lian_play.length > 0;
+
+    const getFamilySource = (family) => {
+        if (clientId && Array.isArray(clientKeywordMap[family]) && clientKeywordMap[family].length > 0) return 'client';
+        if (Array.isArray(globalKeywordMap[family]) && globalKeywordMap[family].length > 0) return 'global';
+        return 'system';
+    };
+
+    const familyKeys = ['pingte_xiao', 'te_xiao', 'yi_xiao', 'lian_play'];
+    const explainLines = familyKeys.map((family) => {
+        const effectiveTokens = Array.isArray(effectiveKeywordMap[family]) ? effectiveKeywordMap[family] : [];
+        return `${getBlockedPlayKeywordFamilyLabel(family)}：${formatBlockedPlayKeywordList(effectiveTokens) || '未设置'}（来源：${getAnchorRuleSourceLabel(getFamilySource(family))}）`;
+    });
+
+    const scopedCount = scopedPingteTokens.length + scopedLianTokens.length;
+    const effectivePingteCount = Array.isArray(effectiveKeywordMap.pingte_xiao) ? effectiveKeywordMap.pingte_xiao.length : 0;
+    const effectiveLianCount = Array.isArray(effectiveKeywordMap.lian_play) ? effectiveKeywordMap.lian_play.length : 0;
+    const scopedTip = scopedCount > 0
+        ? `本层已补充 ${scopedCount} 个关键词。`
+        : '本层未补充关键词，继承上层与系统默认。';
+    const draftTip = hasDraft
+        ? ` 当前输入：平特类 ${currentDraft.pingte_xiao.length} 个，连肖/连码类 ${currentDraft.lian_play.length} 个。`
+        : '';
+    stateEl.textContent = `当前生效：平特类 ${effectivePingteCount} 个，连肖/连码类 ${effectiveLianCount} 个。${scopedTip}${draftTip}`;
+    renderBlockedPlayKeywordExplain({ lines: explainLines });
+}
+
 function saveAttributeCombinePolicyRule() {
     try {
         if (!window.messageProcessor || typeof window.messageProcessor.setAttributeCombinePolicy !== 'function') {
@@ -6287,7 +6484,8 @@ function saveAttributeCombinePolicyRule() {
         }
         window.messageProcessor.setAttributeCombinePolicy(policy, { scope, clientId });
         renderAttributeCombinePolicyState();
-        renderAnchorNoviceGuide();
+        renderRegionAccountingPolicyState();
+        renderBlockedPlayKeywordState();
         previewMessage({ silent: true });
         showSuccess(`${getScopeDisplayName(scope)}属性叠加策略已保存：${getAttributeCombinePolicyLabel(policy)}`);
         if (scope === 'global') {
@@ -6295,6 +6493,34 @@ function saveAttributeCombinePolicyRule() {
         }
     } catch (error) {
         showError('保存属性叠加策略失败', error.message || '未知错误');
+    }
+}
+
+function saveRegionAccountingPolicyRule() {
+    try {
+        if (!window.messageProcessor || typeof window.messageProcessor.setRegionAccountingPolicy !== 'function') {
+            throw new Error('当前版本不支持盘口统计模式');
+        }
+        const { scope, clientId } = getRuleContext({ requireClientForClientScope: true });
+        const modeInput = document.getElementById('regionAccountingMode');
+        const defaultRegionInput = document.getElementById('regionAccountingDefaultRegion');
+        const mode = modeInput ? String(modeInput.value || '').trim() : '';
+        const defaultRegion = defaultRegionInput ? String(defaultRegionInput.value || '').trim() : '';
+        if (!mode || !defaultRegion) {
+            throw new Error('请选择盘口统计模式和默认盘口');
+        }
+        const regionAliases = collectRegionAliasInputs();
+        const saved = window.messageProcessor.setRegionAccountingPolicy({ mode, defaultRegion, regionAliases }, { scope, clientId });
+        recalculateAllUsersByRuleChange();
+        if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
+            window.userManager.renderAllSections();
+        }
+        renderRegionAccountingPolicyState();
+        renderBlockedPlayKeywordState();
+        previewMessage({ silent: true });
+        showSuccess(`${getScopeDisplayName(scope)}盘口规则已保存：${getRegionAccountingModeLabel(saved.mode)}，默认盘口 ${window.userManager && typeof window.userManager.getRegionLabel === 'function' ? window.userManager.getRegionLabel(saved.defaultRegion) : saved.defaultRegion}`);
+    } catch (error) {
+        showError('保存盘口规则失败', error.message || '未知错误');
     }
 }
 
@@ -6308,11 +6534,94 @@ function resetAttributeCombinePolicyRule() {
         if (!ok) return;
         window.messageProcessor.clearAttributeCombinePolicy({ scope, clientId });
         renderAttributeCombinePolicyState();
-        renderAnchorNoviceGuide();
+        renderRegionAccountingPolicyState();
+        renderBlockedPlayKeywordState();
         previewMessage({ silent: true });
         showSuccess(`${getScopeDisplayName(scope)}层属性叠加策略已恢复默认`);
     } catch (error) {
         showError('恢复属性叠加策略失败', error.message || '未知错误');
+    }
+}
+
+function resetRegionAccountingPolicyRule() {
+    try {
+        if (!window.messageProcessor || typeof window.messageProcessor.clearRegionAccountingPolicy !== 'function') {
+            throw new Error('当前版本不支持恢复盘口规则');
+        }
+        const { scope, clientId } = getRuleContext({ requireClientForClientScope: true });
+        const ok = confirm(`确定恢复${getScopeDisplayName(scope)}层的盘口规则为上层默认吗？`);
+        if (!ok) return;
+        window.messageProcessor.clearRegionAccountingPolicy({ scope, clientId });
+        recalculateAllUsersByRuleChange();
+        if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
+            window.userManager.renderAllSections();
+        }
+        renderRegionAccountingPolicyState();
+        renderBlockedPlayKeywordState();
+        previewMessage({ silent: true });
+        showSuccess(`${getScopeDisplayName(scope)}层盘口规则已恢复默认`);
+    } catch (error) {
+        showError('恢复盘口规则失败', error.message || '未知错误');
+    }
+}
+
+function saveBlockedPlayKeywordRule() {
+    try {
+        if (!window.messageProcessor || typeof window.messageProcessor.setBlockedPlayKeywordMap !== 'function') {
+            throw new Error('当前版本不支持未开放玩法关键词');
+        }
+        const { scope, clientId } = getRuleContext({ requireClientForClientScope: true });
+        const nextInputMap = collectBlockedPlayKeywordInputs();
+        const scopedProfile = scope === 'client'
+            ? (window.messageProcessor.getClientRuleProfile ? window.messageProcessor.getClientRuleProfile(clientId) : {})
+            : (window.messageProcessor.getGlobalRuleProfile ? window.messageProcessor.getGlobalRuleProfile() : {});
+        const existingScopedMap = scopedProfile && scopedProfile.blockedPlayKeywords && typeof scopedProfile.blockedPlayKeywords === 'object'
+            ? scopedProfile.blockedPlayKeywords
+            : {};
+        const nextMap = {
+            ...existingScopedMap,
+            pingte_xiao: nextInputMap.pingte_xiao,
+            lian_play: nextInputMap.lian_play
+        };
+        if (!nextInputMap.pingte_xiao.length) {
+            delete nextMap.pingte_xiao;
+        }
+        if (!nextInputMap.lian_play.length) {
+            delete nextMap.lian_play;
+        }
+        const saved = window.messageProcessor.setBlockedPlayKeywordMap(nextMap, { scope, clientId });
+        recalculateAllUsersByRuleChange();
+        if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
+            window.userManager.renderAllSections();
+        }
+        renderBlockedPlayKeywordState();
+        previewMessage({ silent: true });
+        const pingteCount = Array.isArray(saved && saved.pingte_xiao) ? saved.pingte_xiao.length : 0;
+        const lianCount = Array.isArray(saved && saved.lian_play) ? saved.lian_play.length : 0;
+        showSuccess(`${getScopeDisplayName(scope)}玩法关键词已保存：平特类 ${pingteCount} 个，连肖/连码类 ${lianCount} 个`);
+    } catch (error) {
+        showError('保存玩法关键词失败', error.message || '未知错误');
+    }
+}
+
+function resetBlockedPlayKeywordRule() {
+    try {
+        if (!window.messageProcessor || typeof window.messageProcessor.clearBlockedPlayKeywordMap !== 'function') {
+            throw new Error('当前版本不支持恢复玩法关键词');
+        }
+        const { scope, clientId } = getRuleContext({ requireClientForClientScope: true });
+        const ok = confirm(`确定恢复${getScopeDisplayName(scope)}层的未开放玩法关键词为上层默认吗？`);
+        if (!ok) return;
+        window.messageProcessor.clearBlockedPlayKeywordMap({ scope, clientId });
+        recalculateAllUsersByRuleChange();
+        if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
+            window.userManager.renderAllSections();
+        }
+        renderBlockedPlayKeywordState();
+        previewMessage({ silent: true });
+        showSuccess(`${getScopeDisplayName(scope)}层未开放玩法关键词已恢复默认`);
+    } catch (error) {
+        showError('恢复玩法关键词失败', error.message || '未知错误');
     }
 }
 
@@ -6429,6 +6738,8 @@ function applyUndeterminedAnchorModeChoice(ambiguity, optionId, fallbackClientId
     renderDefaultOddsState();
     renderAnchorParseModeState();
     renderAttributeCombinePolicyState();
+    renderRegionAccountingPolicyState();
+    renderBlockedPlayKeywordState();
 }
 
 function openAmbiguityChoiceModal(ambiguity) {
@@ -8409,13 +8720,13 @@ function getActiveRecognizeRegionKey() {
     return 'new_ao';
 }
 
-function extractRegionKeysForDuplicate(message) {
+function extractRegionKeysForDuplicate(message, clientId = '') {
     const fallback = getActiveRecognizeRegionKey();
     if (!window.messageProcessor || typeof window.messageProcessor.previewMessage !== 'function') {
         return [fallback];
     }
     try {
-        const preview = window.messageProcessor.previewMessage(message);
+        const preview = window.messageProcessor.previewMessage(message, { clientId: String(clientId || '').trim() });
         if (!preview || !preview.success || !preview.result) {
             return [fallback];
         }
@@ -8709,7 +9020,9 @@ async function handleClipboardTextChanged(payload) {
     let action = currentText ? 'append' : 'replace';
     const selectedUsers = getEditableUsersForCurrentSelection();
     if (selectedUsers.length > 0) {
-        const regionKeys = extractRegionKeysForDuplicate(content);
+        const regionKeys = Array.from(new Set(
+            selectedUsers.flatMap((userName) => extractRegionKeysForDuplicate(content, userName))
+        ));
         const duplicateInfo = findTodayDuplicateInfo(canonicalIncoming, selectedUsers, regionKeys, content);
         const duplicateUsers = duplicateInfo.users;
         const duplicateMessages = duplicateInfo.messages;
@@ -8930,6 +9243,50 @@ function getRegionPnlOdds() {
     return Number.isFinite(legacyOdds) && legacyOdds > 0 ? legacyOdds : 47;
 }
 
+function getUserSettlementConfigSnapshot(userName = '') {
+    const manager = window.userManager;
+    const fallbackOdds = getRegionPnlOdds();
+    if (manager && typeof manager.getUserSettlementConfig === 'function') {
+        const config = manager.getUserSettlementConfig(userName);
+        const odds = Number(config && config.odds);
+        const rebateRate = Number(config && config.rebateRate);
+        const safeOdds = Number.isFinite(odds) && odds > 0 ? odds : fallbackOdds;
+        const safeRebateRate = Number.isFinite(rebateRate) && rebateRate >= 0 ? rebateRate : 0;
+        return {
+            odds: safeOdds,
+            rebateRate: safeRebateRate,
+            rebateRatio: safeRebateRate / 100
+        };
+    }
+    return {
+        odds: fallbackOdds,
+        rebateRate: 0,
+        rebateRatio: 0
+    };
+}
+
+function getCurrentSettlementScopeUsers() {
+    if (typeof collectCurrentLotteryScopeData === 'function') {
+        const scopeResult = collectCurrentLotteryScopeData();
+        if (scopeResult && scopeResult.ok) {
+            return {
+                users: Array.isArray(scopeResult.scopeData && scopeResult.scopeData.users)
+                    ? scopeResult.scopeData.users
+                    : [],
+                scopeLabel: String(scopeResult.scopeData && scopeResult.scopeData.scopeLabel ? scopeResult.scopeData.scopeLabel : '')
+            };
+        }
+    }
+    const manager = window.userManager;
+    const selectedUsers = manager && typeof manager.getSelectedUsers === 'function'
+        ? manager.getSelectedUsers()
+        : [];
+    return {
+        users: Array.isArray(selectedUsers) ? selectedUsers : [],
+        scopeLabel: '当前选择客户范围'
+    };
+}
+
 function formatNumericAmount(value) {
     const num = Number(value);
     if (!Number.isFinite(num)) return '--';
@@ -9009,46 +9366,40 @@ function handleRegionWinningBlur(event) {
     }
 }
 
-function collectRegionPnlMetrics(regionKey, winningNumber = null) {
-    const users = window.userManager && typeof window.userManager.getAllUsers === 'function'
-        ? window.userManager.getAllUsers()
-        : {};
-    const fallbackOdds = getRegionPnlOdds();
+function collectRegionPnlMetrics(regionKey, winningNumber = null, scopedUsers = []) {
+    const manager = window.userManager;
     const target = Number.isInteger(winningNumber) ? String(winningNumber).padStart(2, '0') : '';
     let totalStake = 0;
     let hitStake = 0;
     let payout = 0;
+    let rebate = 0;
 
-    Object.keys(users || {}).forEach(userName => {
-        const regionData = window.userManager && typeof window.userManager.getUserRegionData === 'function'
-            ? window.userManager.getUserRegionData(userName, regionKey)
+    (Array.isArray(scopedUsers) ? scopedUsers : []).forEach(userName => {
+        const regionData = manager && typeof manager.getUserRegionData === 'function'
+            ? manager.getUserRegionData(userName, regionKey)
             : null;
         if (!regionData || !Array.isArray(regionData.data)) return;
 
         const regionTotal = Number(regionData.totalCount);
-        totalStake += Number.isFinite(regionTotal)
+        const safeRegionTotal = Number.isFinite(regionTotal)
             ? regionTotal
             : regionData.data.reduce((sum, item) => sum + (Number(item && item.value) || 0), 0);
+        totalStake += safeRegionTotal;
+
+        const settlement = getUserSettlementConfigSnapshot(userName);
+        rebate += safeRegionTotal * settlement.rebateRatio;
 
         if (target) {
             const hitItem = regionData.data.find(item => item && item.number === target);
             const hitValue = Number(hitItem && hitItem.value);
             const safeHit = Number.isFinite(hitValue) ? hitValue : 0;
             hitStake += safeHit;
-
-            const payoutByOdds = window.userManager && typeof window.userManager.getUserRegionPayoutByNumber === 'function'
-                ? Number(window.userManager.getUserRegionPayoutByNumber(userName, regionKey, target))
-                : NaN;
-            if (Number.isFinite(payoutByOdds)) {
-                payout += payoutByOdds;
-            } else {
-                payout += safeHit * fallbackOdds;
-            }
+            payout += safeHit * settlement.odds;
         }
     });
 
-    const pnl = totalStake - payout;
-    return { totalStake, hitStake, payout, pnl };
+    const pnl = totalStake - payout - rebate;
+    return { totalStake, hitStake, payout, rebate, pnl };
 }
 
 function refreshRegionPnlPanel() {
@@ -9057,8 +9408,8 @@ function refreshRegionPnlPanel() {
     const summary = document.getElementById('regionPnlSummary');
     if (!head || !rows || !summary) return;
 
-    const defaultOdds = getRegionPnlOdds();
-    head.textContent = `盘口中奖盈亏（默认赔率 ${formatNumericAmount(defaultOdds)}，支持锚点独立赔率）`;
+    const scopeInfo = getCurrentSettlementScopeUsers();
+    head.textContent = '盘口庄家盈亏（按客户赔率/返水结算）';
 
     const regionOptions = window.userManager && typeof window.userManager.getRegionOptions === 'function'
         ? window.userManager.getRegionOptions()
@@ -9069,11 +9420,19 @@ function refreshRegionPnlPanel() {
         ];
 
     rows.innerHTML = '';
+    if (!Array.isArray(scopeInfo.users) || scopeInfo.users.length <= 0) {
+        summary.textContent = '请先选择至少一个客户后再查看庄家盈亏。';
+        return;
+    }
+
     let computedCount = 0;
     let invalidCount = 0;
     let totalStake = 0;
     let totalPayout = 0;
+    let totalRebate = 0;
     let totalPnl = 0;
+    let visibleStakeTotal = 0;
+    let visibleRebateTotal = 0;
 
     regionOptions.forEach(region => {
         if (typeof regionWinningNumbers[region.key] !== 'string') {
@@ -9081,7 +9440,9 @@ function refreshRegionPnlPanel() {
         }
         const winningRaw = regionWinningNumbers[region.key] || '';
         const parsed = parseRegionWinningNumber(winningRaw);
-        const metrics = collectRegionPnlMetrics(region.key, parsed.number);
+        const metrics = collectRegionPnlMetrics(region.key, parsed.number, scopeInfo.users);
+        visibleStakeTotal += metrics.totalStake;
+        visibleRebateTotal += metrics.rebate;
 
         const row = document.createElement('div');
         row.className = 'region-pnl-row';
@@ -9108,15 +9469,16 @@ function refreshRegionPnlPanel() {
             invalidCount += 1;
             status.classList.add('invalid');
             status.textContent = parsed.error;
-            meta.textContent = `总注: ${formatNumericAmount(metrics.totalStake)}，请修正中奖号后再计算`;
+            meta.textContent = `总注: ${formatNumericAmount(metrics.totalStake)}，返水: ${formatNumericAmount(metrics.rebate)}，请修正中奖号后再计算`;
         } else if (parsed.number === null) {
             status.classList.add('wait');
             status.textContent = '待输入中奖号';
-            meta.textContent = `总注: ${formatNumericAmount(metrics.totalStake)}`;
+            meta.textContent = `总注: ${formatNumericAmount(metrics.totalStake)}，返水: ${formatNumericAmount(metrics.rebate)}`;
         } else {
             computedCount += 1;
             totalStake += metrics.totalStake;
             totalPayout += metrics.payout;
+            totalRebate += metrics.rebate;
             totalPnl += metrics.pnl;
 
             if (Math.abs(metrics.pnl) < 1e-9) {
@@ -9127,7 +9489,7 @@ function refreshRegionPnlPanel() {
                 status.classList.add('loss');
             }
             status.textContent = `盈亏 ${formatSignedAmount(metrics.pnl)}`;
-            meta.textContent = `总注: ${formatNumericAmount(metrics.totalStake)}，命中: ${formatNumericAmount(metrics.hitStake)}，派彩: ${formatNumericAmount(metrics.payout)}（按锚点赔率）`;
+            meta.textContent = `总注: ${formatNumericAmount(metrics.totalStake)}，命中: ${formatNumericAmount(metrics.hitStake)}，派彩: ${formatNumericAmount(metrics.payout)}，返水: ${formatNumericAmount(metrics.rebate)}`;
         }
 
         top.appendChild(regionLabel);
@@ -9141,13 +9503,13 @@ function refreshRegionPnlPanel() {
     saveRegionWinningNumbersPreference();
     if (computedCount === 0) {
         summary.textContent = invalidCount > 0
-            ? '存在无效中奖号，请输入 01-49。'
-            : '输入新奥、老奥、香港中奖号后即可计算各盘口盈亏。';
+            ? `当前范围总注 ${formatNumericAmount(visibleStakeTotal)}，总返水 ${formatNumericAmount(visibleRebateTotal)}；存在无效中奖号，请输入 01-49。`
+            : `当前范围总注 ${formatNumericAmount(visibleStakeTotal)}，总返水 ${formatNumericAmount(visibleRebateTotal)}；输入中奖号后可继续计算派彩与盈亏。`;
         return;
     }
 
     const summaryClass = Math.abs(totalPnl) < 1e-9 ? 'even' : (totalPnl > 0 ? 'profit' : 'loss');
-    summary.innerHTML = `已计算 ${computedCount} 个盘口：总注 ${formatNumericAmount(totalStake)}，总派彩 ${formatNumericAmount(totalPayout)}，<span class="region-pnl-status ${summaryClass}">合计盈亏 ${formatSignedAmount(totalPnl)}</span>`;
+    summary.innerHTML = `已计算 ${computedCount} 个盘口：总注 ${formatNumericAmount(totalStake)}，总派彩 ${formatNumericAmount(totalPayout)}，总返水 ${formatNumericAmount(totalRebate)}，<span class="region-pnl-status ${summaryClass}">合计盈亏 ${formatSignedAmount(totalPnl)}</span>`;
 }
 
 // 设置事件监听器
@@ -9186,6 +9548,8 @@ function setupEventListeners() {
             renderDefaultOddsState();
             renderAnchorParseModeState();
             renderAttributeCombinePolicyState();
+            renderRegionAccountingPolicyState();
+            renderBlockedPlayKeywordState();
             if (window.userManager
                 && typeof window.userManager.hasIncompletePayoutData === 'function'
                 && window.userManager.hasIncompletePayoutData()
@@ -9218,6 +9582,7 @@ function setupEventListeners() {
 
     ipcRenderer.on('attribute-config-loaded', (config) => {
         if (window.messageProcessor && typeof window.messageProcessor.setAttributeConfig === 'function') {
+            window.__attributeConfigReady = true;
             window.messageProcessor.setAttributeConfig(config || {
                 overrides: {},
                 hidden: [],
@@ -9233,6 +9598,14 @@ function setupEventListeners() {
             renderDefaultOddsState();
             renderAnchorParseModeState();
             renderAttributeCombinePolicyState();
+            renderRegionAccountingPolicyState();
+            renderBlockedPlayKeywordState();
+            if (window.userManager && typeof window.userManager.syncStoredUserParsePreferencesToRules === 'function') {
+                window.userManager.syncStoredUserParsePreferencesToRules();
+            }
+            if (window.userManager && typeof window.userManager.renderUserList === 'function') {
+                window.userManager.renderUserList();
+            }
         }
     });
 
@@ -10429,12 +10802,15 @@ function toggleRecognizeSideGroup(groupKey) {
         Object.keys(recognizeSideGroupState).forEach((key) => {
             recognizeSideGroupState[key] = key === groupKey;
         });
-        if (groupKey === 'anchors') {
-            renderAnchorAliasList();
-            renderAnchorImpactPreview();
+        if (groupKey === 'attributes') {
+            renderAttributeCombinePolicyState();
+            renderRegionAccountingPolicyState();
+            renderBlockedPlayKeywordState();
+        } else if (groupKey === 'anchors') {
             renderDefaultOddsState();
             renderAnchorParseModeState();
-            renderAttributeCombinePolicyState();
+            renderAnchorAliasList();
+            renderAnchorImpactPreview();
         } else if (groupKey === 'noise') {
             handleNoiseRuleScopeChange();
         } else if (groupKey === 'amountUnits') {
@@ -11015,14 +11391,23 @@ function renderCompareStandardEntries(entries, emptyText = '（本行未识别�
     }
     const itemsHtml = safeEntries.map((entry) => {
         const coreText = formatRecognizePreviewEntryCore(entry);
-        const regionText = String(entry.regionLabel || '新奥').trim() || '新奥';
+        const accountingRegionText = String(entry.accountingRegionLabel || entry.regionLabel || '新奥').trim() || '新奥';
+        const parsedRegionText = String(entry.parsedRegionLabel || '').trim();
+        const mergedRegionText = entry && entry.separateStatsByRegion === false
+            ? `统一记${accountingRegionText}`
+            : accountingRegionText;
+        const showParsedRegionTag = entry
+            && entry.separateStatsByRegion === false
+            && parsedRegionText
+            && parsedRegionText !== accountingRegionText;
         const isPlay = String(entry && entry.kind ? entry.kind : '').trim() === 'play';
         return `
             <div class="recognize-standard-item ${isPlay ? 'play' : 'counted'}">
                 <span class="recognize-standard-text">${escapeHtml(coreText || '（无法生成标准格式）')}</span>
                 <span class="recognize-standard-tags">
                     <span class="recognize-entry-state-tag ${isPlay ? 'play' : 'counted'}">${isPlay ? '未统计' : '已计入'}</span>
-                    <span class="recognize-region-tag">${escapeHtml(regionText)}</span>
+                    <span class="recognize-region-tag">${escapeHtml(mergedRegionText)}</span>
+                    ${showParsedRegionTag ? `<span class="recognize-region-tag">${escapeHtml(`识别${parsedRegionText}`)}</span>` : ''}
                 </span>
             </div>
         `;
@@ -11213,6 +11598,9 @@ function buildRecognizePreviewHtml(previewResult, rawValue) {
 
     const result = previewResult.result || {};
     const summary = getRecognizePreviewSummary(result);
+    const regionAccounting = result && result.regionAccounting && typeof result.regionAccounting === 'object'
+        ? result.regionAccounting
+        : null;
     const groupedRows = buildRecognizePreviewGroupedRows(result, rawValue);
     const blockedLineLabels = groupedRows.blockedRows
         .map((row) => formatRecognizePreviewLineLabel(row && row.lineNo, '未定位段'))
@@ -11315,7 +11703,17 @@ function buildRecognizePreviewHtml(previewResult, rawValue) {
                 </div>
             `
             : '');
-    return `<div class="recognize-compare-table">${summaryBlock}${warningBlock}<div class="recognize-preview-groups">${sectionsHtml || emptySectionsHtml}</div></div>`;
+    const accountingNotice = regionAccounting && regionAccounting.separateStatsByRegion === false
+        ? `
+            <div class="parse-issue parse-issue-warning" style="margin-bottom: 12px;">
+                <div class="parse-issue-head">
+                    <span class="parse-issue-badge warning">当前客户不分盘口统计</span>
+                </div>
+                <div class="parse-issue-message">消息里识别到的新奥/老奥/香港不会拆账，最终统一记到 ${escapeHtml(String(regionAccounting.defaultRegionLabel || '新奥').trim() || '新奥')}。</div>
+            </div>
+        `
+        : '';
+    return `<div class="recognize-compare-table">${summaryBlock}${accountingNotice}${warningBlock}<div class="recognize-preview-groups">${sectionsHtml || emptySectionsHtml}</div></div>`;
 }
 
 // 预览消息
@@ -11458,7 +11856,9 @@ async function confirmEdit() {
             window.userManager.applyEditedOriginalData(userName, index, regionKey, originalMessageForStorage);
             renderViewRegionButtons();
             closeModal();
-            const regionLabel = window.userManager.getRegionLabel ? window.userManager.getRegionLabel(regionKey) : regionKey;
+            const regionLabel = window.userManager.getUserRegionDisplayLabel
+                ? window.userManager.getUserRegionDisplayLabel(userName, regionKey)
+                : (window.userManager.getRegionLabel ? window.userManager.getRegionLabel(regionKey) : regionKey);
             showSuccess(`消息修改成功：${userName}（${regionLabel}）`);
             return;
         }
@@ -11511,8 +11911,10 @@ async function confirmEdit() {
             maxIgnoredLineCount = Math.max(maxIgnoredLineCount, Number(result.ignoredLineCount) || 0);
         }
 
-        const regionKeys = extractRegionKeysForDuplicate(message);
-        markMessageRecordedForToday(message, selectedUsers, regionKeys);
+        selectedUsers.forEach((userName) => {
+            const regionKeys = extractRegionKeysForDuplicate(message, userName);
+            markMessageRecordedForToday(message, [userName], regionKeys);
+        });
 
         userManager.renderAllSections();
         renderViewRegionButtons();
@@ -11703,6 +12105,16 @@ function mergeLotteryScopeData(manager, scopedUsers, viewRegions) {
         data: Array.from(mergedMap.values()),
         originalData,
         totalCount,
+        userConfigs: scopedUsers.map((userName) => {
+            const settlement = typeof manager.getUserSettlementConfig === 'function'
+                ? manager.getUserSettlementConfig(userName)
+                : { odds: getRegionPnlOdds(), rebateRate: 0 };
+            return {
+                userName,
+                odds: Number(settlement && settlement.odds) || getRegionPnlOdds(),
+                rebateRate: Number(settlement && settlement.rebateRate) || 0
+            };
+        }),
         userTotals: Array.from(userTotals.entries())
             .map(([userName, amount]) => ({ userName, amount: Number(amount) || 0 }))
             .sort((a, b) => b.amount - a.amount)
@@ -11724,7 +12136,7 @@ function roundUpAmount(value) {
 function collectHedgeScopeByRegion(scopeData) {
     const manager = window.userManager;
     if (!manager) {
-        return { regionRows: [], totalStake: 0 };
+        return { regionRows: [], totalStake: 0, totalRebate: 0 };
     }
 
     const scopedUsers = Array.isArray(scopeData && scopeData.users) ? scopeData.users : [];
@@ -11733,23 +12145,26 @@ function collectHedgeScopeByRegion(scopeData) {
         : ['new_ao'];
     const regionRows = [];
     let totalStake = 0;
+    let totalRebate = 0;
 
     viewRegions.forEach((regionKey) => {
         const numberMap = new Map();
         let regionTotalStake = 0;
+        let regionTotalRebate = 0;
         scopedUsers.forEach((userName) => {
             const regionData = typeof manager.getUserRegionData === 'function'
                 ? manager.getUserRegionData(userName, regionKey)
                 : null;
             if (!regionData || !Array.isArray(regionData.data)) return;
 
-            if (typeof manager.ensureRegionPayoutData === 'function') {
-                manager.ensureRegionPayoutData(regionData);
-            }
             const regionStake = Number(regionData.totalCount);
-            regionTotalStake += Number.isFinite(regionStake)
+            const safeRegionStake = Number.isFinite(regionStake)
                 ? regionStake
                 : regionData.data.reduce((sum, item) => sum + (Number(item && item.value) || 0), 0);
+            regionTotalStake += safeRegionStake;
+
+            const settlement = getUserSettlementConfigSnapshot(userName);
+            regionTotalRebate += safeRegionStake * settlement.rebateRatio;
 
             (regionData.data || []).forEach((item) => {
                 const number = String(item && item.number ? item.number : '').padStart(2, '0');
@@ -11763,21 +12178,9 @@ function collectHedgeScopeByRegion(scopeData) {
                     });
                 }
                 const row = numberMap.get(number);
-                row.stake += Number(item && item.value) || 0;
-            });
-            (regionData.payoutData || []).forEach((item) => {
-                const number = String(item && item.number ? item.number : '').padStart(2, '0');
-                if (!number) return;
-                if (!numberMap.has(number)) {
-                    numberMap.set(number, {
-                        number,
-                        text: String((item && item.text) || ''),
-                        stake: 0,
-                        payout: 0,
-                    });
-                }
-                const row = numberMap.get(number);
-                row.payout += Number(item && item.value) || 0;
+                const stake = Number(item && item.value) || 0;
+                row.stake += stake;
+                row.payout += stake * settlement.odds;
             });
         });
 
@@ -11795,30 +12198,34 @@ function collectHedgeScopeByRegion(scopeData) {
             regionKey,
             regionLabel,
             totalStake: regionTotalStake,
+            totalRebate: regionTotalRebate,
             numbers,
         });
         totalStake += regionTotalStake;
+        totalRebate += regionTotalRebate;
     });
 
-    return { regionRows, totalStake };
+    return { regionRows, totalStake, totalRebate };
 }
 
-function buildHedgeSuggestions(regionScope, maxLoss, odds) {
+function buildHedgeSuggestions(regionScope, maxLoss) {
     const lossLimit = Number(maxLoss);
-    const safeOdds = Number(odds);
-    const unitImprove = safeOdds - 1;
-    if (!(lossLimit >= 0) || !Number.isFinite(unitImprove) || unitImprove <= 0) {
+    if (!(lossLimit >= 0)) {
         return [];
     }
 
     const suggestions = [];
     (regionScope && Array.isArray(regionScope.regionRows) ? regionScope.regionRows : []).forEach((regionRow) => {
         const regionTotalStake = Number(regionRow && regionRow.totalStake) || 0;
+        const regionRebate = Number(regionRow && regionRow.totalRebate) || 0;
         (regionRow && Array.isArray(regionRow.numbers) ? regionRow.numbers : []).forEach((row) => {
             const payout = Number(row && row.payout) || 0;
-            const currentPnl = regionTotalStake - payout;
+            const stake = Number(row && row.stake) || 0;
+            const currentPnl = regionTotalStake - payout - regionRebate;
             if (currentPnl >= -lossLimit) return;
             const needImprove = (-lossLimit) - currentPnl;
+            const unitImprove = payout > 0 && stake > 0 ? (payout / stake) - 1 : 0;
+            if (!Number.isFinite(unitImprove) || unitImprove <= 0) return;
             const hedgeAmount = roundUpAmount(needImprove / unitImprove);
             if (!(hedgeAmount > 0)) return;
             suggestions.push({
@@ -11826,8 +12233,10 @@ function buildHedgeSuggestions(regionScope, maxLoss, odds) {
                 regionLabel: regionRow.regionLabel,
                 number: String(row.number || '').padStart(2, '0'),
                 text: String(row.text || ''),
-                stake: Number(row.stake) || 0,
+                stake,
                 payout,
+                rebate: regionRebate,
+                odds: payout > 0 && stake > 0 ? payout / stake : 0,
                 currentPnl,
                 hedgeAmount,
             });
@@ -11899,6 +12308,7 @@ function renderHedgeReportRows(suggestions = []) {
             <td>${escapeHtml(row.number || '-')}</td>
             <td>${escapeHtml(formatNumericAmount(row.stake))}</td>
             <td>${escapeHtml(formatNumericAmount(row.payout))}</td>
+            <td>${escapeHtml(formatNumericAmount(row.rebate))}</td>
             <td class="is-negative">${escapeHtml(formatSignedAmount(row.currentPnl))}</td>
             <td class="is-hedge">${escapeHtml(formatNumericAmount(row.hedgeAmount))}</td>
         </tr>
@@ -11912,6 +12322,7 @@ function renderHedgeReportRows(suggestions = []) {
                     <th>号码</th>
                     <th>当前总注</th>
                     <th>当前派彩</th>
+                    <th>当前返水</th>
                     <th>当前盈亏</th>
                     <th>建议抛量</th>
                 </tr>
@@ -11927,7 +12338,7 @@ function openHedgeReportModal() {
 
     const oddsEl = document.getElementById('hedgeReportOdds');
     if (oddsEl) {
-        oddsEl.textContent = formatNumericAmount(getRegionPnlOdds());
+        oddsEl.textContent = '按客户赔率 / 返水';
     }
 
     const scopeTextEl = document.getElementById('hedgeReportScope');
@@ -12013,15 +12424,7 @@ function calculateHedgeReport() {
         return;
     }
 
-    const odds = getRegionPnlOdds();
-    if (!Number.isFinite(odds) || odds <= 1) {
-        if (summary) summary.textContent = '当前默认赔率无效，无法计算抛量。';
-        renderHedgeReportRows([]);
-        if (messageEl) messageEl.value = '';
-        return;
-    }
-
-    const suggestions = buildHedgeSuggestions(regionScope, maxLoss, odds);
+    const suggestions = buildHedgeSuggestions(regionScope, maxLoss);
     const message = buildHedgeReportMessage(suggestions);
     const totalHedgeAmount = suggestions.reduce((sum, row) => sum + (Number(row.hedgeAmount) || 0), 0);
     const minPnl = suggestions.reduce((min, row) => {
@@ -12139,6 +12542,7 @@ function computeOriginalRowExportPnl(row, winningConfigs = {}) {
     const processor = window.messageProcessor;
     const regionKey = String(row && row.regionKey ? row.regionKey : 'new_ao');
     const userName = String(row && row.userName ? row.userName : '');
+    const settlement = getUserSettlementConfigSnapshot(userName);
     const extractMessage = manager && typeof manager.extractOriginalMessageText === 'function'
         ? manager.extractOriginalMessageText.bind(manager)
         : (entry) => {
@@ -12173,27 +12577,6 @@ function computeOriginalRowExportPnl(row, winningConfigs = {}) {
         parseError = '解析器不可用';
     } else if (shouldParseMessage && String(rawMessage || '').trim()) {
         try {
-            let fallbackOdds = getRegionPnlOdds();
-            if (typeof processor.getEffectiveDefaultOdds === 'function') {
-                const clientOdds = Number(processor.getEffectiveDefaultOdds(userName));
-                if (Number.isFinite(clientOdds) && clientOdds > 0) {
-                    fallbackOdds = clientOdds;
-                }
-            }
-            const normalizeOdds = (odds) => {
-                if (typeof processor.normalizeOddsValue === 'function') {
-                    const normalized = Number(processor.normalizeOddsValue(odds, fallbackOdds));
-                    if (Number.isFinite(normalized) && normalized > 0) {
-                        return normalized;
-                    }
-                }
-                const numeric = Number(odds);
-                if (Number.isFinite(numeric) && numeric > 0) {
-                    return numeric;
-                }
-                return fallbackOdds;
-            };
-
             const parsed = processor.parseMessage(rawMessage, { clientId: userName, allowPartial: true });
             const targetNumber = winning.numberText || '';
 
@@ -12213,7 +12596,7 @@ function computeOriginalRowExportPnl(row, winningConfigs = {}) {
                 const hit = numbers.some(num => String(num).padStart(2, '0') === targetNumber);
                 if (!hit) return;
                 hitStake += amount;
-                payout += amount * normalizeOdds(entry.odds);
+                payout += amount * settlement.odds;
             });
         } catch (error) {
             parseError = error && error.message ? String(error.message) : '解析失败';
@@ -12236,6 +12619,7 @@ function computeOriginalRowExportPnl(row, winningConfigs = {}) {
 
     let winLoss = '-';
     let payoutValue = null;
+    let rebateValue = Number.isFinite(orderTotal) ? Number(orderTotal) * settlement.rebateRatio : null;
     let pnlValue = null;
     let computable = false;
 
@@ -12245,7 +12629,8 @@ function computeOriginalRowExportPnl(row, winningConfigs = {}) {
         } else {
             const totalStake = Number.isFinite(orderTotal) ? Number(orderTotal) : parsedRegionTotal;
             payoutValue = payout;
-            pnlValue = totalStake - payout;
+            rebateValue = Number.isFinite(totalStake) ? totalStake * settlement.rebateRatio : null;
+            pnlValue = totalStake - payout - (Number(rebateValue) || 0);
             winLoss = hitStake > 0 ? '赢' : '输';
             computable = Number.isFinite(pnlValue);
         }
@@ -12256,6 +12641,9 @@ function computeOriginalRowExportPnl(row, winningConfigs = {}) {
     return {
         orderTotal,
         hitStake,
+        odds: settlement.odds,
+        rebateRate: settlement.rebateRate,
+        rebate: rebateValue,
         payout: payoutValue,
         pnl: pnlValue,
         winLoss,
@@ -12269,8 +12657,10 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
     const originalData = Array.isArray(scopeData.originalData) ? scopeData.originalData : [];
     const users = Array.isArray(scopeData.users) ? scopeData.users : [];
     const userTotals = Array.isArray(scopeData.userTotals) ? scopeData.userTotals : [];
+    const userConfigs = Array.isArray(scopeData.userConfigs) ? scopeData.userConfigs : [];
     const viewRegions = Array.isArray(scopeData.viewRegions) ? scopeData.viewRegions : [];
     const regionLabels = Array.isArray(scopeData.viewRegionLabels) ? scopeData.viewRegionLabels : viewRegions;
+    const userConfigMap = new Map(userConfigs.map((item) => [item.userName, item]));
     const winningConfigs = collectExportWinningConfigs(viewRegions);
     const exportOriginalRows = originalData.map((item, index) => {
         const metrics = computeOriginalRowExportPnl(item, winningConfigs);
@@ -12312,9 +12702,11 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
             <tr>
                 <td>${escapeHtml(item.userName)}</td>
                 <td style="text-align:right">${escapeHtml(formatNumericAmount(item.amount))}</td>
+                <td style="text-align:right">${escapeHtml(formatNumericAmount((userConfigMap.get(item.userName) || {}).odds))}</td>
+                <td style="text-align:right">${escapeHtml(formatNumericAmount((userConfigMap.get(item.userName) || {}).rebateRate))}%</td>
             </tr>
         `).join('')
-        : '<tr><td colspan="2">暂无数据</td></tr>';
+        : '<tr><td colspan="4">暂无数据</td></tr>';
 
     const winningSummaryText = (viewRegions.length > 0 ? viewRegions : ['new_ao', 'old_ao', 'hongkong'])
         .map((regionKey) => {
@@ -12334,8 +12726,10 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
     const computablePnlRows = rowsWithWinning.filter(item => Number.isFinite(item.pnl));
     const unresolvedPnlRows = rowsWithWinning.length - computablePnlRows.length;
     const totalOrderForPnl = computablePnlRows.reduce((sum, item) => sum + (Number(item.orderTotal) || 0), 0);
+    const totalRebateForPnl = computablePnlRows.reduce((sum, item) => sum + (Number(item.rebate) || 0), 0);
     const totalPayoutForPnl = computablePnlRows.reduce((sum, item) => sum + (Number(item.payout) || 0), 0);
     const totalPnl = computablePnlRows.reduce((sum, item) => sum + (Number(item.pnl) || 0), 0);
+    const totalRebateAll = exportOriginalRows.reduce((sum, item) => sum + (Number(item.rebate) || 0), 0);
     const hasWinningInput = Object.values(winningConfigs).some(config => !!(config && config.numberText));
     const hasWinningRows = rowsWithWinning.length > 0;
     const totalPnlMetaText = hasWinningInput
@@ -12355,8 +12749,11 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
     const originalRowsHtml = exportOriginalRows.length > 0
         ? exportOriginalRows.map((item) => {
             const payout = Number(item.payout);
+            const rebate = Number(item.rebate);
             const pnl = Number(item.pnl);
             const totalText = Number.isFinite(item.orderTotal) ? formatNumericAmount(item.orderTotal) : '-';
+            const oddsText = Number.isFinite(item.odds) ? formatNumericAmount(item.odds) : '-';
+            const rebateText = Number.isFinite(rebate) ? formatNumericAmount(rebate) : '-';
             const payoutText = Number.isFinite(payout) ? formatNumericAmount(payout) : '-';
             const pnlText = Number.isFinite(pnl) ? formatSignedAmount(pnl) : '-';
             const pnlClass = Number.isFinite(pnl)
@@ -12373,19 +12770,23 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
                 <td style="text-align:right">${escapeHtml(item.winningNumber || '-')}</td>
                 <td class="${winLossClass}">${escapeHtml(item.winLoss || '-')}</td>
                 <td style="text-align:right">${escapeHtml(totalText)}</td>
+                <td style="text-align:right">${escapeHtml(oddsText)}</td>
+                <td style="text-align:right">${escapeHtml(rebateText)}</td>
                 <td style="text-align:right">${escapeHtml(payoutText)}</td>
                 <td style="text-align:right" class="${pnlClass}">${escapeHtml(pnlText)}</td>
                 <td>${escapeHtml(item.message || '').replace(/\n/g, '<br>')}</td>
             </tr>
         `;
         }).join('')
-        : '<tr><td colspan="9">暂无原始消息</td></tr>';
+        : '<tr><td colspan="11">暂无原始消息</td></tr>';
 
     const originalSummaryRowHtml = hasWinningRows
         ? `
             <tr class="summary-row">
                 <td colspan="5">盈亏合计（${escapeHtml(`${computablePnlRows.length}/${rowsWithWinning.length}`)}）</td>
                 <td style="text-align:right">${escapeHtml(computablePnlRows.length > 0 ? formatNumericAmount(totalOrderForPnl) : '-')}</td>
+                <td style="text-align:right">-</td>
+                <td style="text-align:right">${escapeHtml(computablePnlRows.length > 0 ? formatNumericAmount(totalRebateForPnl) : '-')}</td>
                 <td style="text-align:right">${escapeHtml(computablePnlRows.length > 0 ? formatNumericAmount(totalPayoutForPnl) : '-')}</td>
                 <td style="text-align:right" class="${totalPnlMetaClass}">${escapeHtml(computablePnlRows.length > 0 ? formatSignedAmount(totalPnl) : '-')}</td>
                 <td>${escapeHtml(unresolvedPnlRows > 0 ? `${unresolvedPnlRows}条无法计算` : '全部可计算')}</td>
@@ -12423,6 +12824,7 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
     客户：${escapeHtml(users.join('，') || '-')}<br>
     查看盘口：${escapeHtml(regionLabels.join('、') || '-')}<br>
     总数：${escapeHtml(scopeData.totalCount || 0)}<br>
+    总返水：${escapeHtml(formatNumericAmount(totalRebateAll))}<br>
     中奖号：${escapeHtml(winningSummaryText)}<br>
     总盈亏：<span class="${totalPnlMetaClass}">${escapeHtml(totalPnlMetaText)}</span><br>
     盈亏计算条数：${escapeHtml(pnlCoverageMetaText)}<br>
@@ -12432,7 +12834,7 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
   <h2>客户总数分布</h2>
   <table>
     <thead>
-      <tr><th>客户</th><th>累计值</th></tr>
+      <tr><th>客户</th><th>累计值</th><th>赔率</th><th>返水%</th></tr>
     </thead>
     <tbody>${userRowsHtml}</tbody>
   </table>
@@ -12456,7 +12858,7 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
   <h2>原始消息</h2>
   <table>
     <thead>
-      <tr><th>序号</th><th>客户</th><th>盘口</th><th>中奖号</th><th>输赢</th><th>本条总注</th><th>本条派彩</th><th>本条盈亏</th><th>内容</th></tr>
+      <tr><th>序号</th><th>客户</th><th>盘口</th><th>中奖号</th><th>输赢</th><th>本条总注</th><th>结算赔率</th><th>本条返水</th><th>本条派彩</th><th>本条盈亏</th><th>内容</th></tr>
     </thead>
     <tbody>${originalRowsHtml}${originalSummaryRowHtml}</tbody>
   </table>
@@ -12596,13 +12998,28 @@ async function exportClientDataDocument() {
 function generateCopyContent(scopeData) {
     const userLabel = Array.isArray(scopeData.users) ? scopeData.users.join('，') : '无';
     const regionLabel = Array.isArray(scopeData.viewRegionLabels) ? scopeData.viewRegionLabels.join('、') : '-';
+    const userTotals = Array.isArray(scopeData.userTotals) ? scopeData.userTotals : [];
+    const userConfigs = Array.isArray(scopeData.userConfigs) ? scopeData.userConfigs : [];
+    const userConfigMap = new Map(userConfigs.map((item) => [item.userName, item]));
     const groupedRows = buildGroupedByValueRows(scopeData.data || []);
+    const totalRebate = userTotals.reduce((sum, item) => {
+        const config = userConfigMap.get(item.userName) || {};
+        const rebateRate = Number(config.rebateRate) || 0;
+        return sum + ((Number(item.amount) || 0) * rebateRate / 100);
+    }, 0);
 
     let content = `范围: ${scopeData.scopeLabel || '-'}\n`;
     content += `盘口: ${regionLabel}\n`;
     content += `用户: ${userLabel}\n`;
     content += `总数: ${scopeData.totalCount}\n`;
+    content += `总返水: ${formatNumericAmount(totalRebate)}\n`;
     content += `导出时间: ${scopeData.exportedAt || new Date().toLocaleString('zh-CN')}\n`;
+    if (userConfigs.length > 0) {
+        content += `结算参数:\n`;
+        userConfigs.forEach((item) => {
+            content += `${item.userName}: 赔率 ${formatNumericAmount(item.odds)} / 返水 ${formatNumericAmount(item.rebateRate)}%\n`;
+        });
+    }
     content += `数据统计:\n`;
 
     groupedRows.forEach((row) => {
@@ -12898,6 +13315,10 @@ window.removeAnchorAliasRule = removeAnchorAliasRule;
 window.resetAnchorAliasRules = resetAnchorAliasRules;
 window.saveAnchorParseModeRule = saveAnchorParseModeRule;
 window.resetAnchorParseModeRule = resetAnchorParseModeRule;
+window.saveRegionAccountingPolicyRule = saveRegionAccountingPolicyRule;
+window.resetRegionAccountingPolicyRule = resetRegionAccountingPolicyRule;
+window.saveBlockedPlayKeywordRule = saveBlockedPlayKeywordRule;
+window.resetBlockedPlayKeywordRule = resetBlockedPlayKeywordRule;
 window.saveDefaultOddsRule = saveDefaultOddsRule;
 window.resetDefaultOddsRule = resetDefaultOddsRule;
 window.confirmAmbiguityChoice = confirmAmbiguityChoice;

@@ -1,6 +1,6 @@
 {
   "name": "messagecounter",
-  "version": "5.0.2",
+  "version": "5.0.3",
   "author": "小张",
   "description": "一款支持内置书库与本地 TXT 导入的离线小说阅读器",
   "main": "main.js",

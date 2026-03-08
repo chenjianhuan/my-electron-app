@@ -370,7 +370,7 @@ class UserModel {
     };
     const reservedAnchorTokens = new Set([
       '新', '老', '香', '港', '奥', '澳',
-      '新奥', '老奥', '澳门', '香港',
+      '新奥', '新澳', '老奥', '老澳', '澳门', '香港',
       '米', '元', '块', '蚊', '井', '斤', '注', '码', '碼', '毛', '角', '分', '闷'
     ]);
     const sanitizeAmountUnits = (rawAmountUnits) => {
@@ -386,12 +386,88 @@ class UserModel {
         if (/[\r\n]/.test(token)) return;
         if (/^[0-9０-９零〇一二两三四五六七八九十百千万]+$/.test(token)) return;
         if (!/[\u4e00-\u9fa5A-Za-z]/.test(token)) return;
-        if (/^(?:新|老|香|港|奥|澳|新奥|老奥|澳门|香港)$/.test(token)) return;
+        if (/^(?:新|老|香|港|奥|澳|新奥|新澳|老奥|老澳|澳门|香港)$/.test(token)) return;
         if (seen.has(token)) return;
         seen.add(token);
         safeUnits.push(token);
       });
       return safeUnits;
+    };
+    const sanitizeRegionAliasMap = (rawRegionAliases) => {
+      const systemAliasLookup = new Set([
+        '新奥', '新澳', '澳门', '奥', '澳', '新',
+        '老奥', '老澳', '老',
+        '香港', '香', '港'
+      ]);
+      const safeMap = {};
+      if (!rawRegionAliases || typeof rawRegionAliases !== 'object') return safeMap;
+      ['new_ao', 'old_ao', 'hongkong'].forEach((regionKey) => {
+        const rawTokens = Array.isArray(rawRegionAliases[regionKey])
+          ? rawRegionAliases[regionKey]
+          : [];
+        const seen = new Set();
+        const safeTokens = [];
+        rawTokens.forEach((tokenRaw) => {
+          const token = String(tokenRaw || '').replace(/\s+/g, '').trim();
+          if (!token || token.length > 12) return;
+          if (/[\r\n]/.test(token)) return;
+          if (/^[0-9０-９零〇一二两三四五六七八九十百千万]+$/.test(token)) return;
+          if (!/[\u4e00-\u9fa5A-Za-z]/.test(token)) return;
+          if (/^(?:元|块|米|蚊|毛|角|分|闷|号|碼|码|各|买|都)$/u.test(token)) return;
+          if (systemAliasLookup.has(token)) return;
+          if (seen.has(token)) return;
+          seen.add(token);
+          safeTokens.push(token);
+        });
+        if (safeTokens.length > 0) {
+          safeMap[regionKey] = safeTokens;
+        }
+      });
+      return safeMap;
+    };
+    const sanitizeBlockedPlayKeywordMap = (rawKeywordMap) => {
+      const safeMap = {};
+      const allowedFamilies = ['pingte_xiao', 'te_xiao', 'yi_xiao', 'lian_play'];
+      const systemKeywordLookup = new Map([
+        ['pingte_xiao', new Set(['平特一肖', '平特肖', '平特', '平肖', '平'])],
+        ['te_xiao', new Set(['特肖'])],
+        ['yi_xiao', new Set(['一肖'])],
+        ['lian_play', new Set([
+          '二连', '二联', '三连', '三联', '四连', '五连',
+          '二连肖', '三连肖', '四连肖', '五连肖',
+          '二肖连', '三肖连', '四肖连', '五肖连',
+          '连肖',
+          '复式', '复试',
+          '复式连肖', '复试连肖',
+          '复式二连', '复试二连',
+          '复式三连', '复试三连',
+          '复式四连', '复试四连',
+          '复式五连', '复试五连'
+        ])]
+      ]);
+      if (!rawKeywordMap || typeof rawKeywordMap !== 'object') return safeMap;
+      allowedFamilies.forEach((family) => {
+        const rawTokens = Array.isArray(rawKeywordMap[family]) ? rawKeywordMap[family] : [];
+        const seen = new Set();
+        const safeTokens = [];
+        rawTokens.forEach((tokenRaw) => {
+          const token = String(tokenRaw || '').replace(/\s+/g, '').trim();
+          if (!token || token.length > 16) return;
+          if (/[\r\n]/.test(token)) return;
+          if (!/[\u4e00-\u9fa5A-Za-z]/.test(token)) return;
+          if (/^[0-9０-９]+$/.test(token)) return;
+          if (token.length < 2 && family !== 'pingte_xiao') return;
+          if (/^(?:元|块|米|蚊|毛|角|分|闷|号|碼|码|各|买|都)$/u.test(token)) return;
+          if ((systemKeywordLookup.get(family) || new Set()).has(token)) return;
+          if (seen.has(token)) return;
+          seen.add(token);
+          safeTokens.push(token);
+        });
+        if (safeTokens.length > 0) {
+          safeMap[family] = safeTokens;
+        }
+      });
+      return safeMap;
     };
     const isSupportedAnchorToken = (rawToken) => {
       const token = normalizeAnchorToken(rawToken);
@@ -535,12 +611,28 @@ class UserModel {
         if (['new_ao', 'old_ao', 'hongkong'].includes(defaultRegion)) {
           regionPolicy.defaultRegion = defaultRegion;
         }
+        if (typeof profile.regionPolicy.separateStatsByRegion === 'boolean') {
+          regionPolicy.separateStatsByRegion = profile.regionPolicy.separateStatsByRegion;
+        }
+        const regionAliases = sanitizeRegionAliasMap(profile.regionPolicy.regionAliases);
+        if (Object.keys(regionAliases).length > 0) {
+          regionPolicy.regionAliases = regionAliases;
+        }
         if (typeof profile.regionPolicy.canonicalAlwaysShowRegion === 'boolean') {
           regionPolicy.canonicalAlwaysShowRegion = profile.regionPolicy.canonicalAlwaysShowRegion;
         }
         if (Object.keys(regionPolicy).length > 0) {
           safeProfile.regionPolicy = regionPolicy;
         }
+      }
+
+      const blockedPlayKeywords = sanitizeBlockedPlayKeywordMap(profile.blockedPlayKeywords);
+      if (Object.keys(blockedPlayKeywords).length > 0) {
+        safeProfile.blockedPlayKeywords = blockedPlayKeywords;
+      }
+
+      if (typeof profile.tailShorthandAsSeparateGroups === 'boolean') {
+        safeProfile.tailShorthandAsSeparateGroups = profile.tailShorthandAsSeparateGroups;
       }
 
       return safeProfile;

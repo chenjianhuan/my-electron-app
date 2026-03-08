@@ -49,6 +49,7 @@
         <aside class="user-list panel-shell">
             <div class="panel-head">
                 <h3>客户列表</h3>
+                <span class="panel-head-hint">左侧维护客户赔率和返水</span>
             </div>
             <div class="panel-body">
                 <div class="user-add-row">
@@ -110,9 +111,9 @@
                             <h2 id="sortedResultsTitle">累计值排序</h2>
                         </div>
                         <div class="region-pnl-panel">
-                            <div id="regionPnlHead" class="region-pnl-head">盘口中奖盈亏</div>
+                            <div id="regionPnlHead" class="region-pnl-head">盘口庄家盈亏</div>
                             <div id="regionPnlRows" class="region-pnl-rows"></div>
-                            <div id="regionPnlSummary" class="region-pnl-summary">输入新奥、老奥、香港中奖号后可计算各盘口盈亏。</div>
+                            <div id="regionPnlSummary" class="region-pnl-summary">输入新奥、老奥、香港中奖号后可按客户赔率和返水计算各盘口盈亏。</div>
                         </div>
                     </div>
                     <div class="right-column-body">
@@ -231,13 +232,11 @@
 
                 <aside id="attributeHelpPanel" class="attribute-help recognize-attribute-dock">
                     <div class="attribute-help-body">
-                        <div class="attribute-help-header">
-                            <h4>属性与锚点</h4>
-                        </div>
+                        <input id="anchorRuleScope" type="hidden" value="global">
 
                         <section id="recognizeGroupAttributes" class="recognize-side-group expanded-fill">
                             <button id="recognizeGroupAttributesToggle" class="recognize-side-group-toggle" type="button" onclick="toggleRecognizeSideGroup('attributes')" aria-expanded="true">
-                                <span class="recognize-side-group-title">属性词选择</span>
+                                <span class="recognize-side-group-title">号码属性</span>
                                 <span class="recognize-side-group-caret">▾</span>
                             </button>
                             <div id="recognizeGroupAttributesBody" class="recognize-side-group-body">
@@ -250,184 +249,175 @@
                                     </div>
                                 </div>
                                 <div id="attributePicker" class="attribute-picker"></div>
+                                <div class="anchor-console-card">
+                                    <div class="anchor-alias-title">属性词叠加策略</div>
+                                    <div class="anchor-alias-subtitle">当一段里同时出现多个属性词时，决定按交集、并集还是每次确认。</div>
+                                    <select id="attributeCombinePolicy">
+                                        <option value="intersection_then_union_fallback">先交集，空则并集</option>
+                                        <option value="intersection">仅交集</option>
+                                        <option value="union">仅并集</option>
+                                        <option value="confirm">每次确认</option>
+                                    </select>
+                                    <div class="anchor-alias-actions">
+                                        <button id="saveAttributeCombinePolicyBtn" class="confirm-button" type="button" onclick="saveAttributeCombinePolicyRule()">保存叠加策略</button>
+                                        <button id="resetAttributeCombinePolicyBtn" class="cancel-button" type="button" onclick="resetAttributeCombinePolicyRule()">恢复默认</button>
+                                    </div>
+                                    <div id="attributeCombinePolicyState" class="anchor-policy-state"></div>
+                                    <div id="attributeCombinePolicyExplain" class="anchor-policy-explain"></div>
+                                </div>
+                                <div class="anchor-console-card">
+                                    <div class="anchor-alias-title">盘口统计模式</div>
+                                    <div class="anchor-alias-subtitle">决定该客户是否按消息里的新奥/老奥/香港分别入账；关闭后统一记到默认盘口。</div>
+                                    <select id="regionAccountingMode">
+                                        <option value="split">按盘口区分统计</option>
+                                        <option value="merged">不分盘口，统一入账</option>
+                                    </select>
+                                    <select id="regionAccountingDefaultRegion">
+                                        <option value="new_ao">默认盘口：新奥</option>
+                                        <option value="old_ao">默认盘口：老奥</option>
+                                        <option value="hongkong">默认盘口：香港</option>
+                                    </select>
+                                    <div class="anchor-rule-inline-note">附加盘口词映射：系统默认词会继续保留，这里只需要补充你常用的别名，多个用逗号分隔。</div>
+                                    <input id="regionAliasInput_new_ao" type="text" placeholder="新奥附加词，例如：新澳门,澳盘">
+                                    <input id="regionAliasInput_old_ao" type="text" placeholder="老奥附加词，例如：老澳门,旧澳">
+                                    <input id="regionAliasInput_hongkong" type="text" placeholder="香港附加词，例如：港盘,港澳">
+                                    <div class="anchor-alias-actions">
+                                        <button id="saveRegionAccountingPolicyBtn" class="confirm-button" type="button" onclick="saveRegionAccountingPolicyRule()">保存盘口规则</button>
+                                        <button id="resetRegionAccountingPolicyBtn" class="cancel-button" type="button" onclick="resetRegionAccountingPolicyRule()">恢复默认</button>
+                                    </div>
+                                    <div id="regionAccountingPolicyState" class="anchor-policy-state"></div>
+                                    <div id="regionAccountingPolicyExplain" class="anchor-policy-explain"></div>
+                                </div>
+                                <div class="anchor-console-card">
+                                    <div class="anchor-alias-title">未开放玩法关键词</div>
+                                    <div class="anchor-alias-subtitle">补充会被拦截为未开放玩法的关键词，避免被误统进普通号码统计。系统已内置“二连/二联/三连/三联/四连/五连/连肖/二肖连/三肖连/复式连肖/复式二连/复式三连/复式四连”等。</div>
+                                    <div class="anchor-rule-inline-note">平特类附加词：命中后按“平特一肖”处理。多个用逗号分隔。</div>
+                                    <input id="blockedPlayKeywordInput_pingte_xiao" type="text" placeholder="例如：平特,平特肖">
+                                    <div class="anchor-rule-inline-note">连肖类附加词：命中后按“连肖/连码玩法”处理。多个用逗号分隔。</div>
+                                    <input id="blockedPlayKeywordInput_lian_play" type="text" placeholder="例如：二肖连,三肖连,复式四连">
+                                    <div class="anchor-alias-actions">
+                                        <button id="saveBlockedPlayKeywordBtn" class="confirm-button" type="button" onclick="saveBlockedPlayKeywordRule()">保存玩法关键词</button>
+                                        <button id="resetBlockedPlayKeywordBtn" class="cancel-button" type="button" onclick="resetBlockedPlayKeywordRule()">恢复默认</button>
+                                    </div>
+                                    <div id="blockedPlayKeywordState" class="anchor-policy-state"></div>
+                                    <div id="blockedPlayKeywordExplain" class="anchor-policy-explain"></div>
+                                </div>
                             </div>
                         </section>
 
                         <section id="recognizeGroupAnchors" class="recognize-side-group collapsed">
                             <button id="recognizeGroupAnchorsToggle" class="recognize-side-group-toggle" type="button" onclick="toggleRecognizeSideGroup('anchors')" aria-expanded="false">
-                                <span class="recognize-side-group-title">锚点管理</span>
+                                <span class="recognize-side-group-title">金额分配词</span>
                                 <span class="recognize-side-group-caret">▾</span>
                             </button>
                             <div id="recognizeGroupAnchorsBody" class="recognize-side-group-body">
                                 <input id="anchorRuleScope" type="hidden" value="global">
 
-                                <div class="anchor-subgroups">
-                                    <section id="anchorSubgroup_advanced" class="anchor-subgroup expanded">
-                                        <button id="anchorSubgroupToggle_advanced" class="anchor-subgroup-toggle" type="button" onclick="toggleAnchorSubgroup('advanced')" aria-expanded="true">
-                                            <span class="anchor-subgroup-title">属性叠加策略与解析模式</span>
-                                            <span class="anchor-subgroup-caret">▾</span>
-                                        </button>
-                                        <div id="anchorSubgroupBody_advanced" class="anchor-subgroup-body">
-                                            <div class="anchor-console-card">
-                                                <div class="anchor-alias-title">默认赔率</div>
-                                                <div class="anchor-alias-subtitle">未单独设置赔率的锚点将使用该赔率，要求大于 0。</div>
-                                                <input id="defaultOddsInput" type="number" min="0.0001" step="0.01" placeholder="默认 47">
-                                                <div class="anchor-alias-actions">
-                                                    <button id="saveDefaultOddsBtn" class="confirm-button" type="button" onclick="saveDefaultOddsRule()">保存默认赔率</button>
-                                                    <button id="resetDefaultOddsBtn" class="cancel-button" type="button" onclick="resetDefaultOddsRule()">恢复默认</button>
-                                                </div>
-                                                <div id="defaultOddsState" class="anchor-policy-state"></div>
-                                            </div>
+                                <div id="anchorLibraryWorkspace" class="anchor-subgroups">
+                                    <div class="anchor-library-add-row">
+                                        <button id="createAnchorRuleBtn" type="button" class="anchor-create-btn" onclick="openAnchorRuleDrawer()">增加锚点词</button>
+                                        <button id="resetClientRuleBtn" type="button" class="cancel-button" style="display: none;" onclick="resetClientRuleProfile()">恢复客户规则</button>
+                                    </div>
 
-                                            <div class="anchor-console-card">
-                                                <div class="anchor-alias-title">锚点解析模式</div>
-                                                <select id="anchorParseMode">
-                                                    <option value="strict">严格模式（强制锚点）</option>
-                                                    <option value="loose">宽松模式（自动补锚点）</option>
+                                    <div class="anchor-strategy-tabs" role="tablist" aria-label="策略分组">
+                                        <button id="anchorStrategyTab_per_number" class="anchor-strategy-tab active" type="button" role="tab" onclick="setAnchorStrategyTab('per_number')">每个号码下注金额</button>
+                                        <button id="anchorStrategyTab_per_target_equal_split" class="anchor-strategy-tab" type="button" role="tab" onclick="setAnchorStrategyTab('per_target_equal_split')">每个目标组下注金额</button>
+                                        <button id="anchorStrategyTab_per_entry_equal_split" class="anchor-strategy-tab" type="button" role="tab" onclick="setAnchorStrategyTab('per_entry_equal_split')">本段总金额平分</button>
+                                        <button id="anchorStrategyTab_undetermined" class="anchor-strategy-tab" type="button" role="tab" onclick="setAnchorStrategyTab('undetermined')">未确定（解析时确认）</button>
+                                    </div>
+
+                                    <div class="anchor-rule-workspace">
+                                        <div class="anchor-rule-list-column">
+                                            <div class="anchor-alias-toolbar">
+                                                <input id="anchorAliasSearch" type="text" placeholder="搜索锚点词">
+                                                <select id="anchorAliasSourceFilter">
+                                                    <option value="all">全部来源</option>
+                                                    <option value="client">客户</option>
+                                                    <option value="global">全局</option>
+                                                    <option value="system">系统默认</option>
                                                 </select>
-                                                <div class="anchor-alias-actions">
-                                                    <button id="saveAnchorParseModeBtn" class="confirm-button" type="button" onclick="saveAnchorParseModeRule()">保存解析模式</button>
-                                                    <button id="resetAnchorParseModeBtn" class="cancel-button" type="button" onclick="resetAnchorParseModeRule()">恢复默认</button>
-                                                </div>
-                                                <div id="anchorParseModeState" class="anchor-policy-state"></div>
-                                                <div id="anchorParseModeExplain" class="anchor-policy-explain"></div>
+                                                <label class="anchor-alias-enabled-only">
+                                                    <input id="anchorAliasEnabledOnly" type="checkbox">
+                                                    <span>仅看启用</span>
+                                                </label>
+                                            </div>
+                                            <div id="anchorAliasList" class="anchor-alias-list"></div>
+                                        </div>
+
+                                        <div class="anchor-impact-panel">
+                                            <div class="anchor-impact-title">锚点效果预览</div>
+                                            <div class="anchor-impact-subtitle">输入一条原始消息，实时查看当前锚点策略会生成的标准格式。</div>
+                                            <textarea id="anchorImpactSampleInput" placeholder="例如：猴蛇狗都买10"></textarea>
+                                            <div class="anchor-impact-actions">
+                                                <button type="button" class="edit-button" onclick="applyAnchorImpactExample()">套用示例</button>
+                                                <button type="button" class="recognize-button" onclick="renderAnchorImpactPreview()">刷新预览</button>
+                                            </div>
+                                            <div id="anchorImpactPreview" class="anchor-impact-preview"></div>
+                                        </div>
+                                    </div>
+
+                                    <div id="anchorRuleDrawer" class="anchor-rule-drawer" aria-hidden="true">
+                                        <div class="anchor-rule-drawer-head">
+                                            <div id="anchorRuleDrawerTitle" class="anchor-rule-drawer-title">增加锚点词</div>
+                                            <button type="button" class="anchor-rule-drawer-close" onclick="closeAnchorRuleDrawer()" aria-label="关闭">&times;</button>
+                                        </div>
+
+                                        <div class="anchor-rule-drawer-body">
+                                            <div class="anchor-rule-drawer-section">
+                                                <div class="anchor-rule-drawer-field-label">请输入锚点词</div>
+                                                <input id="anchorRuleDrawerToken" type="text" placeholder="例如：都买 / 各肖 / 平摊">
                                             </div>
 
-                                            <div class="anchor-console-card">
-                                                <div class="anchor-alias-title">属性词叠加策略</div>
-                                                <select id="attributeCombinePolicy">
-                                                    <option value="intersection_then_union_fallback">先交集，空则并集</option>
-                                                    <option value="intersection">仅交集</option>
-                                                    <option value="union">仅并集</option>
-                                                    <option value="confirm">每次确认</option>
+                                            <div class="anchor-rule-drawer-section">
+                                                <div class="anchor-rule-drawer-field-label">请选择生效范围</div>
+                                                <div class="anchor-rule-drawer-field-desc">全局对所有客户生效；客户规则仅当前客户生效且优先级更高。</div>
+                                                <select id="anchorRuleDrawerScope" onchange="renderAnchorRuleDrawerPreview()"></select>
+                                                <div id="anchorRuleDrawerScopeHint" class="anchor-rule-drawer-scope-hint"></div>
+                                            </div>
+
+                                            <div class="anchor-rule-drawer-section">
+                                                <div class="anchor-rule-drawer-field-label">请选择分配策略</div>
+                                                <select id="anchorRuleDrawerMode" onchange="renderAnchorRuleDrawerPreview()">
+                                                    <option value="per_number">每个号码下注金额</option>
+                                                    <option value="per_target_equal_split">每个目标组下注金额（组内平分）</option>
+                                                    <option value="per_entry_equal_split">本段总金额平分到全部号码</option>
+                                                    <option value="undetermined">未确定（解析时弹窗选择）</option>
                                                 </select>
-                                                <div class="anchor-alias-actions">
-                                                    <button id="saveAttributeCombinePolicyBtn" class="confirm-button" type="button" onclick="saveAttributeCombinePolicyRule()">保存叠加策略</button>
-                                                    <button id="resetAttributeCombinePolicyBtn" class="cancel-button" type="button" onclick="resetAttributeCombinePolicyRule()">恢复默认</button>
-                                                </div>
-                                                <div id="attributeCombinePolicyState" class="anchor-policy-state"></div>
-                                                <div id="attributeCombinePolicyExplain" class="anchor-policy-explain"></div>
+                                                <div id="anchorRuleDrawerModeHint" class="anchor-rule-drawer-mode-hint"></div>
                                             </div>
 
-                                            <div class="anchor-console-card">
-                                                <div id="anchorNoviceGuideSummary" class="anchor-novice-guide-summary"></div>
-                                                <div id="anchorNoviceGuideExamples" class="anchor-novice-guide-examples"></div>
+                                            <div class="anchor-rule-drawer-section">
+                                                <div class="anchor-rule-drawer-field-label">请输入锚点赔率（可选）</div>
+                                                <div class="anchor-rule-drawer-field-desc">留空表示跟随当前生效赔率；输入后该锚点使用独立赔率。</div>
+                                                <input id="anchorRuleDrawerOdds" type="number" min="0.0001" step="0.01" placeholder="留空 = 跟随当前生效赔率">
+                                            </div>
+
+                                            <div class="anchor-rule-drawer-enable-cell">
+                                                <div class="anchor-rule-drawer-enable-copy">
+                                                    <div class="anchor-rule-drawer-enable-title">启用该锚点词</div>
+                                                    <div class="anchor-rule-drawer-enable-desc">不勾选则保存为禁用，可在词库中后续启用。</div>
+                                                </div>
+                                                <label class="anchor-rule-drawer-enable-switch">
+                                                    <span>启用</span>
+                                                    <span class="anchor-rule-drawer-enable-switch-control">
+                                                        <input id="anchorRuleDrawerEnabled" type="checkbox" checked>
+                                                        <span class="anchor-rule-drawer-enable-switch-track"></span>
+                                                    </span>
+                                                </label>
+                                            </div>
+
+                                            <div class="anchor-rule-drawer-section">
+                                                <div class="anchor-rule-drawer-field-label">策略示例（实时）</div>
+                                                <div class="anchor-rule-drawer-field-desc">下方实时显示原始消息、当前生效结果、保存后预期结果（模拟）。</div>
+                                                <div id="anchorRuleDrawerPreview" class="anchor-impact-preview"></div>
+                                            </div>
+
+                                            <div class="anchor-rule-drawer-actions">
+                                                <button type="button" class="confirm-button" onclick="saveAnchorRuleFromDrawer()">保存</button>
+                                                <button type="button" class="cancel-button" onclick="closeAnchorRuleDrawer()">取消</button>
                                             </div>
                                         </div>
-                                    </section>
-
-                                    <section id="anchorSubgroup_library" class="anchor-subgroup collapsed">
-                                        <button id="anchorSubgroupToggle_library" class="anchor-subgroup-toggle" type="button" onclick="toggleAnchorSubgroup('library')" aria-expanded="false">
-                                            <span class="anchor-subgroup-title">规则词库</span>
-                                            <span class="anchor-subgroup-caret">▾</span>
-                                        </button>
-                                        <div id="anchorSubgroupBody_library" class="anchor-subgroup-body">
-                                            <div class="anchor-library-add-row">
-                                                <button id="createAnchorRuleBtn" type="button" class="anchor-create-btn" onclick="openAnchorRuleDrawer()">增加锚点词</button>
-                                                <button id="resetClientRuleBtn" type="button" class="cancel-button" style="display: none;" onclick="resetClientRuleProfile()">恢复客户规则</button>
-                                            </div>
-
-                                            <div class="anchor-strategy-tabs" role="tablist" aria-label="策略分组">
-                                                <button id="anchorStrategyTab_per_number" class="anchor-strategy-tab active" type="button" role="tab" onclick="setAnchorStrategyTab('per_number')">每个号码下注金额</button>
-                                                <button id="anchorStrategyTab_per_target_equal_split" class="anchor-strategy-tab" type="button" role="tab" onclick="setAnchorStrategyTab('per_target_equal_split')">每个目标组下注金额</button>
-                                                <button id="anchorStrategyTab_per_entry_equal_split" class="anchor-strategy-tab" type="button" role="tab" onclick="setAnchorStrategyTab('per_entry_equal_split')">本段总金额平分</button>
-                                                <button id="anchorStrategyTab_undetermined" class="anchor-strategy-tab" type="button" role="tab" onclick="setAnchorStrategyTab('undetermined')">未确定（解析时确认）</button>
-                                            </div>
-
-                                            <div class="anchor-rule-workspace">
-                                                <div class="anchor-rule-list-column">
-                                                    <div class="anchor-alias-toolbar">
-                                                        <input id="anchorAliasSearch" type="text" placeholder="搜索锚点词">
-                                                        <select id="anchorAliasSourceFilter">
-                                                            <option value="all">全部来源</option>
-                                                            <option value="client">客户</option>
-                                                            <option value="global">全局</option>
-                                                            <option value="system">系统默认</option>
-                                                        </select>
-                                                        <label class="anchor-alias-enabled-only">
-                                                            <input id="anchorAliasEnabledOnly" type="checkbox">
-                                                            <span>仅看启用</span>
-                                                        </label>
-                                                    </div>
-                                                    <div id="anchorAliasList" class="anchor-alias-list"></div>
-                                                </div>
-
-                                                <div class="anchor-impact-panel">
-                                                    <div class="anchor-impact-title">锚点效果预览</div>
-                                                    <div class="anchor-impact-subtitle">输入一条原始消息，实时查看当前锚点策略会生成的标准格式。</div>
-                                                    <textarea id="anchorImpactSampleInput" placeholder="例如：猴蛇狗都买10"></textarea>
-                                                    <div class="anchor-impact-actions">
-                                                        <button type="button" class="edit-button" onclick="applyAnchorImpactExample()">套用示例</button>
-                                                        <button type="button" class="recognize-button" onclick="renderAnchorImpactPreview()">刷新预览</button>
-                                                    </div>
-                                                    <div id="anchorImpactPreview" class="anchor-impact-preview"></div>
-                                                </div>
-                                            </div>
-
-                                            <div id="anchorRuleDrawer" class="anchor-rule-drawer" aria-hidden="true">
-                                                <div class="anchor-rule-drawer-head">
-                                                    <div id="anchorRuleDrawerTitle" class="anchor-rule-drawer-title">增加锚点词</div>
-                                                    <button type="button" class="anchor-rule-drawer-close" onclick="closeAnchorRuleDrawer()" aria-label="关闭">&times;</button>
-                                                </div>
-
-                                                <div class="anchor-rule-drawer-body">
-                                                    <div class="anchor-rule-drawer-section">
-                                                        <div class="anchor-rule-drawer-field-label">请输入锚点词</div>
-                                                        <input id="anchorRuleDrawerToken" type="text" placeholder="例如：都买 / 各肖 / 平摊">
-                                                    </div>
-
-                                                    <div class="anchor-rule-drawer-section">
-                                                        <div class="anchor-rule-drawer-field-label">请选择生效范围</div>
-                                                        <div class="anchor-rule-drawer-field-desc">全局对所有客户生效；客户规则仅当前客户生效且优先级更高。</div>
-                                                        <select id="anchorRuleDrawerScope" onchange="renderAnchorRuleDrawerPreview()"></select>
-                                                        <div id="anchorRuleDrawerScopeHint" class="anchor-rule-drawer-scope-hint"></div>
-                                                    </div>
-
-                                                    <div class="anchor-rule-drawer-section">
-                                                        <div class="anchor-rule-drawer-field-label">请选择分配策略</div>
-                                                        <select id="anchorRuleDrawerMode" onchange="renderAnchorRuleDrawerPreview()">
-                                                            <option value="per_number">每个号码下注金额</option>
-                                                            <option value="per_target_equal_split">每个目标组下注金额（组内平分）</option>
-                                                            <option value="per_entry_equal_split">本段总金额平分到全部号码</option>
-                                                            <option value="undetermined">未确定（解析时弹窗选择）</option>
-                                                        </select>
-                                                        <div id="anchorRuleDrawerModeHint" class="anchor-rule-drawer-mode-hint"></div>
-                                                    </div>
-
-                                                    <div class="anchor-rule-drawer-section">
-                                                        <div class="anchor-rule-drawer-field-label">请输入锚点赔率（可选）</div>
-                                                        <div class="anchor-rule-drawer-field-desc">留空表示跟随默认赔率；输入后该锚点使用独立赔率。</div>
-                                                        <input id="anchorRuleDrawerOdds" type="number" min="0.0001" step="0.01" placeholder="留空 = 跟随默认赔率">
-                                                    </div>
-
-                                                    <div class="anchor-rule-drawer-enable-cell">
-                                                        <div class="anchor-rule-drawer-enable-copy">
-                                                            <div class="anchor-rule-drawer-enable-title">启用该锚点词</div>
-                                                            <div class="anchor-rule-drawer-enable-desc">不勾选则保存为禁用，可在词库中后续启用。</div>
-                                                        </div>
-                                                        <label class="anchor-rule-drawer-enable-switch">
-                                                            <span>启用</span>
-                                                            <span class="anchor-rule-drawer-enable-switch-control">
-                                                                <input id="anchorRuleDrawerEnabled" type="checkbox" checked>
-                                                                <span class="anchor-rule-drawer-enable-switch-track"></span>
-                                                            </span>
-                                                        </label>
-                                                    </div>
-
-                                                    <div class="anchor-rule-drawer-section">
-                                                        <div class="anchor-rule-drawer-field-label">策略示例（实时）</div>
-                                                        <div class="anchor-rule-drawer-field-desc">下方实时显示原始消息、当前生效结果、保存后预期结果（模拟）。</div>
-                                                        <div id="anchorRuleDrawerPreview" class="anchor-impact-preview"></div>
-                                                    </div>
-
-                                                    <div class="anchor-rule-drawer-actions">
-                                                        <button type="button" class="confirm-button" onclick="saveAnchorRuleFromDrawer()">保存</button>
-                                                        <button type="button" class="cancel-button" onclick="closeAnchorRuleDrawer()">取消</button>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </section>
+                                    </div>
 
                                 </div>
                             </div>
@@ -435,7 +425,7 @@
 
                         <section id="recognizeGroupNoise" class="recognize-side-group collapsed">
                             <button id="recognizeGroupNoiseToggle" class="recognize-side-group-toggle" type="button" onclick="toggleRecognizeSideGroup('noise')" aria-expanded="false">
-                                <span class="recognize-side-group-title">噪音规则管理</span>
+                                <span class="recognize-side-group-title">不入账规则</span>
                                 <span class="recognize-side-group-caret">▾</span>
                             </button>
                             <div id="recognizeGroupNoiseBody" class="recognize-side-group-body">
@@ -500,7 +490,7 @@
 
                         <section id="recognizeGroupAmountUnits" class="recognize-side-group collapsed">
                             <button id="recognizeGroupAmountUnitsToggle" class="recognize-side-group-toggle" type="button" onclick="toggleRecognizeSideGroup('amountUnits')" aria-expanded="false">
-                                <span class="recognize-side-group-title">金额单位管理</span>
+                                <span class="recognize-side-group-title">金额单位</span>
                                 <span class="recognize-side-group-caret">▾</span>
                             </button>
                             <div id="recognizeGroupAmountUnitsBody" class="recognize-side-group-body">
@@ -664,7 +654,7 @@
             <h2>吃单上报</h2>
             <div class="hedge-report-toolbar">
                 <div id="hedgeReportScope" class="hedge-report-scope">范围：-</div>
-                <div class="hedge-report-odds">默认赔率：<span id="hedgeReportOdds">-</span></div>
+                <div class="hedge-report-odds">结算口径：<span id="hedgeReportOdds">按客户赔率</span></div>
                 <label class="hedge-report-loss-input">
                     最多可亏损
                     <input id="hedgeMaxLossInput" type="number" min="0" step="0.01" placeholder="例如 5000">
@@ -798,9 +788,9 @@
             <ol>
                 <li>先在左侧添加并选择客户；单人/多人模式可切换统计范围。</li>
                 <li>点击“识别客户消息”打开录入面板，输入原始消息后会自动解析预览，再点“添加”入库。</li>
-                <li>可在录入消息中写盘口关键字（如新奥/老奥/香港），系统会按片段分盘口统计。</li>
+                <li>可在录入消息中写盘口关键字（如新奥/老奥/香港）；客户若设为“不分盘口”，则统一记到默认盘口。</li>
                 <li>右侧显示累计排序、各盘口盈亏与原始消息，可编辑/删除并自动重算。</li>
-                <li>识别页右侧支持属性词、锚点规则、策略模式设置，并可实时预览解析效果。</li>
+                <li>识别页右侧支持号码属性、金额分配词、不入账规则、金额单位等配置，并可实时预览解析效果。</li>
                 <li>数据保存在本机，不上传云端。建议定期备份应用数据目录，避免设备故障导致数据丢失。</li>
             </ol>
 

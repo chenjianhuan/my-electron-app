@@ -4,6 +4,7 @@ class UserManager {
         this.users = {};
         this.selectedUsers = new Set();
         this.lastActiveUser = null;
+        this.expandedSettlementUser = '';
         this.isMultiSelectEnabled = false;
         this.activeRegion = 'new_ao'; // 录入地区（弹窗单选）
         this.viewRegions = new Set(['new_ao']); // 统计查看地区（主页面多选）
@@ -312,6 +313,51 @@ class UserManager {
         return match ? match.label : regionKey;
     }
 
+    getUserRegionAccountingInfo(userName = '') {
+        const fallback = {
+            mode: 'split',
+            separateStatsByRegion: true,
+            defaultRegion: 'new_ao',
+            defaultRegionLabel: this.getRegionLabel('new_ao')
+        };
+        const clientId = String(userName || '').trim();
+        if (!clientId
+            || !window.messageProcessor
+            || typeof window.messageProcessor.getEffectiveRegionAccountingInfo !== 'function'
+        ) {
+            return fallback;
+        }
+        try {
+            const info = window.messageProcessor.getEffectiveRegionAccountingInfo(clientId);
+            if (!info || typeof info !== 'object') return fallback;
+            const defaultRegion = String(info.defaultRegion || '').trim() || fallback.defaultRegion;
+            return {
+                mode: info.separateStatsByRegion === false ? 'merged' : 'split',
+                separateStatsByRegion: info.separateStatsByRegion !== false,
+                defaultRegion,
+                defaultRegionLabel: this.getRegionLabel(defaultRegion)
+            };
+        } catch (error) {
+            return fallback;
+        }
+    }
+
+    getUserRegionModeSummary(userName = '') {
+        const info = this.getUserRegionAccountingInfo(userName);
+        if (info.separateStatsByRegion === false) {
+            return `不分盘口，统一记到${info.defaultRegionLabel}`;
+        }
+        return '按盘口分别统计';
+    }
+
+    getUserRegionDisplayLabel(userName = '', regionKey = this.activeRegion) {
+        const info = this.getUserRegionAccountingInfo(userName);
+        if (info.separateStatsByRegion === false) {
+            return `统一盘口（记${info.defaultRegionLabel}）`;
+        }
+        return this.getRegionLabel(regionKey);
+    }
+
     getViewRegions() {
         const order = this.getRegionOptions().map(item => item.key);
         const selected = order.filter(key => this.viewRegions.has(key));
@@ -334,6 +380,293 @@ class UserManager {
 
     getAvailableViewRegions() {
         return this.getRegionOptions().filter(region => this.regionHasAnyData(region.key));
+    }
+
+    getSystemDefaultSettlementOdds() {
+        if (window.messageProcessor && typeof window.messageProcessor.getEffectiveDefaultOdds === 'function') {
+            const odds = Number(window.messageProcessor.getEffectiveDefaultOdds(''));
+            if (Number.isFinite(odds) && odds > 0) return odds;
+        }
+        if (window.messageProcessor) {
+            const legacyOdds = Number(window.messageProcessor.ODDS);
+            if (Number.isFinite(legacyOdds) && legacyOdds > 0) return legacyOdds;
+        }
+        return 47;
+    }
+
+    getInitialSettlementOdds(userName = '') {
+        if (userName && window.messageProcessor && typeof window.messageProcessor.getEffectiveDefaultOdds === 'function') {
+            const odds = Number(window.messageProcessor.getEffectiveDefaultOdds(userName));
+            if (Number.isFinite(odds) && odds > 0) return odds;
+        }
+        return this.getSystemDefaultSettlementOdds();
+    }
+
+    normalizeSettlementOddsValue(rawOdds, fallback = this.getSystemDefaultSettlementOdds()) {
+        const parsed = Number(rawOdds);
+        if (Number.isFinite(parsed) && parsed > 0) {
+            return parsed;
+        }
+        return Number.isFinite(fallback) && fallback > 0 ? fallback : this.getSystemDefaultSettlementOdds();
+    }
+
+    normalizeRebateRateValue(rawRate, fallback = 0) {
+        const parsed = Number(rawRate);
+        if (Number.isFinite(parsed) && parsed >= 0) {
+            return parsed;
+        }
+        return Number.isFinite(fallback) && fallback >= 0 ? fallback : 0;
+    }
+
+    normalizePositiveDecimalInput(rawValue = '') {
+        const normalized = String(rawValue == null ? '' : rawValue)
+            .replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 65248))
+            .replace(/[．。]/g, '.')
+            .replace(/[^\d.]/g, '');
+        let result = '';
+        let dotUsed = false;
+        for (const ch of normalized) {
+            if (/\d/.test(ch)) {
+                result += ch;
+                continue;
+            }
+            if (ch === '.' && !dotUsed) {
+                if (!result) {
+                    result = '0';
+                }
+                result += '.';
+                dotUsed = true;
+            }
+        }
+        return result;
+    }
+
+    bindSettlementNumericInput(input) {
+        if (!input) return;
+        const normalize = () => {
+            const next = this.normalizePositiveDecimalInput(input.value);
+            if (input.value !== next) {
+                input.value = next;
+            }
+        };
+        input.type = 'text';
+        input.inputMode = 'decimal';
+        input.autocomplete = 'off';
+        input.spellcheck = false;
+        input.addEventListener('input', normalize);
+        input.addEventListener('paste', () => {
+            requestAnimationFrame(normalize);
+        });
+    }
+
+    getDefaultUserSettlementConfig(userName = '') {
+        return {
+            odds: this.getInitialSettlementOdds(userName),
+            rebateRate: 0
+        };
+    }
+
+    getUserSettlementConfig(userName = '') {
+        const user = this.users[userName];
+        const fallback = this.getDefaultUserSettlementConfig(userName);
+        if (!user || typeof user !== 'object') {
+            return {
+                odds: fallback.odds,
+                rebateRate: fallback.rebateRate,
+                rebateRatio: 0
+            };
+        }
+        const odds = this.normalizeSettlementOddsValue(user.settlementOdds, fallback.odds);
+        const rebateRate = this.normalizeRebateRateValue(
+            Object.prototype.hasOwnProperty.call(user, 'rebateRate')
+                ? user.rebateRate
+                : user.rebate,
+            fallback.rebateRate
+        );
+        return {
+            odds,
+            rebateRate,
+            rebateRatio: rebateRate / 100
+        };
+    }
+
+    getUserSettlementOdds(userName = '') {
+        return this.getUserSettlementConfig(userName).odds;
+    }
+
+    getUserRebateRate(userName = '') {
+        return this.getUserSettlementConfig(userName).rebateRate;
+    }
+
+    getDefaultUserParsePreference(userName = '') {
+        const tailShorthandAsSeparateGroups = !!(
+            userName
+            && window.messageProcessor
+            && typeof window.messageProcessor.getEffectiveTailShorthandAsSeparateGroups === 'function'
+            && window.messageProcessor.getEffectiveTailShorthandAsSeparateGroups(userName)
+        );
+        return { tailShorthandAsSeparateGroups };
+    }
+
+    getUserParsePreference(userName = '') {
+        const user = this.users[userName];
+        const fallback = this.getDefaultUserParsePreference(userName);
+        if (!user || typeof user !== 'object') {
+            return fallback;
+        }
+        if (Object.prototype.hasOwnProperty.call(user, 'tailShorthandAsSeparateGroups')) {
+            return {
+                tailShorthandAsSeparateGroups: user.tailShorthandAsSeparateGroups === true
+            };
+        }
+        return fallback;
+    }
+
+    hasStoredUserParsePreference(userName = '') {
+        const user = this.users[userName];
+        return !!(user
+            && typeof user === 'object'
+            && Object.prototype.hasOwnProperty.call(user, 'tailShorthandAsSeparateGroups'));
+    }
+
+    updateUserParsePreference(userName, nextPreference = {}, options = {}) {
+        const user = this.users[userName];
+        if (!user || typeof user !== 'object') {
+            throw new Error('客户不存在');
+        }
+        const current = this.getUserParsePreference(userName);
+        const nextEnabled = Object.prototype.hasOwnProperty.call(nextPreference, 'tailShorthandAsSeparateGroups')
+            ? nextPreference.tailShorthandAsSeparateGroups === true
+            : current.tailShorthandAsSeparateGroups === true;
+
+        user.tailShorthandAsSeparateGroups = nextEnabled;
+
+        if (options.syncRulePreference !== false
+            && window.messageProcessor
+            && typeof window.messageProcessor.setTailShorthandAsSeparateGroups === 'function') {
+            try {
+                window.messageProcessor.setTailShorthandAsSeparateGroups(nextEnabled, {
+                    scope: 'client',
+                    clientId: userName
+                });
+            } catch (error) {
+                console.warn(`同步客户尾数简写规则失败(${userName}):`, error);
+            }
+        }
+
+        if (options.render !== false) {
+            this.renderAllSections();
+        }
+        if (options.save !== false) {
+            this.saveUserData();
+        }
+
+        return {
+            tailShorthandAsSeparateGroups: nextEnabled
+        };
+    }
+
+    syncStoredUserParsePreferencesToRules() {
+        if (!window.messageProcessor || typeof window.messageProcessor.setTailShorthandAsSeparateGroups !== 'function') {
+            return;
+        }
+        Object.keys(this.users).forEach((userName) => {
+            if (!this.hasStoredUserParsePreference(userName)) return;
+            const preference = this.getUserParsePreference(userName);
+            try {
+                window.messageProcessor.setTailShorthandAsSeparateGroups(preference.tailShorthandAsSeparateGroups, {
+                    scope: 'client',
+                    clientId: userName
+                });
+            } catch (error) {
+                console.warn(`同步客户尾数简写规则失败(${userName}):`, error);
+            }
+        });
+    }
+
+    syncUserSettlementOddsFromRule(userName, odds, options = {}) {
+        const user = this.users[userName];
+        if (!user || typeof user !== 'object') return null;
+        user.settlementOdds = this.normalizeSettlementOddsValue(odds, this.getInitialSettlementOdds(userName));
+        if (options.render !== false) {
+            this.renderAllSections();
+        }
+        if (options.save !== false) {
+            this.saveUserData();
+        }
+        return user.settlementOdds;
+    }
+
+    updateUserSettlementConfig(userName, nextConfig = {}, options = {}) {
+        const user = this.users[userName];
+        if (!user || typeof user !== 'object') {
+            throw new Error('客户不存在');
+        }
+
+        const current = this.getUserSettlementConfig(userName);
+        const nextOdds = this.normalizeSettlementOddsValue(
+            Object.prototype.hasOwnProperty.call(nextConfig, 'odds')
+                ? nextConfig.odds
+                : current.odds,
+            current.odds
+        );
+        const nextRebateRate = this.normalizeRebateRateValue(
+            Object.prototype.hasOwnProperty.call(nextConfig, 'rebateRate')
+                ? nextConfig.rebateRate
+                : current.rebateRate,
+            current.rebateRate
+        );
+
+        user.settlementOdds = nextOdds;
+        user.rebateRate = nextRebateRate;
+
+        if (options.syncRuleOdds !== false
+            && window.messageProcessor
+            && typeof window.messageProcessor.setDefaultOdds === 'function') {
+            try {
+                window.messageProcessor.setDefaultOdds(nextOdds, {
+                    scope: 'client',
+                    clientId: userName
+                });
+            } catch (error) {
+                console.warn(`同步客户识别赔率失败(${userName}):`, error);
+            }
+        }
+
+        if (options.keepExpanded !== true && this.expandedSettlementUser === userName) {
+            this.expandedSettlementUser = '';
+        }
+
+        if (options.render !== false) {
+            this.renderAllSections();
+        }
+        if (options.save !== false) {
+            this.saveUserData();
+        }
+
+        return {
+            odds: nextOdds,
+            rebateRate: nextRebateRate
+        };
+    }
+
+    toggleSettlementEditor(userName) {
+        if (!this.users[userName]) return;
+        this.expandedSettlementUser = this.expandedSettlementUser === userName ? '' : userName;
+        this.renderUserList();
+    }
+
+    createDefaultUserRecord(userName = '') {
+        const settlement = this.getDefaultUserSettlementConfig(userName);
+        return {
+            settlementOdds: settlement.odds,
+            rebateRate: settlement.rebateRate,
+            regions: {
+                new_ao: this.createEmptyRegionData(),
+                old_ao: this.createEmptyRegionData(),
+                hongkong: this.createEmptyRegionData()
+            }
+        };
     }
 
     createEmptyRegionData() {
@@ -454,6 +787,17 @@ class UserManager {
         return '';
     }
 
+    extractOriginalMessageEditedAt(entry) {
+        if (!entry || typeof entry !== 'object') return '';
+        const candidates = ['editedAt', 'updatedAt', 'modifiedAt', 'editTime'];
+        for (const key of candidates) {
+            if (typeof entry[key] === 'string' && String(entry[key]).trim()) {
+                return String(entry[key]).trim();
+            }
+        }
+        return '';
+    }
+
     normalizeOriginalMessageCreatedAt(value) {
         const raw = String(value || '').trim();
         if (!raw) return '';
@@ -537,7 +881,7 @@ class UserManager {
         return null;
     }
 
-    buildStoredOriginalDataEntry(message, totalAmount = null, createdAt = '') {
+    buildStoredOriginalDataEntry(message, totalAmount = null, createdAt = '', editedAt = '') {
         const entry = {
             message: this.extractOriginalMessageText(message)
         };
@@ -548,6 +892,10 @@ class UserManager {
         const normalizedCreatedAt = this.normalizeOriginalMessageCreatedAt(createdAt);
         if (normalizedCreatedAt) {
             entry.createdAt = normalizedCreatedAt;
+        }
+        const normalizedEditedAt = this.normalizeOriginalMessageCreatedAt(editedAt);
+        if (normalizedEditedAt) {
+            entry.editedAt = normalizedEditedAt;
         }
         return entry;
     }
@@ -591,6 +939,12 @@ class UserManager {
         if (window.messageProcessor && typeof window.messageProcessor.parseMessage === 'function') {
             try {
                 const parsed = window.messageProcessor.parseMessage(raw, { clientId: userName, allowPartial: true });
+                const regionAccounting = window.messageProcessor.getEffectiveRegionAccountingInfo
+                    ? window.messageProcessor.getEffectiveRegionAccountingInfo(userName)
+                    : {
+                        separateStatsByRegion: true,
+                        defaultRegion: targetRegion
+                    };
                 let regionTotal = 0;
                 let allRegionTotal = 0;
                 (parsed.entries || []).forEach((entry) => {
@@ -599,7 +953,10 @@ class UserManager {
                     if (!Number.isFinite(amount) || amount <= 0 || numberCount <= 0) return;
                     const entryTotal = numberCount * amount;
                     allRegionTotal += entryTotal;
-                    const entryRegion = entry && entry.regionKey ? entry.regionKey : targetRegion;
+                    const parsedRegion = entry && entry.regionKey ? entry.regionKey : targetRegion;
+                    const entryRegion = regionAccounting && regionAccounting.separateStatsByRegion === false
+                        ? (regionAccounting.defaultRegion || targetRegion)
+                        : parsedRegion;
                     if (entryRegion === targetRegion) {
                         regionTotal += entryTotal;
                     }
@@ -887,15 +1244,16 @@ class UserManager {
             && index < regionData.originalData.length);
     }
 
-    normalizeUserRecord(userRecord) {
+    normalizeUserRecord(userRecord, userName = '') {
         const normalizeOriginalDataArray = (rawList) => {
             if (!Array.isArray(rawList)) return [];
             return rawList.map((item) => {
                 const message = this.extractOriginalMessageText(item);
                 const createdAt = this.extractOriginalMessageCreatedAt(item);
+                const editedAt = this.extractOriginalMessageEditedAt(item);
                 if (item && typeof item === 'object') {
                     const totalAmount = this.extractOriginalMessageTotal(item);
-                    return this.buildStoredOriginalDataEntry(message, totalAmount, createdAt);
+                    return this.buildStoredOriginalDataEntry(message, totalAmount, createdAt, editedAt);
                 }
                 return message;
             });
@@ -917,14 +1275,30 @@ class UserManager {
             };
         };
 
+        const fallbackSettlement = this.getDefaultUserSettlementConfig(userName);
+        const resolveSettlementOdds = (source) => this.normalizeSettlementOddsValue(
+            source && typeof source === 'object'
+                ? (Object.prototype.hasOwnProperty.call(source, 'settlementOdds')
+                    ? source.settlementOdds
+                    : (Object.prototype.hasOwnProperty.call(source, 'odds')
+                        ? source.odds
+                        : source.defaultOdds))
+                : undefined,
+            fallbackSettlement.odds
+        );
+        const resolveRebateRate = (source) => this.normalizeRebateRateValue(
+            source && typeof source === 'object'
+                ? (Object.prototype.hasOwnProperty.call(source, 'rebateRate')
+                    ? source.rebateRate
+                    : (Object.prototype.hasOwnProperty.call(source, 'rebate')
+                        ? source.rebate
+                        : source.rebatePercent))
+                : undefined,
+            fallbackSettlement.rebateRate
+        );
+
         if (!userRecord || typeof userRecord !== 'object') {
-            return {
-                regions: {
-                    new_ao: this.createEmptyRegionData(),
-                    old_ao: this.createEmptyRegionData(),
-                    hongkong: this.createEmptyRegionData()
-                }
-            };
+            return this.createDefaultUserRecord(userName);
         }
 
         if (!userRecord.regions) {
@@ -934,16 +1308,29 @@ class UserManager {
                 originalData: Array.isArray(userRecord.originalData) ? userRecord.originalData : [],
                 totalCount: Number(userRecord.totalCount) || 0
             });
-            return {
+            const normalizedLegacy = {
+                settlementOdds: resolveSettlementOdds(userRecord),
+                rebateRate: resolveRebateRate(userRecord),
                 regions: {
                     new_ao: legacyRegion,
                     old_ao: this.createEmptyRegionData(),
                     hongkong: this.createEmptyRegionData()
                 }
             };
+            if (Object.prototype.hasOwnProperty.call(userRecord, 'tailShorthandAsSeparateGroups')) {
+                normalizedLegacy.tailShorthandAsSeparateGroups = userRecord.tailShorthandAsSeparateGroups === true;
+            }
+            return normalizedLegacy;
         }
 
-        const normalized = { regions: {} };
+        const normalized = {
+            settlementOdds: resolveSettlementOdds(userRecord),
+            rebateRate: resolveRebateRate(userRecord),
+            regions: {}
+        };
+        if (Object.prototype.hasOwnProperty.call(userRecord, 'tailShorthandAsSeparateGroups')) {
+            normalized.tailShorthandAsSeparateGroups = userRecord.tailShorthandAsSeparateGroups === true;
+        }
         this.getRegionOptions().forEach(region => {
             const source = userRecord.regions[region.key];
             normalized.regions[region.key] = normalizeRegionPayload(source || {});
@@ -1107,11 +1494,15 @@ class UserManager {
     // 初始化用户数据
     init(initialUsers = {}) {
         this.users = {};
+        this.expandedSettlementUser = '';
         this.activeRegion = 'new_ao';
         this.viewRegions = new Set(['new_ao']);
         Object.entries(initialUsers || {}).forEach(([userName, userRecord]) => {
-            this.users[userName] = this.normalizeUserRecord(userRecord);
+            this.users[userName] = this.normalizeUserRecord(userRecord, userName);
         });
+        if (typeof window !== 'undefined' && window.__attributeConfigReady === true) {
+            this.syncStoredUserParsePreferencesToRules();
+        }
         const toggle = document.getElementById('multiSelectToggle');
         if (toggle) {
             toggle.checked = this.isMultiSelectEnabled;
@@ -1187,8 +1578,9 @@ class UserManager {
                         originalEntry: message,
                         message: this.extractOriginalMessageText(message),
                         createdAt: this.extractOriginalMessageCreatedAt(message),
+                        editedAt: this.extractOriginalMessageEditedAt(message),
                         regionKey,
-                        regionLabel: this.getRegionLabel(regionKey)
+                        regionLabel: this.getUserRegionDisplayLabel(userName, regionKey)
                     });
                 });
             });
@@ -1314,13 +1706,7 @@ class UserManager {
             throw new Error('该用户名已存在');
         }
 
-        this.users[userName] = {
-            regions: {
-                new_ao: this.createEmptyRegionData(),
-                old_ao: this.createEmptyRegionData(),
-                hongkong: this.createEmptyRegionData()
-            }
-        };
+        this.users[userName] = this.createDefaultUserRecord(userName);
 
         this.setSelectedUsers([userName]);
         this.lastActiveUser = userName;
@@ -1341,6 +1727,9 @@ class UserManager {
         }
 
         delete this.users[userName];
+        if (this.expandedSettlementUser === userName) {
+            this.expandedSettlementUser = '';
+        }
         if (window.messageProcessor && typeof window.messageProcessor.resetClientRules === 'function') {
             try {
                 window.messageProcessor.resetClientRules(userName);
@@ -1465,6 +1854,139 @@ class UserManager {
             });
             info.appendChild(regionRow);
 
+            const settlementConfig = this.getUserSettlementConfig(user);
+            const settlementSummary = document.createElement('div');
+            settlementSummary.className = 'user-settlement-summary';
+            settlementSummary.textContent = `赔率 ${this.formatAmountValue(settlementConfig.odds)} | 返水 ${this.formatAmountValue(settlementConfig.rebateRate)}%`;
+            info.appendChild(settlementSummary);
+
+            const regionModeSummary = document.createElement('div');
+            regionModeSummary.className = 'user-region-mode-summary';
+            regionModeSummary.textContent = `盘口模式：${this.getUserRegionModeSummary(user)}`;
+            info.appendChild(regionModeSummary);
+
+            const parsePreference = this.getUserParsePreference(user);
+            const parseSummary = document.createElement('div');
+            parseSummary.className = 'user-region-mode-summary';
+            parseSummary.textContent = parsePreference.tailShorthandAsSeparateGroups
+                ? '解析习惯：尾数简写开启'
+                : '解析习惯：默认';
+            info.appendChild(parseSummary);
+
+            if (this.expandedSettlementUser === user) {
+                const editor = document.createElement('div');
+                editor.className = 'user-settlement-editor';
+                editor.onclick = (event) => {
+                    event.stopPropagation();
+                };
+
+                const oddsField = document.createElement('label');
+                oddsField.className = 'user-settlement-field';
+                const oddsLabel = document.createElement('span');
+                oddsLabel.className = 'user-settlement-field-label';
+                oddsLabel.textContent = '赔率';
+                const oddsInput = document.createElement('input');
+                oddsInput.value = this.formatAmountValue(settlementConfig.odds);
+                oddsInput.placeholder = '请输入赔率';
+                this.bindSettlementNumericInput(oddsInput);
+                oddsField.appendChild(oddsLabel);
+                oddsField.appendChild(oddsInput);
+
+                const rebateField = document.createElement('label');
+                rebateField.className = 'user-settlement-field';
+                const rebateLabel = document.createElement('span');
+                rebateLabel.className = 'user-settlement-field-label';
+                rebateLabel.textContent = '返水%';
+                const rebateInput = document.createElement('input');
+                rebateInput.value = this.formatAmountValue(settlementConfig.rebateRate);
+                rebateInput.placeholder = '请输入返水';
+                this.bindSettlementNumericInput(rebateInput);
+                rebateField.appendChild(rebateLabel);
+                rebateField.appendChild(rebateInput);
+
+                const parseField = document.createElement('label');
+                parseField.className = 'user-settlement-field user-settlement-check-field';
+                const parseLabel = document.createElement('span');
+                parseLabel.className = 'user-settlement-field-label';
+                parseLabel.textContent = '尾数简写';
+                const parseControl = document.createElement('span');
+                parseControl.className = 'user-settlement-checkbox';
+                const parseInput = document.createElement('input');
+                parseInput.type = 'checkbox';
+                parseInput.checked = parsePreference.tailShorthandAsSeparateGroups === true;
+                const parseText = document.createElement('span');
+                parseText.textContent = '2468尾按 2尾/4尾/6尾/8尾 解析';
+                parseControl.appendChild(parseInput);
+                parseControl.appendChild(parseText);
+                parseField.appendChild(parseLabel);
+                parseField.appendChild(parseControl);
+
+                const saveButton = document.createElement('button');
+                saveButton.className = 'user-settlement-save';
+                saveButton.textContent = '保存设置';
+                saveButton.onclick = (event) => {
+                    event.stopPropagation();
+                    const nextOdds = Number(oddsInput.value);
+                    const nextRebateRate = Number(rebateInput.value);
+                    const nextTailShorthand = parseInput.checked === true;
+                    if (!Number.isFinite(nextOdds) || nextOdds <= 0) {
+                        if (window.showError) {
+                            window.showError('保存设置失败', '赔率请输入大于 0 的数字');
+                        }
+                        return;
+                    }
+                    if (!Number.isFinite(nextRebateRate) || nextRebateRate < 0) {
+                        if (window.showError) {
+                            window.showError('保存设置失败', '返水请输入大于等于 0 的数字');
+                        }
+                        return;
+                    }
+                    try {
+                        const result = this.updateUserSettlementConfig(user, {
+                            odds: nextOdds,
+                            rebateRate: nextRebateRate
+                        }, {
+                            keepExpanded: true,
+                            render: false,
+                            save: false
+                        });
+                        const parseResult = this.updateUserParsePreference(user, {
+                            tailShorthandAsSeparateGroups: nextTailShorthand
+                        }, {
+                            render: false,
+                            save: false
+                        });
+                        this.expandedSettlementUser = '';
+                        this.renderAllSections();
+                        this.saveUserData();
+                        if (window.showSuccess) {
+                            window.showSuccess(`已保存 ${user}：赔率 ${this.formatAmountValue(result.odds)}，返水 ${this.formatAmountValue(result.rebateRate)}%，尾数简写${parseResult.tailShorthandAsSeparateGroups ? '开' : '关'}`);
+                        }
+                    } catch (error) {
+                        if (window.showError) {
+                            window.showError('保存设置失败', error && error.message ? error.message : '未知错误');
+                        }
+                    }
+                };
+
+                editor.appendChild(oddsField);
+                editor.appendChild(rebateField);
+                editor.appendChild(parseField);
+                editor.appendChild(saveButton);
+                info.appendChild(editor);
+            }
+
+            const actions = document.createElement('div');
+            actions.className = 'user-item-actions';
+
+            const settlementButton = document.createElement('button');
+            settlementButton.className = 'user-settlement-toggle';
+            settlementButton.textContent = this.expandedSettlementUser === user ? '收起' : '设置';
+            settlementButton.onclick = (event) => {
+                event.stopPropagation();
+                this.toggleSettlementEditor(user);
+            };
+
             const deleteButton = document.createElement('button');
             deleteButton.textContent = '删除';
             deleteButton.onclick = (event) => {
@@ -1472,8 +1994,10 @@ class UserManager {
                 this.deleteUser(user);
             };
 
+            actions.appendChild(settlementButton);
+            actions.appendChild(deleteButton);
             li.appendChild(info);
-            li.appendChild(deleteButton);
+            li.appendChild(actions);
             userListElement.appendChild(li);
         });
     }
@@ -1675,6 +2199,8 @@ class UserManager {
             rows = matchedRows.concat(unmatchedRows);
         }
 
+        rows = this.sortOriginalRowsByEditedStatus(rows);
+
         this.renderVirtualRows(
             originalDataListElement,
             rows,
@@ -1693,12 +2219,13 @@ class UserManager {
     collectSelectedOriginalRows() {
         const selectedData = this.getSelectedUserData();
         if (!selectedData.users.length) return [];
-        return selectedData.originalData.map(({ userName, index, originalEntry, message, regionKey, regionLabel }) => ({
+        return selectedData.originalData.map(({ userName, index, originalEntry, message, createdAt, editedAt, regionKey, regionLabel }) => ({
             userName,
             index,
             originalEntry,
             message: this.extractOriginalMessageText(message),
-            createdAt: this.extractOriginalMessageCreatedAt(originalEntry),
+            createdAt: createdAt || this.extractOriginalMessageCreatedAt(originalEntry),
+            editedAt: editedAt || this.extractOriginalMessageEditedAt(originalEntry),
             regionKey,
             regionLabel: regionLabel || this.getRegionLabel(regionKey)
         }));
@@ -1718,13 +2245,31 @@ class UserManager {
                         originalEntry: data,
                         message: this.extractOriginalMessageText(data),
                         createdAt: this.extractOriginalMessageCreatedAt(data),
+                        editedAt: this.extractOriginalMessageEditedAt(data),
                         regionKey,
-                        regionLabel: this.getRegionLabel(regionKey)
+                        regionLabel: this.getUserRegionDisplayLabel(userName, regionKey)
                     });
                 });
             });
         });
         return rows;
+    }
+
+    sortOriginalRowsByEditedStatus(rows = []) {
+        if (!Array.isArray(rows) || rows.length <= 1) return Array.isArray(rows) ? rows : [];
+        const normalRows = [];
+        const editedRows = [];
+        rows.forEach((row) => {
+            const editedAt = row && row.editedAt
+                ? row.editedAt
+                : this.extractOriginalMessageEditedAt(row && row.originalEntry);
+            if (this.normalizeOriginalMessageCreatedAt(editedAt)) {
+                editedRows.push(row);
+            } else {
+                normalRows.push(row);
+            }
+        });
+        return normalRows.concat(editedRows);
     }
 
     estimateOriginalRowHeight(row) {
@@ -1906,7 +2451,8 @@ class UserManager {
 
         const totalAmount = this.calculateOriginalOrderTotal(message, userName, regionKey);
         const createdAt = this.extractOriginalMessageCreatedAt(regionData.originalData[index]);
-        regionData.originalData[index] = this.buildStoredOriginalDataEntry(message, totalAmount, createdAt);
+        const editedAt = new Date().toISOString();
+        regionData.originalData[index] = this.buildStoredOriginalDataEntry(message, totalAmount, createdAt, editedAt);
         this.recalculateUserData(userName, regionKey);
         this.renderAllSections();
         this.saveUserData();
@@ -1985,13 +2531,98 @@ class UserManager {
         regionData.totalCount = regionData.data.reduce((sum, item) => sum + item.value, 0);
     }
 
-    recalculateAllUsersData() {
-        const regionKeys = this.getRegionOptions().map(item => item.key);
-        Object.keys(this.users || {}).forEach((userName) => {
-            regionKeys.forEach((regionKey) => {
-                this.recalculateUserData(userName, regionKey);
+    collectUserOriginalEntriesForRebuild(userName) {
+        const userRecord = this.users && this.users[userName];
+        if (!userRecord || !userRecord.regions || typeof userRecord.regions !== 'object') {
+            return [];
+        }
+        const seen = new Set();
+        const rows = [];
+        this.getRegionOptions().forEach((region) => {
+            const regionData = userRecord.regions[region.key];
+            if (!regionData || !Array.isArray(regionData.originalData)) return;
+            regionData.originalData.forEach((entry) => {
+                const message = this.extractOriginalMessageText(entry);
+                if (!message.trim()) return;
+                const createdAt = this.extractOriginalMessageCreatedAt(entry);
+                const editedAt = this.extractOriginalMessageEditedAt(entry);
+                const dedupeKey = `${createdAt}|${message}`;
+                if (seen.has(dedupeKey)) return;
+                seen.add(dedupeKey);
+                rows.push({
+                    message,
+                    createdAt,
+                    editedAt
+                });
             });
         });
+        rows.sort((left, right) => {
+            const leftTime = new Date(left.createdAt || 0).getTime();
+            const rightTime = new Date(right.createdAt || 0).getTime();
+            const safeLeft = Number.isFinite(leftTime) ? leftTime : 0;
+            const safeRight = Number.isFinite(rightTime) ? rightTime : 0;
+            return safeLeft - safeRight;
+        });
+        return rows;
+    }
+
+    resetUserAllRegionBuckets(userName, options = {}) {
+        const clearOriginalData = !!(options && options.clearOriginalData);
+        const userRecord = this.users && this.users[userName];
+        if (!userRecord || !userRecord.regions || typeof userRecord.regions !== 'object') {
+            return;
+        }
+        this.getRegionOptions().forEach((region) => {
+            const regionData = userRecord.regions[region.key];
+            if (!regionData) return;
+            if (Array.isArray(regionData.data)) {
+                regionData.data.forEach((item) => {
+                    item.value = 0;
+                });
+            }
+            const payoutData = this.ensureRegionPayoutData(regionData, {
+                fallbackOdds: this.getDefaultPayoutOdds()
+            });
+            if (Array.isArray(payoutData)) {
+                payoutData.forEach((item) => {
+                    item.value = 0;
+                });
+            }
+            regionData.totalCount = 0;
+            if (clearOriginalData) {
+                regionData.originalData = [];
+            }
+        });
+    }
+
+    recalculateAllUsersData() {
+        if (!window.messageProcessor || typeof window.messageProcessor.processMessageForUser !== 'function') {
+            const regionKeys = this.getRegionOptions().map(item => item.key);
+            Object.keys(this.users || {}).forEach((userName) => {
+                regionKeys.forEach((regionKey) => {
+                    this.recalculateUserData(userName, regionKey);
+                });
+            });
+            this.saveUserData();
+            return;
+        }
+        Object.keys(this.users || {}).forEach((userName) => {
+            const originalEntries = this.collectUserOriginalEntriesForRebuild(userName);
+            this.resetUserAllRegionBuckets(userName, { clearOriginalData: true });
+            originalEntries.forEach((entry) => {
+                const rawMessage = this.extractOriginalMessageText(entry.message);
+                if (!rawMessage.trim()) return;
+                window.messageProcessor.processMessageForUser(rawMessage, userName, {
+                    clientId: userName,
+                    originalMessage: rawMessage,
+                    createdAt: entry.createdAt,
+                    editedAt: entry.editedAt,
+                    allowPartial: true,
+                    persist: false
+                });
+            });
+        });
+        this.saveUserData();
     }
 
     getUserRegionPayoutByNumber(userName, regionKey = this.activeRegion, number = '') {
@@ -2036,8 +2667,17 @@ class UserManager {
         if (window.messageProcessor && typeof window.messageProcessor.parseMessage === 'function') {
             try {
                 const parsed = window.messageProcessor.parseMessage(sourceMessage, { clientId: userName, allowPartial: true });
+                const regionAccounting = window.messageProcessor.getEffectiveRegionAccountingInfo
+                    ? window.messageProcessor.getEffectiveRegionAccountingInfo(userName)
+                    : {
+                        separateStatsByRegion: true,
+                        defaultRegion: regionKey
+                    };
                 parsed.entries.forEach(entry => {
-                    const entryRegion = entry && entry.regionKey ? entry.regionKey : regionKey;
+                    const parsedRegion = entry && entry.regionKey ? entry.regionKey : regionKey;
+                    const entryRegion = regionAccounting && regionAccounting.separateStatsByRegion === false
+                        ? (regionAccounting.defaultRegion || regionKey)
+                        : parsedRegion;
                     if (entryRegion !== regionKey) return;
                     applyParsedData(entry.numbers, entry.amount, entry.odds);
                 });
@@ -2114,6 +2754,7 @@ class UserManager {
         }
         this.users = {};
         this.selectedUsers.clear();
+        this.expandedSettlementUser = '';
         this.activeRegion = 'new_ao';
         this.viewRegions = new Set(['new_ao']);
         this.isSummaryMode = false;

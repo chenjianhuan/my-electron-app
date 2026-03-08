@@ -35,6 +35,8 @@ class MessageProcessor {
         const attributeMap = {
             '单': [1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35, 37, 39, 41, 43, 45, 47, 49],
             '双': [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48],
+            '单数': [1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35, 37, 39, 41, 43, 45, 47, 49],
+            '双数': [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48],
             '大': [25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49],
             '小': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
             '合单': [1, 3, 5, 7, 9, 10, 12, 14, 16, 18, 21, 23, 25, 27, 29, 30, 32, 34, 36, 38, 41, 43, 45, 47, 49],
@@ -280,8 +282,11 @@ class MessageProcessor {
             },
             ambiguityPolicy: 'confirm',
             anchorParseMode: 'strict',
+            blockedPlayKeywords: this.getSystemBlockedPlayKeywordMap(),
             regionPolicy: {
                 defaultRegion: 'new_ao',
+                separateStatsByRegion: true,
+                regionAliases: this.getSystemRegionAliasMap(),
                 canonicalAlwaysShowRegion: true
             }
         };
@@ -317,6 +322,93 @@ class MessageProcessor {
                 '全部': { amountDistribute: 'undetermined', enabled: true }
             }
         };
+    }
+
+    getAllowedBlockedPlayKeywordFamilies() {
+        return ['pingte_xiao', 'te_xiao', 'yi_xiao', 'lian_play'];
+    }
+
+    getSystemBlockedPlayKeywordMap() {
+        return {
+            pingte_xiao: ['平特一肖', '平特肖', '平特', '平肖', '平'],
+            te_xiao: ['特肖'],
+            yi_xiao: ['一肖'],
+            lian_play: [
+                '二连', '二联', '三连', '三联', '四连', '五连',
+                '二连肖', '三连肖', '四连肖', '五连肖',
+                '二肖连', '三肖连', '四肖连', '五肖连',
+                '连肖',
+                '复式', '复试',
+                '复式连肖', '复试连肖',
+                '复式二连', '复试二连',
+                '复式三连', '复试三连',
+                '复式四连', '复试四连',
+                '复式五连', '复试五连'
+            ]
+        };
+    }
+
+    normalizeBlockedPlayKeywordToken(token) {
+        return String(token || '').replace(/\s+/g, '').trim();
+    }
+
+    sanitizeBlockedPlayKeywordTokens(tokens, family = '') {
+        const familyKey = String(family || '').trim();
+        const seen = new Set();
+        const safe = [];
+        const rawTokens = Array.isArray(tokens)
+            ? tokens
+            : String(tokens || '')
+                .split(/[\n,，、]/)
+                .map(item => item.trim())
+                .filter(Boolean);
+        rawTokens.forEach((item) => {
+            const token = this.normalizeBlockedPlayKeywordToken(item);
+            if (!token || token.length > 16) return;
+            if (/[\r\n]/.test(token)) return;
+            if (!/[\u4e00-\u9fa5A-Za-z]/.test(token)) return;
+            if (/^[0-9０-９]+$/.test(token)) return;
+            if (token.length < 2 && !['pingte_xiao'].includes(familyKey)) return;
+            if (/^(?:元|块|米|蚊|毛|角|分|闷|号|碼|码|各|买|都)$/u.test(token)) return;
+            if (seen.has(token)) return;
+            seen.add(token);
+            safe.push(token);
+        });
+        return safe;
+    }
+
+    sanitizeBlockedPlayKeywordMap(rawMap, options = {}) {
+        const rejectSystemTokens = !!(options && options.rejectSystemTokens);
+        const safe = {};
+        const systemMap = this.getSystemBlockedPlayKeywordMap();
+        if (!rawMap || typeof rawMap !== 'object') return safe;
+        this.getAllowedBlockedPlayKeywordFamilies().forEach((family) => {
+            let tokens = this.sanitizeBlockedPlayKeywordTokens(rawMap[family], family);
+            if (rejectSystemTokens) {
+                const systemTokens = new Set(Array.isArray(systemMap[family]) ? systemMap[family] : []);
+                tokens = tokens.filter(token => !systemTokens.has(token));
+            }
+            if (tokens.length > 0) {
+                safe[family] = tokens;
+            }
+        });
+        return safe;
+    }
+
+    mergeBlockedPlayKeywordMap(baseMap, patchMap) {
+        const safeBase = this.sanitizeBlockedPlayKeywordMap(baseMap || {}, { rejectSystemTokens: false });
+        const safePatch = this.sanitizeBlockedPlayKeywordMap(patchMap || {}, { rejectSystemTokens: false });
+        const merged = {};
+        this.getAllowedBlockedPlayKeywordFamilies().forEach((family) => {
+            const tokens = Array.from(new Set([
+                ...(Array.isArray(safeBase[family]) ? safeBase[family] : []),
+                ...(Array.isArray(safePatch[family]) ? safePatch[family] : [])
+            ]));
+            if (tokens.length > 0) {
+                merged[family] = tokens;
+            }
+        });
+        return merged;
     }
 
     getResolvedGlobalRuleProfile() {
@@ -409,7 +501,7 @@ class MessageProcessor {
             if (/[\r\n]/.test(token)) return;
             if (/^[0-9０-９零〇一二两三四五六七八九十百千万]+$/.test(token)) return;
             if (!/[\u4e00-\u9fa5A-Za-z]/.test(token)) return;
-            if (/^(?:新|老|香|港|奥|澳|新奥|老奥|澳门|香港)$/.test(token)) return;
+            if (/^(?:新|老|香|港|奥|澳|新奥|新澳|老奥|老澳|澳门|香港)$/.test(token)) return;
             if (seen.has(token)) return;
             seen.add(token);
             safe.push(token);
@@ -634,7 +726,7 @@ class MessageProcessor {
     getReservedAnchorTokens() {
         return new Set([
             '新', '老', '香', '港', '奥', '澳',
-            '新奥', '老奥', '澳门', '香港',
+            '新奥', '新澳', '老奥', '老澳', '澳门', '香港',
             ...this.collectConfiguredAmountSuffixTokens()
         ]);
     }
@@ -969,6 +1061,108 @@ class MessageProcessor {
         return fallback;
     }
 
+    escapeRegex(text) {
+        return String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    getSystemRegionAliasMap() {
+        return {
+            new_ao: ['新奥', '新澳', '澳门', '奥', '澳', '新'],
+            old_ao: ['老奥', '老澳', '老'],
+            hongkong: ['香港', '香', '港']
+        };
+    }
+
+    normalizeRegionAliasToken(token) {
+        return String(token || '').replace(/\s+/g, '').trim();
+    }
+
+    sanitizeRegionAliasTokens(tokens, regionKey = 'new_ao', options = {}) {
+        const safeRegionKey = this.normalizeRegionKey(regionKey, 'new_ao');
+        const systemAliasMap = this.getSystemRegionAliasMap();
+        const rejectSystemAliases = !!(options && options.rejectSystemAliases);
+        const seen = new Set();
+        const result = [];
+        const rawTokens = Array.isArray(tokens)
+            ? tokens
+            : String(tokens || '')
+                .split(/[\n,，、]/)
+                .map(item => item.trim())
+                .filter(Boolean);
+        rawTokens.forEach((item) => {
+            const token = this.normalizeRegionAliasToken(item);
+            if (!token || token.length > 12) return;
+            if (/[\r\n]/.test(token)) return;
+            if (/^[0-9０-９零〇一二两三四五六七八九十百千万]+$/.test(token)) return;
+            if (!/[\u4e00-\u9fa5A-Za-z]/.test(token)) return;
+            if (/^(?:元|块|米|蚊|毛|角|分|闷|号|碼|码|各|买|都)$/u.test(token)) return;
+            const systemResolved = this.resolveRegionFromToken(token, '', { systemOnly: true });
+            if (rejectSystemAliases && systemResolved) return;
+            if (seen.has(token)) return;
+            seen.add(token);
+            result.push(token);
+        });
+        return rejectSystemAliases
+            ? result.filter((token) => !(Array.isArray(systemAliasMap[safeRegionKey]) && systemAliasMap[safeRegionKey].includes(token)))
+            : result;
+    }
+
+    sanitizeRegionAliasMap(regionAliases, options = {}) {
+        const safe = {};
+        if (!regionAliases || typeof regionAliases !== 'object') return safe;
+        ['new_ao', 'old_ao', 'hongkong'].forEach((regionKey) => {
+            const tokens = this.sanitizeRegionAliasTokens(regionAliases[regionKey], regionKey, options);
+            if (tokens.length > 0) {
+                safe[regionKey] = tokens;
+            }
+        });
+        return safe;
+    }
+
+    mergeRegionAliasMap(baseAliases, patchAliases) {
+        const safeBase = this.sanitizeRegionAliasMap(baseAliases || {}, { rejectSystemAliases: false });
+        const safePatch = this.sanitizeRegionAliasMap(patchAliases || {}, { rejectSystemAliases: false });
+        const merged = {};
+        ['new_ao', 'old_ao', 'hongkong'].forEach((regionKey) => {
+            const tokens = Array.from(new Set([
+                ...(Array.isArray(safeBase[regionKey]) ? safeBase[regionKey] : []),
+                ...(Array.isArray(safePatch[regionKey]) ? safePatch[regionKey] : [])
+            ]));
+            if (tokens.length > 0) {
+                merged[regionKey] = tokens;
+            }
+        });
+        return merged;
+    }
+
+    getActiveRegionAliasMap() {
+        const activeProfile = this.getActiveRuleProfile();
+        const customAliases = activeProfile && activeProfile.regionPolicy && activeProfile.regionPolicy.regionAliases
+            ? activeProfile.regionPolicy.regionAliases
+            : {};
+        return this.mergeRegionAliasMap(this.getSystemRegionAliasMap(), customAliases);
+    }
+
+    getEffectiveRegionAliasMap(clientId = '') {
+        const effectiveProfile = clientId
+            ? this.getEffectiveRuleProfile(clientId)
+            : this.getActiveRuleProfile();
+        const customAliases = effectiveProfile && effectiveProfile.regionPolicy && effectiveProfile.regionPolicy.regionAliases
+            ? effectiveProfile.regionPolicy.regionAliases
+            : {};
+        return this.mergeRegionAliasMap(this.getSystemRegionAliasMap(), customAliases);
+    }
+
+    getEffectiveBlockedPlayKeywordMap(clientId = '') {
+        const effectiveProfile = clientId
+            ? this.getEffectiveRuleProfile(clientId)
+            : this.getActiveRuleProfile();
+        const customKeywords = effectiveProfile && effectiveProfile.blockedPlayKeywords
+            ? effectiveProfile.blockedPlayKeywords
+            : {};
+        return this.mergeBlockedPlayKeywordMap(this.getSystemBlockedPlayKeywordMap(), customKeywords);
+    }
+
     sanitizeAnchorRuleItem(rawRule, token = '') {
         if (!rawRule || typeof rawRule !== 'object') {
             return null;
@@ -1071,10 +1265,29 @@ class MessageProcessor {
             safe.anchorParseMode = anchorParseMode;
         }
 
+        const blockedPlayKeywords = this.sanitizeBlockedPlayKeywordMap(
+            profile.blockedPlayKeywords,
+            { rejectSystemTokens: true }
+        );
+        if (Object.keys(blockedPlayKeywords).length > 0) {
+            safe.blockedPlayKeywords = blockedPlayKeywords;
+        }
+
+        if (typeof profile.tailShorthandAsSeparateGroups === 'boolean') {
+            safe.tailShorthandAsSeparateGroups = profile.tailShorthandAsSeparateGroups;
+        }
+
         if (profile.regionPolicy && typeof profile.regionPolicy === 'object') {
             const regionPolicy = {};
             if (profile.regionPolicy.defaultRegion) {
                 regionPolicy.defaultRegion = this.normalizeRegionKey(profile.regionPolicy.defaultRegion, 'new_ao');
+            }
+            if (typeof profile.regionPolicy.separateStatsByRegion === 'boolean') {
+                regionPolicy.separateStatsByRegion = profile.regionPolicy.separateStatsByRegion;
+            }
+            const regionAliases = this.sanitizeRegionAliasMap(profile.regionPolicy.regionAliases, { rejectSystemAliases: true });
+            if (Object.keys(regionAliases).length > 0) {
+                regionPolicy.regionAliases = regionAliases;
             }
             if (typeof profile.regionPolicy.canonicalAlwaysShowRegion === 'boolean') {
                 regionPolicy.canonicalAlwaysShowRegion = profile.regionPolicy.canonicalAlwaysShowRegion;
@@ -1137,10 +1350,29 @@ class MessageProcessor {
                 return;
             }
             if (key === 'regionPolicy' && value && typeof value === 'object') {
-                merged.regionPolicy = {
-                    ...(merged.regionPolicy || {}),
+                const baseRegionPolicy = merged.regionPolicy && typeof merged.regionPolicy === 'object'
+                    ? merged.regionPolicy
+                    : {};
+                const nextRegionPolicy = {
+                    ...baseRegionPolicy,
                     ...value
                 };
+                if (baseRegionPolicy.regionAliases || value.regionAliases) {
+                    nextRegionPolicy.regionAliases = this.mergeRegionAliasMap(
+                        baseRegionPolicy.regionAliases || {},
+                        value.regionAliases || {}
+                    );
+                }
+                merged.regionPolicy = {
+                    ...nextRegionPolicy
+                };
+                return;
+            }
+            if (key === 'blockedPlayKeywords' && value && typeof value === 'object') {
+                merged.blockedPlayKeywords = this.mergeBlockedPlayKeywordMap(
+                    merged.blockedPlayKeywords || {},
+                    value
+                );
                 return;
             }
             merged[key] = value;
@@ -1189,6 +1421,10 @@ class MessageProcessor {
         if (!this.getAllowedAnchorParseModeValues().includes(effective.anchorParseMode)) {
             effective.anchorParseMode = 'strict';
         }
+        effective.blockedPlayKeywords = this.sanitizeBlockedPlayKeywordMap(
+            effective.blockedPlayKeywords || {},
+            { rejectSystemTokens: true }
+        );
         effective.noiseRules = this.sanitizeNoiseRules(effective.noiseRules || []);
         effective.amountUnits = this.sanitizeAmountUnits(effective.amountUnits || this.getSystemAmountUnits());
         effective.defaultOdds = this.normalizeOddsValue(
@@ -1202,6 +1438,10 @@ class MessageProcessor {
             effective.regionPolicy = {};
         }
         effective.regionPolicy.defaultRegion = this.normalizeRegionKey(effective.regionPolicy.defaultRegion, 'new_ao');
+        if (typeof effective.regionPolicy.separateStatsByRegion !== 'boolean') {
+            effective.regionPolicy.separateStatsByRegion = true;
+        }
+        effective.regionPolicy.regionAliases = this.sanitizeRegionAliasMap(effective.regionPolicy.regionAliases || {}, { rejectSystemAliases: true });
         if (typeof effective.regionPolicy.canonicalAlwaysShowRegion !== 'boolean') {
             effective.regionPolicy.canonicalAlwaysShowRegion = true;
         }
@@ -1488,6 +1728,63 @@ class MessageProcessor {
         return normalizedMode;
     }
 
+    getAllowedRegionAccountingModeValues() {
+        return ['split', 'merged'];
+    }
+
+    normalizeRegionAccountingModeValue(mode) {
+        const normalized = String(mode || '').trim();
+        return this.getAllowedRegionAccountingModeValues().includes(normalized) ? normalized : '';
+    }
+
+    setRegionAccountingPolicy(policy = {}, options = {}) {
+        const normalizedPolicy = policy && typeof policy === 'object' ? policy : {};
+        const normalizedMode = this.normalizeRegionAccountingModeValue(normalizedPolicy.mode);
+        if (!normalizedMode) {
+            throw new Error('盘口统计模式无效');
+        }
+        const normalizedDefaultRegion = this.normalizeRegionKey(
+            normalizedPolicy.defaultRegion,
+            'new_ao'
+        );
+        const normalizedRegionAliases = this.sanitizeRegionAliasMap(normalizedPolicy.regionAliases || {}, { rejectSystemAliases: true });
+        const scope = options && options.scope === 'client' ? 'client' : 'global';
+        const applyRegionPolicy = (targetProfile = {}) => {
+            const nextProfile = targetProfile && typeof targetProfile === 'object'
+                ? JSON.parse(JSON.stringify(targetProfile))
+                : {};
+            nextProfile.regionPolicy = {
+                ...(nextProfile.regionPolicy && typeof nextProfile.regionPolicy === 'object' ? nextProfile.regionPolicy : {}),
+                defaultRegion: normalizedDefaultRegion,
+                separateStatsByRegion: normalizedMode === 'split',
+                regionAliases: normalizedRegionAliases
+            };
+            return this.sanitizeRuleProfile(nextProfile, { forOverride: true });
+        };
+
+        if (scope === 'global') {
+            this.globalRuleProfile = applyRegionPolicy(this.globalRuleProfile || {});
+        } else {
+            const clientId = this.normalizeRuleClientId(options && options.clientId ? options.clientId : '');
+            if (!clientId) {
+                throw new Error('请先选择客户后再设置盘口规则');
+            }
+            const current = this.clientRuleProfiles[clientId] || {};
+            const next = applyRegionPolicy(current);
+            if (this.isRuleProfileEmpty(next)) {
+                delete this.clientRuleProfiles[clientId];
+            } else {
+                this.clientRuleProfiles[clientId] = next;
+            }
+        }
+        this.persistAttributeConfig();
+        return {
+            mode: normalizedMode,
+            defaultRegion: normalizedDefaultRegion,
+            regionAliases: normalizedRegionAliases
+        };
+    }
+
     setDefaultOdds(odds, options = {}) {
         const normalizedOdds = this.normalizeOddsValue(odds);
         if (!Number.isFinite(normalizedOdds)) {
@@ -1589,6 +1886,119 @@ class MessageProcessor {
         this.persistAttributeConfig();
     }
 
+    setTailShorthandAsSeparateGroups(enabled, options = {}) {
+        const normalizedEnabled = enabled === true;
+        const scope = options && options.scope === 'client' ? 'client' : 'global';
+        this.updateRuleProfile(
+            scope,
+            { tailShorthandAsSeparateGroups: normalizedEnabled },
+            { clientId: options && options.clientId ? options.clientId : '' }
+        );
+        this.persistAttributeConfig();
+        return normalizedEnabled;
+    }
+
+    clearRegionAccountingPolicy(options = {}) {
+        const scope = options && options.scope === 'client' ? 'client' : 'global';
+        const clearRegionPolicyKeys = (profile) => {
+            if (!profile || !profile.regionPolicy || typeof profile.regionPolicy !== 'object') return;
+            if (Object.prototype.hasOwnProperty.call(profile.regionPolicy, 'defaultRegion')) {
+                delete profile.regionPolicy.defaultRegion;
+            }
+            if (Object.prototype.hasOwnProperty.call(profile.regionPolicy, 'separateStatsByRegion')) {
+                delete profile.regionPolicy.separateStatsByRegion;
+            }
+            if (Object.prototype.hasOwnProperty.call(profile.regionPolicy, 'regionAliases')) {
+                delete profile.regionPolicy.regionAliases;
+            }
+            if (Object.keys(profile.regionPolicy).length === 0) {
+                delete profile.regionPolicy;
+            }
+        };
+
+        if (scope === 'global') {
+            clearRegionPolicyKeys(this.globalRuleProfile);
+            if (this.isRuleProfileEmpty(this.globalRuleProfile)) {
+                this.globalRuleProfile = {};
+            }
+            this.persistAttributeConfig();
+            return;
+        }
+
+        const clientId = this.normalizeRuleClientId(options && options.clientId ? options.clientId : '');
+        if (!clientId) {
+            throw new Error('请先选择客户后再恢复盘口规则');
+        }
+        const profile = this.clientRuleProfiles[clientId];
+        if (!profile) return;
+        clearRegionPolicyKeys(profile);
+        if (this.isRuleProfileEmpty(profile)) {
+            delete this.clientRuleProfiles[clientId];
+        }
+        this.persistAttributeConfig();
+    }
+
+    setBlockedPlayKeywordMap(keywordMap = {}, options = {}) {
+        const normalizedMap = this.sanitizeBlockedPlayKeywordMap(keywordMap || {}, { rejectSystemTokens: true });
+        const scope = options && options.scope === 'client' ? 'client' : 'global';
+        const applyKeywords = (targetProfile = {}) => {
+            const nextProfile = targetProfile && typeof targetProfile === 'object'
+                ? JSON.parse(JSON.stringify(targetProfile))
+                : {};
+            nextProfile.blockedPlayKeywords = normalizedMap;
+            return this.sanitizeRuleProfile(nextProfile, { forOverride: true });
+        };
+
+        if (scope === 'global') {
+            this.globalRuleProfile = applyKeywords(this.globalRuleProfile || {});
+        } else {
+            const clientId = this.normalizeRuleClientId(options && options.clientId ? options.clientId : '');
+            if (!clientId) {
+                throw new Error('请先选择客户后再设置玩法关键词');
+            }
+            const current = this.clientRuleProfiles[clientId] || {};
+            const next = applyKeywords(current);
+            if (this.isRuleProfileEmpty(next)) {
+                delete this.clientRuleProfiles[clientId];
+            } else {
+                this.clientRuleProfiles[clientId] = next;
+            }
+        }
+        this.persistAttributeConfig();
+        return normalizedMap;
+    }
+
+    clearBlockedPlayKeywordMap(options = {}) {
+        const scope = options && options.scope === 'client' ? 'client' : 'global';
+        const clearKeywords = (profile) => {
+            if (!profile || typeof profile !== 'object') return;
+            if (Object.prototype.hasOwnProperty.call(profile, 'blockedPlayKeywords')) {
+                delete profile.blockedPlayKeywords;
+            }
+        };
+
+        if (scope === 'global') {
+            clearKeywords(this.globalRuleProfile);
+            if (this.isRuleProfileEmpty(this.globalRuleProfile)) {
+                this.globalRuleProfile = {};
+            }
+            this.persistAttributeConfig();
+            return;
+        }
+
+        const clientId = this.normalizeRuleClientId(options && options.clientId ? options.clientId : '');
+        if (!clientId) {
+            throw new Error('请先选择客户后再恢复玩法关键词');
+        }
+        const profile = this.clientRuleProfiles[clientId];
+        if (!profile) return;
+        clearKeywords(profile);
+        if (this.isRuleProfileEmpty(profile)) {
+            delete this.clientRuleProfiles[clientId];
+        }
+        this.persistAttributeConfig();
+    }
+
     getEffectiveAttributeCombinePolicy(clientId = '') {
         return this.getEffectiveRuleProfile(clientId).attributeCombinePolicy || 'intersection_then_union_fallback';
     }
@@ -1596,6 +2006,10 @@ class MessageProcessor {
     getEffectiveAnchorParseMode(clientId = '') {
         const mode = this.getEffectiveRuleProfile(clientId).anchorParseMode;
         return this.getAllowedAnchorParseModeValues().includes(mode) ? mode : 'strict';
+    }
+
+    getEffectiveTailShorthandAsSeparateGroups(clientId = '') {
+        return this.getEffectiveRuleProfile(clientId).tailShorthandAsSeparateGroups === true;
     }
 
     getEffectiveAnchorOdds(anchorToken, clientId = '') {
@@ -2116,7 +2530,7 @@ class MessageProcessor {
 
     normalizeMessage(message) {
         if (!message) return '';
-        return String(message)
+        const normalized = String(message)
             // 全角数字转半角数字
             .replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 65248))
             // 全角空格转半角空格
@@ -2138,6 +2552,41 @@ class MessageProcessor {
             // 常见中文分隔符统一
             .replace(/[、；;]/g, ' ')
             .replace(/[：]/g, ':');
+        return this.expandTailShorthandGroupMessage(normalized);
+    }
+
+    expandTailShorthandGroupMessage(message) {
+        const raw = String(message || '');
+        if (!raw || !this.getEffectiveTailShorthandAsSeparateGroups(this.activeRuleClientId || '')) {
+            return raw;
+        }
+        return raw
+            .replace(/\r/g, '')
+            .split('\n')
+            .map(line => this.expandTailShorthandGroupLine(line))
+            .join('\n');
+    }
+
+    expandTailShorthandGroupLine(line) {
+        const raw = String(line || '');
+        if (!raw.trim()) return raw;
+        const anchorPattern = this.buildAnchorTokenPattern();
+        const amountPattern = this.getFlexibleAmountPatternSource();
+        const amountSuffixPattern = this.buildAmountSuffixPattern({ includeGeneric: true });
+        const amountWithSuffixPattern = amountSuffixPattern
+            ? `(?:${amountPattern})(?:\\s*(?:${amountSuffixPattern}))?`
+            : `(?:${amountPattern})`;
+        const digitListPattern = '(?:\\d(?:[\\s,，/、]*)){2,}|\\d{2,}';
+        const gapPattern = `[\\s,，.．。:：;；~～\\-—_=+/\\\\#*'"$￥¥!！?？]*`;
+        const shorthandRegex = new RegExp(
+            `(${digitListPattern})尾(${gapPattern}(?:${anchorPattern})${gapPattern}(?:${amountWithSuffixPattern})(?:[#*\`'"$￥¥,，。:：;；~～!！?？]*)?)`,
+            'gu'
+        );
+        return raw.replace(shorthandRegex, (match, rawDigits, suffix) => {
+            const digits = Array.from(String(rawDigits || '').match(/\d/g) || []);
+            if (digits.length < 2) return match;
+            return digits.map(digit => `${digit}尾${suffix}`).join(' ');
+        });
     }
 
     normalizePartialParseReason(reason) {
@@ -2419,15 +2868,24 @@ class MessageProcessor {
     }
 
     getBlockedPingPlayDefinitions() {
+        const keywordMap = this.getEffectiveBlockedPlayKeywordMap();
         return [
-            { token: '平特一肖', playType: 'pingte_xiao', playLabel: '平特一肖' },
-            { token: '平特肖', playType: 'pingte_xiao', playLabel: '平特一肖' },
-            { token: '平特', playType: 'pingte_xiao', playLabel: '平特一肖' },
-            { token: '平肖', playType: 'pingte_xiao', playLabel: '平特一肖' },
-            { token: '平', playType: 'pingte_xiao', playLabel: '平特一肖' },
-            { token: '特肖', playType: 'te_xiao', playLabel: '特肖' },
-            { token: '一肖', playType: 'yi_xiao', playLabel: '一肖' }
-        ].sort((a, b) => b.token.length - a.token.length);
+            { playType: 'pingte_xiao', playLabel: '平特一肖', tokens: keywordMap.pingte_xiao || [] },
+            { playType: 'te_xiao', playLabel: '特肖', tokens: keywordMap.te_xiao || [] },
+            { playType: 'yi_xiao', playLabel: '一肖', tokens: keywordMap.yi_xiao || [] }
+        ].flatMap((definition) => {
+            return (Array.isArray(definition.tokens) ? definition.tokens : []).map((token) => ({
+                token,
+                playType: definition.playType,
+                playLabel: definition.playLabel
+            }));
+        }).sort((a, b) => b.token.length - a.token.length);
+    }
+
+    getBlockedLianPlayKeywords() {
+        const keywordMap = this.getEffectiveBlockedPlayKeywordMap();
+        return Array.from(new Set(Array.isArray(keywordMap.lian_play) ? keywordMap.lian_play : []))
+            .sort((a, b) => b.length - a.length);
     }
 
     buildBlockedPlayEntry(entry = {}) {
@@ -2546,7 +3004,10 @@ class MessageProcessor {
         if (!rawText) return null;
         const normalized = String(rawText || '').replace(/\s+/g, '');
         if (!normalized) return null;
-        const explicitPattern = /(三连|四连|五连|连肖|复式)/u;
+        const keywords = this.getBlockedLianPlayKeywords();
+        const explicitPattern = keywords.length > 0
+            ? new RegExp(`(${keywords.map(token => this.escapeRegex(token)).join('|')})`, 'u')
+            : /(三连|四连|五连|连肖|复式)/u;
         const implicitPattern = /^[鼠牛虎兔龙蛇马羊猴鸡狗猪]{2,}连(?:[0-9０-９零〇一二两三四五六七八九十百千万]+)/u;
         if (!explicitPattern.test(normalized) && !implicitPattern.test(normalized)) {
             return null;
@@ -2617,10 +3078,22 @@ class MessageProcessor {
     containsBlockedPlayKeyword(text) {
         const normalized = String(text || '').replace(/\s+/g, '').trim();
         if (!normalized) return false;
+        const pingTokens = this.getBlockedPingPlayDefinitions().map(item => item.token);
+        const lianTokens = this.getBlockedLianPlayKeywords();
+        const combinedTokens = Array.from(new Set([
+            ...pingTokens,
+            ...lianTokens,
+            '特码', '二中二', '三中二', '二全中', '三全中', '四全中', '每组'
+        ]))
+            .filter(Boolean)
+            .sort((a, b) => b.length - a.length);
+        const basePattern = combinedTokens.length > 0
+            ? `(?:${combinedTokens.map(token => this.escapeRegex(token)).join('|')})`
+            : '(?:特码|二中二|三中二|二全中|三全中|四全中|每组)';
         if (this.getActiveAmountUnits().includes('闷')) {
-            return /(平特一肖|平特肖|平特|平肖|特肖|一肖|特码|三连|四连|五连|连肖|复式|二中二|三中二|二全中|三全中|四全中|每组)/u.test(normalized);
+            return new RegExp(basePattern, 'u').test(normalized);
         }
-        return /(平特一肖|平特肖|平特|平肖|特肖|一肖|特码|三连|四连|五连|连肖|复式|二中二|三中二|二全中|三全中|四全中|每组|闷)/u.test(normalized);
+        return new RegExp(`${basePattern}|闷`, 'u').test(normalized);
     }
 
     isOrdinaryDelimitedChunk(text, options = {}) {
@@ -3466,11 +3939,11 @@ class MessageProcessor {
     maskStructuredNumericTokensForExplicitExtraction(text) {
         const raw = String(text || '');
         if (!raw) return '';
+        let masked = raw.replace(/[0-4０-４]{2,}头/gu, ' ');
         const attrKeys = Object.keys(this.getAttributeMap())
             .filter(key => /[0-9０-９]/.test(String(key || '')) && /[\u4e00-\u9fa5A-Za-z]/.test(String(key || '')))
             .sort((a, b) => b.length - a.length);
-        if (attrKeys.length === 0) return raw;
-        let masked = raw;
+        if (attrKeys.length === 0) return masked;
         attrKeys.forEach((key) => {
             const pattern = new RegExp(this.escapeRegex(key), 'gu');
             masked = masked.replace(pattern, ' ');
@@ -3730,8 +4203,26 @@ class MessageProcessor {
     getRegionMarkerRegex(global = false) {
         // 单字地区词仅在“像地区的位置”生效：行首/分隔符后 + 分隔符/数字/行尾前。
         // 这样可避免“老虎”“新单”等普通词被误识别为地区标记。
-        const singleTokenPattern = '(?:(?<=^)|(?<=[\\s:：,，.。;；\\-—/~～]))(?:老|新|香|港|奥|澳)(?=[\\s:：,，.。;；\\-—/~～0-9０-９]|$)';
-        const pattern = `(老奥|新奥|澳门|香港|${singleTokenPattern})`;
+        const aliasMap = this.getActiveRegionAliasMap();
+        const tokens = [];
+        Object.entries(aliasMap).forEach(([regionKey, aliases]) => {
+            (Array.isArray(aliases) ? aliases : []).forEach((alias) => {
+                const token = this.normalizeRegionAliasToken(alias);
+                if (!token) return;
+                tokens.push(token);
+            });
+        });
+        const uniqueTokens = Array.from(new Set(tokens)).sort((a, b) => b.length - a.length);
+        const singleTokens = uniqueTokens.filter(token => token.length === 1);
+        const multiTokens = uniqueTokens.filter(token => token.length > 1);
+        const parts = [];
+        if (multiTokens.length > 0) {
+            parts.push(`(?:${multiTokens.map(token => this.escapeRegex(token)).join('|')})`);
+        }
+        if (singleTokens.length > 0) {
+            parts.push(`(?:(?<=^)|(?<=[\\s:：,，.。;；\\-—/~～]))(?:${singleTokens.map(token => this.escapeRegex(token)).join('|')})(?=[\\s:：,，.。;；\\-—/~～0-9０-９]|$)`);
+        }
+        const pattern = parts.length > 0 ? parts.join('|') : '(?!)';
         return new RegExp(pattern, global ? 'g' : '');
     }
 
@@ -3749,8 +4240,9 @@ class MessageProcessor {
             if (left) {
                 segments.push({ text: left, regionKey: currentRegion, lineNo });
             }
-            currentRegion = this.resolveRegionFromToken(match[1], currentRegion);
-            cursor = match.index + match[1].length;
+            const matchedToken = String(match[0] || '').trim();
+            currentRegion = this.resolveRegionFromToken(matchedToken, currentRegion);
+            cursor = match.index + matchedToken.length;
         }
 
         const tail = this.normalizeSegmentText(text.slice(cursor));
@@ -3781,17 +4273,61 @@ class MessageProcessor {
         return trimmed;
     }
 
-    resolveRegionFromToken(token, fallback = 'new_ao') {
-        if (token === '老奥' || token === '老') return 'old_ao';
-        if (token === '香港' || token === '香' || token === '港') return 'hongkong';
-        if (token === '新奥' || token === '澳门' || token === '奥' || token === '澳' || token === '新') return 'new_ao';
-        return fallback || 'new_ao';
+    resolveRegionFromToken(token, fallback = 'new_ao', options = {}) {
+        const normalizedToken = this.normalizeRegionAliasToken(token);
+        if (!normalizedToken) return fallback == null ? 'new_ao' : fallback;
+        const aliasMap = options && options.systemOnly
+            ? this.getSystemRegionAliasMap()
+            : this.getActiveRegionAliasMap();
+        if ((aliasMap.old_ao || []).includes(normalizedToken)) return 'old_ao';
+        if ((aliasMap.hongkong || []).includes(normalizedToken)) return 'hongkong';
+        if ((aliasMap.new_ao || []).includes(normalizedToken)) return 'new_ao';
+        return fallback == null ? 'new_ao' : fallback;
     }
 
     getDefaultRegionKey() {
         const activeProfile = this.getActiveRuleProfile();
         const regionPolicy = activeProfile && activeProfile.regionPolicy ? activeProfile.regionPolicy : {};
         return this.normalizeRegionKey(regionPolicy.defaultRegion, 'new_ao');
+    }
+
+    getEffectiveRegionAccountingInfo(clientId = '') {
+        const effectiveProfile = clientId
+            ? this.getEffectiveRuleProfile(clientId)
+            : this.getActiveRuleProfile();
+        const regionPolicy = effectiveProfile && effectiveProfile.regionPolicy ? effectiveProfile.regionPolicy : {};
+        const defaultRegion = this.normalizeRegionKey(regionPolicy.defaultRegion, 'new_ao');
+        const separateStatsByRegion = regionPolicy.separateStatsByRegion !== false;
+        return {
+            mode: separateStatsByRegion ? 'split' : 'merged',
+            separateStatsByRegion,
+            defaultRegion,
+            defaultRegionLabel: this.getRegionLabelByKey(defaultRegion),
+            regionAliases: this.getEffectiveRegionAliasMap(clientId || ''),
+            canonicalAlwaysShowRegion: regionPolicy.canonicalAlwaysShowRegion !== false
+        };
+    }
+
+    resolveEntryAccountingInfo(entryRegionKey, options = {}) {
+        const accountingInfo = options && options.accountingInfo
+            ? options.accountingInfo
+            : this.getEffectiveRegionAccountingInfo(options && options.clientId ? options.clientId : '');
+        const defaultRegion = this.normalizeRegionKey(
+            accountingInfo && accountingInfo.defaultRegion ? accountingInfo.defaultRegion : '',
+            'new_ao'
+        );
+        const parsedRegionKey = this.normalizeRegionKey(entryRegionKey, defaultRegion);
+        const separateStatsByRegion = !(accountingInfo && accountingInfo.separateStatsByRegion === false);
+        const accountingRegionKey = separateStatsByRegion ? parsedRegionKey : defaultRegion;
+        return {
+            mode: separateStatsByRegion ? 'split' : 'merged',
+            separateStatsByRegion,
+            defaultRegion,
+            parsedRegionKey,
+            parsedRegionLabel: this.getRegionLabelByKey(parsedRegionKey),
+            accountingRegionKey,
+            accountingRegionLabel: this.getRegionLabelByKey(accountingRegionKey)
+        };
     }
 
     parseFlexibleAmount(token) {
@@ -4054,6 +4590,105 @@ class MessageProcessor {
         return numbers;
     }
 
+    buildStructuredNumbers(rawNumbers) {
+        const numbers = [];
+        const seen = new Set();
+        (Array.isArray(rawNumbers) ? rawNumbers : []).forEach(num => {
+            if (!this.validateNumber(num) || seen.has(num)) return;
+            seen.add(num);
+            numbers.push(num);
+        });
+        return numbers;
+    }
+
+    mergeStructuredNumberGroups(groups) {
+        const merged = [];
+        const seen = new Set();
+        (Array.isArray(groups) ? groups : []).forEach(group => {
+            (Array.isArray(group) ? group : []).forEach(num => {
+                if (!this.validateNumber(num) || seen.has(num)) return;
+                seen.add(num);
+                merged.push(num);
+            });
+        });
+        return merged.sort((a, b) => a - b);
+    }
+
+    matchCompositeWaveToken(compact, index, attrMap) {
+        const colorChars = [];
+        let cursor = index;
+        while (cursor < compact.length && /[红蓝绿]/u.test(compact[cursor])) {
+            colorChars.push(compact[cursor]);
+            cursor += 1;
+        }
+        if (colorChars.length < 2) return null;
+
+        const orderedColors = [];
+        const seenColors = new Set();
+        colorChars.forEach(color => {
+            if (seenColors.has(color)) return;
+            seenColors.add(color);
+            orderedColors.push(color);
+        });
+        if (orderedColors.length < 2) return null;
+
+        let suffix = '';
+        if (compact[cursor] === '波') {
+            suffix = '波';
+            cursor += 1;
+        }
+
+        const keys = orderedColors
+            .map(color => `${color}波`)
+            .filter(key => Array.isArray(attrMap[key]) && attrMap[key].length > 0);
+        if (keys.length < 2) return null;
+
+        return {
+            length: cursor - index,
+            item: {
+                key: `${orderedColors.join('')}${suffix}`,
+                numbers: this.mergeStructuredNumberGroups(keys.map(key => attrMap[key])),
+                compositeGroup: 'wave',
+                compositeMembers: keys.slice()
+            }
+        };
+    }
+
+    matchCompositeHeadToken(compact, index, attrMap) {
+        const headMatch = compact.slice(index).match(/^([0-4]{2,})头/u);
+        if (!headMatch) return null;
+
+        const orderedDigits = [];
+        const seenDigits = new Set();
+        headMatch[1].split('').forEach(digit => {
+            if (seenDigits.has(digit)) return;
+            seenDigits.add(digit);
+            orderedDigits.push(digit);
+        });
+        if (orderedDigits.length < 2) return null;
+
+        const keys = orderedDigits
+            .map(digit => `${digit}头`)
+            .filter(key => Array.isArray(attrMap[key]) && attrMap[key].length > 0);
+        if (keys.length < 2) return null;
+
+        return {
+            length: headMatch[0].length,
+            item: {
+                key: `${orderedDigits.join('')}头`,
+                numbers: this.mergeStructuredNumberGroups(keys.map(key => attrMap[key])),
+                compositeGroup: 'head',
+                compositeMembers: keys.slice()
+            }
+        };
+    }
+
+    matchCompositeStructuredToken(compact, index, attrMap) {
+        return this.matchCompositeWaveToken(compact, index, attrMap)
+            || this.matchCompositeHeadToken(compact, index, attrMap)
+            || null;
+    }
+
     extractStructuredTokenMatches(text) {
         const attrMap = this.getAttributeMap();
         const attrKeys = Object.keys(attrMap).sort((a, b) => b.length - a.length);
@@ -4064,17 +4699,17 @@ class MessageProcessor {
         let i = 0;
 
         while (i < compact.length) {
+            const compositeMatch = this.matchCompositeStructuredToken(compact, i, attrMap);
+            if (compositeMatch && compositeMatch.item && Array.isArray(compositeMatch.item.numbers) && compositeMatch.item.numbers.length > 0) {
+                matches.push(compositeMatch.item);
+                i += compositeMatch.length;
+                continue;
+            }
+
             let matched = false;
             for (const key of attrKeys) {
                 if (!compact.startsWith(key, i)) continue;
-                const rawNumbers = Array.isArray(attrMap[key]) ? attrMap[key] : [];
-                const numbers = [];
-                const numberSet = new Set();
-                rawNumbers.forEach(num => {
-                    if (!this.validateNumber(num) || numberSet.has(num)) return;
-                    numberSet.add(num);
-                    numbers.push(num);
-                });
+                const numbers = this.buildStructuredNumbers(attrMap[key]);
                 if (numbers.length > 0) {
                     matches.push({ key, numbers });
                 }
@@ -4232,6 +4867,7 @@ class MessageProcessor {
             const clientId = this.normalizeRuleClientId(options && options.clientId ? options.clientId : userName);
             const allowPartial = !options || options.allowPartial !== false;
             const parsedMessage = this.parseMessage(message, { clientId, allowPartial });
+            const regionAccountingInfo = this.getEffectiveRegionAccountingInfo(clientId);
             const providedOriginalMessage = options && Object.prototype.hasOwnProperty.call(options, 'originalMessage')
                 ? String(options.originalMessage == null ? '' : options.originalMessage)
                 : '';
@@ -4255,6 +4891,13 @@ class MessageProcessor {
             const createdAt = Number.isNaN(createdAtDate.getTime())
                 ? new Date().toISOString()
                 : createdAtDate.toISOString();
+            const editedAtRaw = options && Object.prototype.hasOwnProperty.call(options, 'editedAt')
+                ? options.editedAt
+                : '';
+            const editedAtDate = editedAtRaw ? new Date(editedAtRaw) : null;
+            const editedAt = editedAtDate && !Number.isNaN(editedAtDate.getTime())
+                ? editedAtDate.toISOString()
+                : '';
             const allUsers = userManager.getAllUsers ? userManager.getAllUsers() : {};
             if (!allUsers || !allUsers[userName]) {
                 throw new Error('用户不存在');
@@ -4334,7 +4977,11 @@ class MessageProcessor {
                 return regionData.payoutData;
             };
             parsedMessage.entries.forEach(entry => {
-                const regionKey = entry.regionKey || (userManager.getActiveRegion ? userManager.getActiveRegion() : 'new_ao');
+                const accounting = this.resolveEntryAccountingInfo(entry && entry.regionKey ? entry.regionKey : '', {
+                    clientId,
+                    accountingInfo: regionAccountingInfo
+                });
+                const regionKey = accounting.accountingRegionKey || (userManager.getActiveRegion ? userManager.getActiveRegion() : 'new_ao');
                 const userData = userManager.getUserRegionData
                     ? userManager.getUserRegionData(userName, regionKey)
                     : userManager.getUserData(userName);
@@ -4373,12 +5020,15 @@ class MessageProcessor {
                     message: originalMessageForStorage,
                     totalAmount: Number(orderTotalsByRegion.get(regionKey)) || 0,
                     createdAt,
+                    ...(editedAt ? { editedAt } : {}),
                 });
                 userData.totalCount = userData.data.reduce((sum, item) => sum + item.value, 0);
             });
 
             // 保存数据
-            userManager.saveUserData();
+            if (!options || options.persist !== false) {
+                userManager.saveUserData();
+            }
 
             let newTotal = 0;
             const userRecord = allUsers[userName];
@@ -4393,6 +5043,7 @@ class MessageProcessor {
                 success: true,
                 message: '消息处理成功',
                 parsed: parsedMessage,
+                regionAccounting: regionAccountingInfo,
                 ignoredPlayCount: blockedPlayEntries.length,
                 ignoredPlayEntries: blockedPlayEntries,
                 ignoredLineCount: unresolvedLines.length,
@@ -4516,24 +5167,35 @@ class MessageProcessor {
             return this.withRuleContext(clientId, () => {
                 const allowPartial = !options || options.allowPartial !== false;
                 const parsedMessage = this.parseMessage(message, { clientId, allowPartial });
-                const resultEntries = parsedMessage.entries.map(entry => ({
-                    numbers: entry.numbers.map(num => ({
-                        number: this.formatNumber(num),
-                        animal: this.getAnimalByNumber(num),
-                    })),
-                    parseOrder: entry.parseOrder || null,
-                    regionKey: entry.regionKey || this.getDefaultRegionKey(),
-                    regionLabel: this.getRegionLabelByKey(entry.regionKey || this.getDefaultRegionKey()),
-                    amount: entry.amount,
-                    odds: this.normalizeOddsValue(entry.odds, this.getEffectiveDefaultOdds(clientId)),
-                    lineNo: entry.lineNo || null,
-                    segmentNo: entry.segmentNo || null,
-                    anchorToken: String(entry.anchorToken || '').trim(),
-                    anchorMode: String(entry.anchorMode || 'per_number').trim(),
-                    canonical: this.buildCanonicalEntryText(entry),
-                    totalAmount: entry.numbers.length * entry.amount,
-                    totalPayout: entry.numbers.length * entry.amount * this.normalizeOddsValue(entry.odds, this.getEffectiveDefaultOdds(clientId)),
-                }));
+                const regionAccountingInfo = this.getEffectiveRegionAccountingInfo(clientId);
+                const resultEntries = parsedMessage.entries.map(entry => {
+                    const accounting = this.resolveEntryAccountingInfo(entry.regionKey || this.getDefaultRegionKey(), {
+                        clientId,
+                        accountingInfo: regionAccountingInfo
+                    });
+                    return {
+                        ...accounting,
+                        numbers: entry.numbers.map(num => ({
+                            number: this.formatNumber(num),
+                            animal: this.getAnimalByNumber(num),
+                        })),
+                        parseOrder: entry.parseOrder || null,
+                        regionKey: accounting.accountingRegionKey,
+                        regionLabel: accounting.accountingRegionLabel,
+                        amount: entry.amount,
+                        odds: this.normalizeOddsValue(entry.odds, this.getEffectiveDefaultOdds(clientId)),
+                        lineNo: entry.lineNo || null,
+                        segmentNo: entry.segmentNo || null,
+                        anchorToken: String(entry.anchorToken || '').trim(),
+                        anchorMode: String(entry.anchorMode || 'per_number').trim(),
+                        canonical: this.buildCanonicalEntryText({
+                            ...entry,
+                            regionKey: accounting.accountingRegionKey
+                        }),
+                        totalAmount: entry.numbers.length * entry.amount,
+                        totalPayout: entry.numbers.length * entry.amount * this.normalizeOddsValue(entry.odds, this.getEffectiveDefaultOdds(clientId)),
+                    };
+                });
                 const playResultEntries = (Array.isArray(parsedMessage.playEntries) ? parsedMessage.playEntries : []).map(entry => ({
                     kind: 'play',
                     parseOrder: entry.parseOrder || null,
@@ -4576,6 +5238,7 @@ class MessageProcessor {
                     result: {
                         entries: resultEntries,
                         playEntries: playResultEntries,
+                        regionAccounting: regionAccountingInfo,
                         unresolvedLines,
                         ignoredUnresolvedLines,
                         blockingUnresolvedLines,

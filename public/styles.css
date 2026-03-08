@@ -508,6 +508,14 @@ textarea {
   flex: 1 1 auto;
 }
 
+.user-item-actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
+}
+
 .user-item-name {
   font-size: var(--font-size-md);
   font-weight: 700;
@@ -516,6 +524,84 @@ textarea {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.user-settlement-summary {
+  margin-top: 8px;
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  color: #42607c;
+}
+
+.user-region-mode-summary {
+  margin-top: 4px;
+  font-size: var(--font-size-xs);
+  color: #5f7890;
+}
+
+.user-settlement-editor {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid #cfe0f0;
+  background: rgba(255, 255, 255, 0.74);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.user-settlement-field {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.user-settlement-check-field {
+  grid-column: 1 / -1;
+}
+
+.user-settlement-field-label {
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  color: #557089;
+}
+
+.user-settlement-editor input {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+}
+
+.user-settlement-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid #cfe0ef;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #3f5d79;
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+}
+
+.user-settlement-checkbox input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  flex: 0 0 auto;
+}
+
+.user-settlement-save {
+  grid-column: 1 / -1;
+}
+
+.user-settlement-toggle {
+  min-width: 56px;
+  padding: 7px 10px;
 }
 
 .user-region-state-row {
@@ -700,6 +786,22 @@ button:active {
 .user-list ul li button:hover,
 .delete-button:hover {
   background: linear-gradient(135deg, var(--danger-hover), #8f2222);
+}
+
+.user-list ul li .user-settlement-toggle {
+  background: linear-gradient(135deg, #3f79aa, #5a96c7);
+}
+
+.user-list ul li .user-settlement-toggle:hover {
+  background: linear-gradient(135deg, #33648e, #4c85b5);
+}
+
+.user-list ul li .user-settlement-save {
+  background: linear-gradient(135deg, #257b53, #2f9a68);
+}
+
+.user-list ul li .user-settlement-save:hover {
+  background: linear-gradient(135deg, #1f6846, #278358);
 }
 
 .left-side,
@@ -2080,7 +2182,7 @@ textarea#message:focus,
   min-height: 0;
   max-height: none;
   height: 100%;
-  overflow-y: hidden;
+  overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
 }
@@ -2432,24 +2534,6 @@ textarea#message:focus,
   min-height: 0;
 }
 
-.anchor-subgroup {
-  border: 1px solid #dce8f4;
-  border-radius: 12px;
-  background: #fdfefe;
-  overflow: hidden;
-}
-
-#anchorSubgroup_library.expanded {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  flex: 1 1 auto;
-}
-
-.anchor-subgroup.collapsed {
-  background: #fbfdff;
-}
-
 .anchor-subgroup-toggle {
   width: 100%;
   border: 0;
@@ -2509,11 +2593,6 @@ textarea#message:focus,
   overflow-x: hidden;
 }
 
-#anchorSubgroupBody_library {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
 .anchor-console-card {
   border: 1px solid #dce8f4;
   border-radius: 12px;
@@ -2533,6 +2612,12 @@ textarea#message:focus,
   font-size: var(--font-size-md);
   color: var(--text-normal);
   background: #fff;
+}
+
+.anchor-rule-inline-note {
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: #5f7890;
 }
 
 .anchor-console-split {
@@ -2713,14 +2798,23 @@ textarea#message:focus,
   min-height: 0;
 }
 
-#anchorSubgroupBody_library .anchor-rule-workspace {
+#anchorLibraryWorkspace {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+#anchorLibraryWorkspace .anchor-rule-workspace {
   flex: 1 1 auto;
   min-height: 0;
   align-items: stretch;
 }
 
-#anchorSubgroupBody_library.drawer-open .anchor-strategy-tabs,
-#anchorSubgroupBody_library.drawer-open .anchor-rule-workspace {
+#anchorLibraryWorkspace.drawer-open .anchor-strategy-tabs,
+#anchorLibraryWorkspace.drawer-open .anchor-rule-workspace {
   display: none;
 }
 
@@ -2732,7 +2826,7 @@ textarea#message:focus,
   min-height: 0;
 }
 
-#anchorSubgroupBody_library .anchor-rule-list-column {
+#anchorLibraryWorkspace .anchor-rule-list-column {
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
@@ -2988,14 +3082,14 @@ textarea#message:focus,
   min-height: 0;
 }
 
-#anchorSubgroupBody_library.drawer-open .anchor-rule-drawer.open {
+#anchorLibraryWorkspace.drawer-open .anchor-rule-drawer.open {
   flex: 1 1 auto;
-  height: 100%;
+  height: auto;
   max-height: none;
   min-height: 0;
 }
 
-#anchorSubgroupBody_library.drawer-open {
+#anchorLibraryWorkspace.drawer-open {
   overflow: hidden;
 }
 
@@ -3326,9 +3420,20 @@ textarea#message:focus,
   scrollbar-gutter: stable both-edges;
 }
 
-#anchorSubgroupBody_library .anchor-alias-list {
+#anchorLibraryWorkspace .anchor-alias-list {
   flex: 1 1 auto;
   min-height: 0;
+  max-height: none;
+}
+
+#anchorLibraryWorkspace .anchor-impact-panel {
+  min-height: 0;
+  height: 100%;
+}
+
+#anchorLibraryWorkspace .anchor-impact-preview {
+  flex: 1 1 auto;
+  min-height: 86px;
   max-height: none;
 }
 
@@ -4081,43 +4186,42 @@ textarea#message:focus,
 }
 
 #recognizeGroupAttributesBody .attribute-picker {
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 0 0 auto;
+  min-height: auto;
   max-height: none;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding-right: 2px;
-  overscroll-behavior: contain;
-  will-change: scroll-position;
-  backface-visibility: hidden;
-  transform: translateZ(0);
+  overflow: visible;
+  padding-right: 0;
 }
 
 #recognizeGroupAttributesBody {
   flex: 1 1 auto;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
 }
 
 #recognizeGroupAnchorsBody {
   flex: 1 1 auto;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
 }
 
 #recognizeGroupNoiseBody {
   flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
 }
 
 #recognizeGroupAmountUnitsBody {
   flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
 }
 
@@ -4125,37 +4229,39 @@ textarea#message:focus,
   flex: 1 1 auto;
   min-height: 0;
   max-height: none;
+  overflow-y: auto;
+  overflow-x: auto;
+  scrollbar-gutter: stable both-edges;
 }
 
 #recognizeGroupAmountUnitsBody #amountUnitList.anchor-alias-list {
   flex: 1 1 auto;
   min-height: 0;
   max-height: none;
+  overflow-y: auto;
+  overflow-x: auto;
+  scrollbar-gutter: stable both-edges;
 }
 
-#recognizeGroupAnchorsBody .anchor-subgroup.expanded {
+#recognizeGroupNoiseBody .anchor-impact-panel,
+#recognizeGroupAmountUnitsBody .anchor-impact-panel {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  height: 100%;
 }
 
-#recognizeGroupAnchorsBody .anchor-subgroup.expanded .anchor-subgroup-body {
+#recognizeGroupNoiseBody .anchor-impact-preview,
+#recognizeGroupAmountUnitsBody .anchor-impact-preview {
   flex: 1 1 auto;
-  min-height: 0;
-  overflow: hidden;
-  overscroll-behavior: contain;
+  min-height: 86px;
+  max-height: none;
 }
 
-#anchorSubgroupBody_advanced {
+#recognizeGroupAnchorsBody .anchor-alias-list {
   overflow-y: auto;
-  overflow-x: hidden;
-}
-
-#anchorSubgroupBody_library {
-  overflow: hidden;
-}
-
-#anchorSubgroupBody_library .anchor-alias-list {
+  overflow-x: auto;
+  scrollbar-gutter: stable both-edges;
   will-change: scroll-position;
   backface-visibility: hidden;
   transform: translateZ(0);
