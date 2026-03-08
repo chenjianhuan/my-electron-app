@@ -9,7 +9,22 @@ permissions:
   contents: write
 
 jobs:
+  prepare_release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build:
+    needs: prepare_release
     strategy:
       fail-fast: false
       matrix:
@@ -39,55 +54,31 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: npx electron-builder --mac dmg zip --publish never
 
-      - name: Upload Windows artifacts
+      - name: Publish Windows assets
         if: matrix.os == 'windows-latest'
-        uses: actions/upload-artifact@v4
+        uses: softprops/action-gh-release@v2
         with:
-          name: release-windows
-          if-no-files-found: error
-          path: |
+          tag_name: ${{ github.ref_name }}
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: |
             dist/*.exe
             dist/*.blockmap
             dist/latest*.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload macOS artifacts
+      - name: Publish macOS assets
         if: matrix.os == 'macos-latest'
-        uses: actions/upload-artifact@v4
+        uses: softprops/action-gh-release@v2
         with:
-          name: release-macos
-          if-no-files-found: error
-          path: |
+          tag_name: ${{ github.ref_name }}
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: |
             dist/*.dmg
             dist/*.zip
             dist/*.blockmap
             dist/latest*.yml
-
-  release:
-    runs-on: ubuntu-latest
-    needs: build
-
-    steps:
-      - name: Download Windows artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: release-windows
-          path: dist/release-windows
-
-      - name: Download macOS artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: release-macos
-          path: dist/release-macos
-
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
-          draft: false
-          prerelease: false
-          files: |
-            dist/release-windows/*
-            dist/release-macos/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
