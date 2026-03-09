@@ -2,7 +2,7 @@
 class MessageProcessor {
     constructor() {
         this.SYSTEM_DEFAULT_ODDS = 47;
-        this.ODDS = this.SYSTEM_DEFAULT_ODDS; // 兼容旧逻辑：当前生效默认赔率
+        this.ODDS = this.SYSTEM_DEFAULT_ODDS; // 兼容旧逻辑：当前生效默认倍率
         this.CUSTOM_ATTRIBUTE_STORAGE_KEY = 'customAttributeMap.v1';
         this.customAttributeCache = null;
         this.attributeOverrides = {};
@@ -1816,7 +1816,7 @@ class MessageProcessor {
         const normalizedPolicy = policy && typeof policy === 'object' ? policy : {};
         const normalizedMode = this.normalizeRegionAccountingModeValue(normalizedPolicy.mode);
         if (!normalizedMode) {
-            throw new Error('盘口统计模式无效');
+            throw new Error('区域统计模式无效');
         }
         const normalizedDefaultRegion = this.normalizeRegionKey(
             normalizedPolicy.defaultRegion,
@@ -1842,7 +1842,7 @@ class MessageProcessor {
         } else {
             const clientId = this.normalizeRuleClientId(options && options.clientId ? options.clientId : '');
             if (!clientId) {
-                throw new Error('请先选择客户后再设置盘口规则');
+                throw new Error('请先选择客户后再设置区域规则');
             }
             const current = this.clientRuleProfiles[clientId] || {};
             const next = applyRegionPolicy(current);
@@ -1863,7 +1863,7 @@ class MessageProcessor {
     setDefaultOdds(odds, options = {}) {
         const normalizedOdds = this.normalizeOddsValue(odds);
         if (!Number.isFinite(normalizedOdds)) {
-            throw new Error('默认赔率无效，请输入大于0的数字');
+            throw new Error('默认倍率无效，请输入大于0的数字');
         }
         const scope = options && options.scope === 'client' ? 'client' : 'global';
         this.updateRuleProfile(
@@ -1892,7 +1892,7 @@ class MessageProcessor {
 
         const clientId = this.normalizeRuleClientId(options && options.clientId ? options.clientId : '');
         if (!clientId) {
-            throw new Error('请先选择客户后再恢复默认赔率');
+            throw new Error('请先选择客户后再恢复默认倍率');
         }
         const profile = this.clientRuleProfiles[clientId];
         if (!profile) return;
@@ -2002,7 +2002,7 @@ class MessageProcessor {
 
         const clientId = this.normalizeRuleClientId(options && options.clientId ? options.clientId : '');
         if (!clientId) {
-            throw new Error('请先选择客户后再恢复盘口规则');
+            throw new Error('请先选择客户后再恢复区域规则');
         }
         const profile = this.clientRuleProfiles[clientId];
         if (!profile) return;
@@ -2632,7 +2632,7 @@ class MessageProcessor {
                 const unresolvedLines = Array.isArray(parsed && parsed.unresolvedLines) ? parsed.unresolvedLines : [];
                 if (entries.length === 0 && playEntries.length === 0) {
                     if (unresolvedLines.length > 0) {
-                        const partialError = new Error(`消息中没有可识别的有效下注，剩余 ${unresolvedLines.length} 行未识别`);
+                        const partialError = new Error(`消息中没有可识别的有效录入条目，剩余 ${unresolvedLines.length} 行未识别`);
                         partialError.code = 'NO_VALID_PARSED_CONTENT';
                         partialError.unresolvedLines = unresolvedLines;
                         throw partialError;
@@ -2810,7 +2810,7 @@ class MessageProcessor {
             const sourceLine = String(rawLine || '');
             const trimmedSourceLine = sourceLine.trim();
             if (!trimmedSourceLine) {
-                // 空白行不参与下注解析，但必须保留真实行号用于报错定位。
+                // 空白行不参与录入条目解析，但必须保留真实行号用于报错定位。
                 return;
             }
             const currentLineNo = lineIndex + 1;
@@ -2931,7 +2931,7 @@ class MessageProcessor {
                 });
 
                 if (!hasAmountAnchor) {
-                    // 兼容摘要行：如“合计100/总计一百”，不参与下注解析。
+                    // 兼容摘要行：如“合计100/总计一百”，不参与录入条目解析。
                     if (pendingSegments.length === 0 && this.isIgnorableStandaloneLine(line)) {
                         return;
                     }
@@ -3646,7 +3646,7 @@ class MessageProcessor {
                 options: [
                     {
                         id: 'standalone',
-                        title: `方案1：第 ${segment.lineNo || '?'} 行独立下注`,
+                        title: `方案1：第 ${segment.lineNo || '?'} 行独立录入`,
                         preview: `第 ${segment.lineNo || '?'} 行 => ${standalonePreview || implicitParsed.rewritten}\n第 ${currentLineNo} 行 => 保持原写法继续解析`,
                         replacements: segmentLineNo
                             ? [{ lineNo: segmentLineNo, text: implicitParsed.rewritten }]
@@ -4088,7 +4088,7 @@ class MessageProcessor {
         const apparentGroupCount = this.countLikelyBetAmountGroups(lineText);
         if (apparentGroupCount <= 1) return;
         if (recognizedGroupCount >= apparentGroupCount) return;
-        const error = new Error(`第 ${lineNo} 行检测到 ${apparentGroupCount} 组金额，但当前只识别出 ${recognizedGroupCount} 组下注，已阻止自动入账`);
+        const error = new Error(`第 ${lineNo} 行检测到 ${apparentGroupCount} 组金额，但当前只识别出 ${recognizedGroupCount} 组录入条目，已阻止自动入账`);
         error.code = 'AMOUNT_GROUP_CONFLICT';
         error.apparentGroupCount = apparentGroupCount;
         error.recognizedGroupCount = recognizedGroupCount;
@@ -4303,12 +4303,12 @@ class MessageProcessor {
                 options: [
                     {
                         id: 'per_number',
-                        title: '方案1：每个号码下注金额',
+                        title: '方案1：每个号码录入金额',
                         preview: '同一锚点命中的每个号码都按该金额计。例：猴蛇狗各10 => 每个命中号码都是10。'
                     },
                     {
                         id: 'per_target_equal_split',
-                        title: '方案2：每个目标组下注金额（组内平分）',
+                        title: '方案2：每个目标组录入金额（组内平分）',
                         preview: '每个目标组先拿到金额，再均分到该组号码。例：猴蛇狗各肖10 => 每个肖各10，组内平分。'
                     },
                     {
@@ -5109,13 +5109,13 @@ class MessageProcessor {
                 throw unsupportedError;
             }
             if (parsedMessage.entries.length === 0 && blockedPlayEntries.length === 0 && unresolvedLines.length > 0) {
-                const partialError = new Error(`消息中没有可识别的有效下注，剩余 ${unresolvedLines.length} 行未识别`);
+                const partialError = new Error(`消息中没有可识别的有效录入条目，剩余 ${unresolvedLines.length} 行未识别`);
                 partialError.code = 'NO_VALID_PARSED_CONTENT';
                 partialError.unresolvedLines = unresolvedLines;
                 throw partialError;
             }
             if (blockingUnresolvedLines.length > 0) {
-                const blockingError = new Error(`仍有 ${blockingUnresolvedLines.length} 行疑似下注内容未识别，已阻止自动入账`);
+                const blockingError = new Error(`仍有 ${blockingUnresolvedLines.length} 行疑似录入条目内容未识别，已阻止自动入账`);
                 blockingError.code = 'BLOCKING_UNRESOLVED_LINES';
                 blockingError.unresolvedLines = unresolvedLines;
                 blockingError.blockingUnresolvedLines = blockingUnresolvedLines;
@@ -5331,7 +5331,7 @@ class MessageProcessor {
             issues.push({
                 kind: 'blocked',
                 lineNo: Number.isFinite(Number(issue && issue.lineNo)) ? Number(issue.lineNo) : null,
-                reason: String(issue && issue.reason ? issue.reason : '疑似下注内容未识别').trim(),
+                reason: String(issue && issue.reason ? issue.reason : '疑似录入条目内容未识别').trim(),
                 rawText: String(issue && issue.rawText ? issue.rawText : '').trim()
             });
         });

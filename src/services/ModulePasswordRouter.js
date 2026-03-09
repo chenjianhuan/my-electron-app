@@ -13,7 +13,7 @@ const MODULE_DEFINITIONS = Object.freeze({
   },
   [MODULE_IDS.LOTTERY]: {
     id: MODULE_IDS.LOTTERY,
-    name: '六合彩统计',
+    name: 'AI 消息统计',
     file: 'index.html',
     title: 'MessageCounter - 网友消息统计',
   },

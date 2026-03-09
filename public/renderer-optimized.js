@@ -120,8 +120,8 @@ const TELEGRAM_SUPPORT_QR_PATH = './telegram-braydon-qr.svg?v=20260225';
 const SETTINGS_PASSWORD_MODULE_ID = 'lottery';
 const HEDGE_MAX_LOSS_KEY = 'hedgeMaxLoss.v1';
 const ANCHOR_MODE_LABELS = {
-    per_number: '每个号码下注金额',
-    per_target_equal_split: '每个目标组下注金额（组内平分）',
+    per_number: '每个号码录入金额',
+    per_target_equal_split: '每个目标组录入金额（组内平分）',
     per_entry_equal_split: '本段总金额平分到全部号码',
     undetermined: '未确定（解析时弹窗确认）',
     ignore: '忽略该词（不作为锚点）',
@@ -173,8 +173,8 @@ const ANCHOR_PARSE_MODE_LABELS = {
 const ANCHOR_STRATEGY_GROUP_CONFIGS = [
     {
         mode: 'per_number',
-        title: '每个号码下注金额',
-        summary: '命中到的每一个号码都按同一下注金额计，适合“各/买/都买/每个号”。',
+        title: '每个号码录入金额',
+        summary: '命中到的每一个号码都按同一录入金额计，适合“各/买/都买/每个号”。',
         defaultSample: '猴蛇狗都买10',
         examples: [
             '原始消息：猴蛇狗都买10',
@@ -184,8 +184,8 @@ const ANCHOR_STRATEGY_GROUP_CONFIGS = [
     },
     {
         mode: 'per_target_equal_split',
-        title: '每个目标组下注金额（组内平分）',
-        summary: '每个目标组先拿下注金额，再在组内号码平分，适合“各肖/各尾/各波/各门”。',
+        title: '每个目标组录入金额（组内平分）',
+        summary: '每个目标组先拿录入金额，再在组内号码平分，适合“各肖/各尾/各波/各门”。',
         defaultSample: '猴蛇狗各肖10',
         examples: [
             '原始消息：猴蛇狗各肖10',
@@ -256,18 +256,20 @@ const FALLBACK_PLAN_CATALOG = {
         {
             key: 'plus',
             name: 'Plus',
-            description: '稳定录入、稳定统计、一次买断（永久授权）',
+            description: '核心录入与统计场景，适合稳定手工录入（永久授权）',
             prices: { lifetime: 1499 },
             currency: 'CNY',
             features: [
-                '录入提效：手动消息批量录入，自动解析数字/生肖并实时校验格式',
-                '统计清晰：多用户独立账本 + 多盘口维度统计，切换即看',
+                '手动录入主链路：消息批量录入，自动解析数字/生肖并实时校验格式',
+                '统计清晰：多用户独立账本 + 多区域维度统计，切换即看',
                 '结果可交付：汇总排序、明细筛选、一键复制导出',
                 '规则可控：属性词模板选择与自定义属性库维护',
                 '买断可用：本地离线保存与基础授权校验能力'
             ],
             capabilities: {
                 ocr: false,
+                voiceInput: false,
+                localAiRewrite: false,
                 clipboardAssist: false,
                 autoUpdate: false
             }
@@ -281,12 +283,15 @@ const FALLBACK_PLAN_CATALOG = {
             features: [
                 '包含 Plus 全部能力，并针对高频业务深度优化',
                 'OCR 智能识别引擎：图片批量识别、候选排序、低置信提醒、纠错回填',
+                '语音录入：离线麦克风录音转文字，并自动回填消息框',
+                '本地 AI 语义修正：针对 OCR 脏文本、口语化输入做纠错标准化',
                 '微信自动监听中枢：复制即识别、同日去重拦截，显著减少重复工作',
-                '全链路自动化：识别 -> 统计 -> 导出连续处理，压缩人工操作时间',
                 '持续更新（Pro 专属）：优先获得新规则、新能力与性能优化版本'
             ],
             capabilities: {
                 ocr: true,
+                voiceInput: true,
+                localAiRewrite: true,
                 clipboardAssist: true,
                 autoUpdate: true
             }
@@ -477,7 +482,7 @@ function syncBlockedUpgradeOverlay(status) {
         `;
         overlay.innerHTML = `
             <div style="max-width: 680px; width: 100%; background: #fff; border-radius: 12px; border: 1px solid #dbe4f0; padding: 16px 18px; color: #1e293b;">
-                <div style="font-size: 20px; font-weight: 800; color: #0f3558; margin-bottom: 8px;">A业务（六合彩统计）需要有效授权</div>
+                <div style="font-size: 20px; font-weight: 800; color: #0f3558; margin-bottom: 8px;">A业务（AI 消息统计）需要有效授权</div>
                 <div id="blockedUpgradeReason" style="font-size: 14px; line-height: 1.6; color: #334155;"></div>
                 <div id="blockedUpgradeAdvice" style="font-size: 14px; line-height: 1.6; color: #475569; margin-top: 8px;"></div>
                 <div id="blockedUpgradeFingerprint" style="font-size: 13px; line-height: 1.5; color: #475569; margin-top: 6px; word-break: break-all;"></div>
@@ -671,6 +676,12 @@ function normalizePlanCatalog(catalog) {
                     : (fallbackPlan.features || []),
                 capabilities: {
                     ocr: typeof capabilities.ocr === 'boolean' ? capabilities.ocr : !!fallbackCapabilities.ocr,
+                    voiceInput: typeof capabilities.voiceInput === 'boolean'
+                        ? capabilities.voiceInput
+                        : !!fallbackCapabilities.voiceInput,
+                    localAiRewrite: typeof capabilities.localAiRewrite === 'boolean'
+                        ? capabilities.localAiRewrite
+                        : !!fallbackCapabilities.localAiRewrite,
                     clipboardAssist: typeof capabilities.clipboardAssist === 'boolean'
                         ? capabilities.clipboardAssist
                         : !!fallbackCapabilities.clipboardAssist,
@@ -748,6 +759,12 @@ function resolvePlanContext(status) {
             ocr: rawPlan.capabilities && typeof rawPlan.capabilities.ocr === 'boolean'
                 ? rawPlan.capabilities.ocr
                 : !!(plan && plan.capabilities && plan.capabilities.ocr),
+            voiceInput: rawPlan.capabilities && typeof rawPlan.capabilities.voiceInput === 'boolean'
+                ? rawPlan.capabilities.voiceInput
+                : !!(plan && plan.capabilities && plan.capabilities.voiceInput),
+            localAiRewrite: rawPlan.capabilities && typeof rawPlan.capabilities.localAiRewrite === 'boolean'
+                ? rawPlan.capabilities.localAiRewrite
+                : !!(plan && plan.capabilities && plan.capabilities.localAiRewrite),
             clipboardAssist: rawPlan.capabilities && typeof rawPlan.capabilities.clipboardAssist === 'boolean'
                 ? rawPlan.capabilities.clipboardAssist
                 : !!(plan && plan.capabilities && plan.capabilities.clipboardAssist),
@@ -762,6 +779,10 @@ function resolvePlanContext(status) {
 
 function hasPlanCapability(capabilityKey) {
     return !!(currentPlanContext && currentPlanContext.capabilities && currentPlanContext.capabilities[capabilityKey]);
+}
+
+function isPlanCapabilityLocked(capabilityKey) {
+    return !!(currentPlanContext && !hasPlanCapability(capabilityKey));
 }
 
 function requirePlanCapability(capabilityKey, featureLabel) {
@@ -1073,7 +1094,23 @@ async function submitPasswordChange() {
 
 function syncPlanCapabilityUI() {
     syncOcrCapabilityUI();
+    syncVoiceCapabilityUI();
+    syncLocalAiCapabilityUI();
     syncClipboardCapabilityUI();
+}
+
+function syncVoiceCapabilityUI() {
+    renderRecognizeVoiceUi();
+    if (!isPlanCapabilityLocked('voiceInput') && recognizeVoiceServiceStatus.reason === 'plan_locked') {
+        void refreshRecognizeVoiceStatus({ forceRefresh: true });
+    }
+}
+
+function syncLocalAiCapabilityUI() {
+    renderLocalAiSemanticStatus(localAiSemanticStatus);
+    if (!isPlanCapabilityLocked('localAiRewrite') && localAiSemanticStatus.reason === 'plan_locked') {
+        void refreshLocalAiSemanticStatus({ forceRefresh: true });
+    }
 }
 
 function syncOcrCapabilityUI() {
@@ -1377,7 +1414,7 @@ function getFallbackOfflineLicenseRequest() {
     const access = appAccessStatus || {};
     const plan = currentPlanContext || access.plan || {};
     return {
-        productName: '六合彩统计',
+        productName: 'AI 消息统计',
         version: document.getElementById('settingsVersionValue')
             ? String(document.getElementById('settingsVersionValue').textContent || '').replace(/^v/i, '').trim()
             : '',
@@ -1438,7 +1475,7 @@ function buildOfflineLicenseRequestText(request) {
     const payload = request || getOfflineLicenseRequestData();
     const lines = [
         '【离线授权请求】',
-        `软件：${payload.productName || '六合彩统计'}`,
+        `软件：${payload.productName || 'AI 消息统计'}`,
         payload.version ? `版本：v${payload.version}` : '',
         `生成时间：${formatTime(payload.generatedAt)}`,
         `设备码：${payload.machineFingerprint || '-'}`,
@@ -2337,13 +2374,13 @@ function getAnchorGuideStepConfig(step) {
                 : '先在全局规则中保存 1 个高频锚点词，再开始批量识别。',
             examples: [
                 '14.21 每个10 -> 两个号码都按 10 计。',
-                '鼠牛虎 各肖30 -> 每个目标组下注 30，再在组内平分。',
+                '鼠牛虎 各肖30 -> 每个目标组录入 30，再在组内平分。',
                 '01.02.03 平摊30 -> 本段总额 30，三号均分每号 10。'
             ],
             focusIds: ['createAnchorRuleBtn', 'anchorStrategyTab_per_number', 'anchorRuleDrawerToken', 'anchorRuleDrawerMode'],
             actions: [
-                { label: '填入示例：都买 -> 每个号码下注金额', action: 'fill_anchor', token: '都买', mode: 'per_number', primary: true },
-                { label: '填入示例：各肖 -> 每个目标组下注金额', action: 'fill_anchor', token: '各肖', mode: 'per_target_equal_split' },
+                { label: '填入示例：都买 -> 每个号码录入金额', action: 'fill_anchor', token: '都买', mode: 'per_number', primary: true },
+                { label: '填入示例：各肖 -> 每个目标组录入金额', action: 'fill_anchor', token: '各肖', mode: 'per_target_equal_split' },
                 { label: '填入示例：平摊 -> 本段总金额平分', action: 'fill_anchor', token: '平摊', mode: 'per_entry_equal_split' },
                 { label: '保存当前锚点词', action: 'save_anchor' },
                 { label: '开启微信剪贴板监听', action: 'enable_clipboard' }
@@ -3623,7 +3660,7 @@ function getAttributeCombinePolicyExplainMeta(policy) {
 }
 
 function getRegionAccountingModeLabel(mode) {
-    return mode === 'merged' ? '不分盘口，统一入账' : '按盘口区分统计';
+    return mode === 'merged' ? '不分区域，统一入账' : '按区域区分统计';
 }
 
 function parseRegionAliasInputValue(rawValue = '') {
@@ -3693,12 +3730,12 @@ function getRegionAccountingPolicyExplainMeta(info = {}) {
     const defaultRegionLabel = String(info.defaultRegionLabel || '新奥').trim() || '新奥';
     if (mode === 'merged') {
         return {
-            effect: `不分盘口：消息里即使写了“新奥/老奥/香港”，最终也统一记到默认盘口 ${defaultRegionLabel}。`,
-            example: '例：`香港09各10 老奥11各20` 会统一记到默认盘口，不拆分三个账本。'
+            effect: `不分区域：消息里即使写了“新奥/老奥/香港”，最终也统一记到默认区域 ${defaultRegionLabel}。`,
+            example: '例：`香港09各10 老奥11各20` 会统一记到默认区域，不拆分三个账本。'
         };
     }
     return {
-        effect: '按盘口区分：消息里识别到的新奥/老奥/香港会分别入账；未写盘口时落到默认盘口。',
+        effect: '按区域区分：消息里识别到的新奥/老奥/香港会分别入账；未写区域时落到默认区域。',
         example: '例：`香港09各10 老奥11各20` 会分别记到香港和老奥。'
     };
 }
@@ -3741,7 +3778,7 @@ function renderRegionAccountingPolicyExplain(info = {}) {
     const explainEl = document.getElementById('regionAccountingPolicyExplain');
     if (!explainEl) return;
     if (info.unavailable) {
-        explainEl.innerHTML = `<div class="anchor-policy-explain-line">${escapeHtml(info.message || '当前无法读取盘口规则说明')}</div>`;
+        explainEl.innerHTML = `<div class="anchor-policy-explain-line">${escapeHtml(info.message || '当前无法读取区域规则说明')}</div>`;
         return;
     }
     const meta = getRegionAccountingPolicyExplainMeta(info);
@@ -3760,7 +3797,7 @@ function renderRegionAccountingPolicyExplain(info = {}) {
         .join('');
     explainEl.innerHTML = `
         <div class="anchor-policy-explain-current">当前生效：${escapeHtml(getRegionAccountingModeLabel(info.mode))}（来源：${escapeHtml(info.modeSourceLabel || '-')})</div>
-        <div class="anchor-policy-explain-line">统一入账盘口：${escapeHtml(info.defaultRegionLabel || '新奥')}（来源：${escapeHtml(info.defaultRegionSourceLabel || '-')})</div>
+        <div class="anchor-policy-explain-line">统一入账区域：${escapeHtml(info.defaultRegionLabel || '新奥')}（来源：${escapeHtml(info.defaultRegionSourceLabel || '-')})</div>
         <div class="anchor-policy-explain-line">效果：${escapeHtml(meta.effect)}</div>
         <div class="anchor-policy-explain-line">${escapeHtml(meta.example)}</div>
         ${aliasLines}
@@ -3813,7 +3850,7 @@ function renderDefaultOddsState() {
     if (!stateEl || !oddsInput) return;
 
     if (!window.messageProcessor || typeof window.messageProcessor.getEffectiveRuleProfile !== 'function') {
-        stateEl.textContent = '当前版本不支持默认赔率设置';
+        stateEl.textContent = '当前版本不支持默认倍率设置';
         oddsInput.disabled = true;
         oddsInput.dataset.baselineValue = String(oddsInput.value || '').trim();
         oddsInput.dataset.effectiveValue = '';
@@ -3823,7 +3860,7 @@ function renderDefaultOddsState() {
 
     const { scope, clientId } = getRuleContext();
     if (scope === 'client' && !clientId) {
-        stateEl.textContent = '请选择目标客户后再设置客户专属默认赔率';
+        stateEl.textContent = '请选择目标客户后再设置客户专属默认倍率';
         oddsInput.disabled = true;
         oddsInput.dataset.baselineValue = String(oddsInput.value || '').trim();
         oddsInput.dataset.effectiveValue = '';
@@ -3864,7 +3901,7 @@ function renderDefaultOddsState() {
     const scopedTip = Number.isFinite(scopedOdds) && scopedOdds > 0
         ? `本层已设置：${formatNumericAmount(scopedOdds)}。`
         : '本层未设置，继承上层。';
-    stateEl.textContent = `当前生效默认赔率：${formatNumericAmount(effectiveOdds)}（来源：${sourceLabel}）。${scopedTip}`;
+    stateEl.textContent = `当前生效默认倍率：${formatNumericAmount(effectiveOdds)}（来源：${sourceLabel}）。${scopedTip}`;
     oddsInput.dataset.baselineValue = formatNumericAmount(displayOdds);
     oddsInput.dataset.effectiveValue = formatNumericAmount(effectiveOdds);
     oddsInput.dataset.effectiveSource = source;
@@ -3873,13 +3910,13 @@ function renderDefaultOddsState() {
 function saveDefaultOddsRule() {
     try {
         if (!window.messageProcessor || typeof window.messageProcessor.setDefaultOdds !== 'function') {
-            throw new Error('当前版本不支持默认赔率设置');
+            throw new Error('当前版本不支持默认倍率设置');
         }
         const { scope, clientId } = getRuleContext({ requireClientForClientScope: true });
         const oddsInput = document.getElementById('defaultOddsInput');
         const parsed = parsePositiveNumericInput(oddsInput ? oddsInput.value : '');
         if (parsed.empty || !Number.isFinite(parsed.value)) {
-            throw new Error('请输入大于0的默认赔率');
+            throw new Error('请输入大于0的默认倍率');
         }
         const odds = window.messageProcessor.setDefaultOdds(parsed.value, { scope, clientId });
         if (scope === 'client'
@@ -3901,19 +3938,19 @@ function saveDefaultOddsRule() {
             refreshRegionPnlPanel();
         }
         previewMessage({ silent: true });
-        showSuccess(`${getScopeDisplayName(scope)}默认赔率已保存：${formatNumericAmount(odds)}`);
+        showSuccess(`${getScopeDisplayName(scope)}默认倍率已保存：${formatNumericAmount(odds)}`);
     } catch (error) {
-        showError('保存默认赔率失败', error.message || '未知错误');
+        showError('保存默认倍率失败', error.message || '未知错误');
     }
 }
 
 function resetDefaultOddsRule() {
     try {
         if (!window.messageProcessor || typeof window.messageProcessor.clearDefaultOdds !== 'function') {
-            throw new Error('当前版本不支持恢复默认赔率');
+            throw new Error('当前版本不支持恢复默认倍率');
         }
         const { scope, clientId } = getRuleContext({ requireClientForClientScope: true });
-        const ok = confirm(`确定恢复${getScopeDisplayName(scope)}层的默认赔率为上层默认吗？`);
+        const ok = confirm(`确定恢复${getScopeDisplayName(scope)}层的默认倍率为上层默认吗？`);
         if (!ok) return;
         window.messageProcessor.clearDefaultOdds({ scope, clientId });
         if (scope === 'client'
@@ -3939,9 +3976,9 @@ function resetDefaultOddsRule() {
             refreshRegionPnlPanel();
         }
         previewMessage({ silent: true });
-        showSuccess(`${getScopeDisplayName(scope)}层默认赔率已恢复为上层默认`);
+        showSuccess(`${getScopeDisplayName(scope)}层默认倍率已恢复为上层默认`);
     } catch (error) {
-        showError('恢复默认赔率失败', error.message || '未知错误');
+        showError('恢复默认倍率失败', error.message || '未知错误');
     }
 }
 
@@ -4159,7 +4196,7 @@ function buildAnchorPreviewResultHtml(previewResult) {
     const entries = collectPreviewStandardEntries(result);
     const playEntries = collectPreviewPlayEntries(result);
     if (!entries.length && !playEntries.length) {
-        return '<div class="anchor-impact-empty">样例消息没有生成有效下注结果。</div>';
+        return '<div class="anchor-impact-empty">样例消息没有生成有效录入结果。</div>';
     }
 
     const canonicals = entries
@@ -4585,7 +4622,7 @@ function renderNoiseRulePreview() {
         return;
     }
 
-    const errorText = preview && preview.error ? preview.error : '当前样例不会被噪音规则忽略，且未形成有效下注。';
+    const errorText = preview && preview.error ? preview.error : '当前样例不会被噪音规则忽略，且未形成有效录入结果。';
     output.innerHTML = `
         <div class="anchor-impact-error-title">当前不会被忽略</div>
         <div class="anchor-impact-error-msg">${escapeHtml(errorText)}</div>
@@ -5072,7 +5109,7 @@ function renderAmountUnitPreview() {
     output.innerHTML = `
         ${tipHtml}
         <div class="anchor-impact-error-title">当前样例还没有识别成功</div>
-        <div class="anchor-impact-error-msg">${escapeHtml(preview && preview.error ? preview.error : '该金额单位尚未形成有效下注')}</div>
+        <div class="anchor-impact-error-msg">${escapeHtml(preview && preview.error ? preview.error : '该金额单位尚未形成有效录入结果')}</div>
     `;
 }
 
@@ -5459,7 +5496,7 @@ function extractAnchorPreviewDetails(previewResult) {
         }
         return {
             success: false,
-            error: '样例消息没有生成有效下注结果。',
+            error: '样例消息没有生成有效录入结果。',
             canonicals: [],
             totalAmount: 0
         };
@@ -5858,7 +5895,7 @@ function saveAnchorRuleFromDrawer() {
         const mode = String(modeInput.value || '').trim();
         const parsedOdds = parsePositiveNumericInput(oddsInput.value);
         if (!parsedOdds.empty && !Number.isFinite(parsedOdds.value)) {
-            throw new Error('锚点赔率无效，请输入大于0的数字');
+            throw new Error('锚点倍率无效，请输入大于0的数字');
         }
         const enabled = !!enabledInput.checked;
         const drawerScope = scopeSelect.value === 'client' ? 'client' : 'global';
@@ -5886,8 +5923,8 @@ function saveAnchorRuleFromDrawer() {
             handleAnchorRuleScopeChange();
         }
         const oddsTip = result && result.odds != null && Number.isFinite(Number(result.odds))
-            ? `，赔率 ${formatNumericAmount(Number(result.odds))}`
-            : '，赔率跟随默认';
+            ? `，倍率 ${formatNumericAmount(Number(result.odds))}`
+            : '，倍率跟随默认';
         showSuccess(`${getScopeDisplayName(scope)}词义规则已保存：${result.token} -> ${enabled ? getAnchorModeLabel(mode) : getAnchorModeLabel('ignore')}${oddsTip}`);
         recalculateAllUsersByRuleChange();
         closeAnchorRuleDrawer();
@@ -6052,7 +6089,7 @@ function renderAnchorAliasList() {
         const sourceText = getAnchorAliasSourceLabel(row.source, scope);
         const statusText = row.active ? '启用' : '禁用';
         const strategyText = getAnchorStrategyConfig(row.mode).title;
-        const oddsText = `赔率${formatNumericAmount(row.odds)}`;
+        const oddsText = `倍率${formatNumericAmount(row.odds)}`;
         const haystack = [row.token, modeText, sourceText, statusText, strategyText, oddsText]
             .map(item => String(item || '').toLowerCase())
             .join(' ');
@@ -6190,8 +6227,8 @@ function renderAnchorAliasList() {
                 : '';
             const oddsValue = Number(row.odds);
             const oddsText = Number.isFinite(oddsValue) && oddsValue > 0
-                ? `赔率 ${formatNumericAmount(oddsValue)}${row.customOdds ? '（单独设置）' : '（跟随默认）'}`
-                : '赔率 --';
+                ? `倍率 ${formatNumericAmount(oddsValue)}${row.customOdds ? '（单独设置）' : '（跟随默认）'}`
+                : '倍率 --';
             desc.innerHTML = `
                 <div>${escapeHtml(`${getAnchorModeLabel(row.mode)}${defaultTip}`)}</div>
                 <div class="anchor-strategy-rule-odds">${escapeHtml(oddsText)}</div>
@@ -6604,17 +6641,17 @@ function renderRegionAccountingPolicyState() {
         || typeof window.messageProcessor.getEffectiveRuleProfile !== 'function'
         || typeof window.messageProcessor.getEffectiveRegionAccountingInfo !== 'function'
     ) {
-        stateEl.textContent = '当前版本不支持盘口统计模式';
+        stateEl.textContent = '当前版本不支持区域统计模式';
         modeInput.disabled = true;
         defaultRegionInput.disabled = true;
         Object.values(aliasInputs).forEach((node) => { if (node) node.disabled = true; });
-        renderRegionAccountingPolicyExplain({ unavailable: true, message: '当前版本不支持盘口规则说明。' });
+        renderRegionAccountingPolicyExplain({ unavailable: true, message: '当前版本不支持区域规则说明。' });
         return;
     }
 
     const { scope, clientId } = getRuleContext();
     if (scope === 'client' && !clientId) {
-        stateEl.textContent = '请选择目标客户后再设置客户专属盘口规则';
+        stateEl.textContent = '请选择目标客户后再设置客户专属区域规则';
         modeInput.disabled = true;
         defaultRegionInput.disabled = true;
         Object.values(aliasInputs).forEach((node) => { if (node) node.disabled = true; });
@@ -6676,18 +6713,18 @@ function renderRegionAccountingPolicyState() {
         .reduce((sum, regionKey) => sum + (Array.isArray(scopedRegionAliases[regionKey]) ? scopedRegionAliases[regionKey].length : 0), 0);
     const modeScopeTip = scopedMode
         ? `本层已设置：${getRegionAccountingModeLabel(scopedMode)}。`
-        : '本层未设置盘口统计模式，继承上层。';
+        : '本层未设置区域统计模式，继承上层。';
     const defaultRegionScopeTip = scopedDefaultRegion
-        ? `本层已设置默认盘口：${window.userManager && typeof window.userManager.getRegionLabel === 'function' ? window.userManager.getRegionLabel(scopedDefaultRegion) : scopedDefaultRegion}。`
-        : '本层未设置默认盘口，继承上层。';
+        ? `本层已设置默认区域：${window.userManager && typeof window.userManager.getRegionLabel === 'function' ? window.userManager.getRegionLabel(scopedDefaultRegion) : scopedDefaultRegion}。`
+        : '本层未设置默认区域，继承上层。';
     const aliasScopeTip = aliasScopedCount > 0
-        ? `本层已追加 ${aliasScopedCount} 个盘口别名。`
-        : '本层未追加盘口别名，继承系统/上层识别词。';
+        ? `本层已追加 ${aliasScopedCount} 个区域别名。`
+        : '本层未追加区域别名，继承系统/上层识别词。';
     const effectiveDefaultRegionLabel = window.userManager && typeof window.userManager.getRegionLabel === 'function'
         ? window.userManager.getRegionLabel(effectiveDefaultRegion)
         : effectiveDefaultRegion;
 
-    stateEl.textContent = `当前生效：${getRegionAccountingModeLabel(effectiveMode)}；统一入账盘口：${effectiveDefaultRegionLabel}。${modeScopeTip}${defaultRegionScopeTip}${aliasScopeTip}`;
+    stateEl.textContent = `当前生效：${getRegionAccountingModeLabel(effectiveMode)}；统一入账区域：${effectiveDefaultRegionLabel}。${modeScopeTip}${defaultRegionScopeTip}${aliasScopeTip}`;
     renderRegionAccountingPolicyExplain({
         mode: effectiveMode,
         defaultRegion: effectiveDefaultRegion,
@@ -6916,7 +6953,7 @@ function saveAttributeCombinePolicyRule() {
 function saveRegionAccountingPolicyRule() {
     try {
         if (!window.messageProcessor || typeof window.messageProcessor.setRegionAccountingPolicy !== 'function') {
-            throw new Error('当前版本不支持盘口统计模式');
+            throw new Error('当前版本不支持区域统计模式');
         }
         const { scope, clientId } = getRuleContext({ requireClientForClientScope: true });
         const modeInput = document.getElementById('regionAccountingMode');
@@ -6924,7 +6961,7 @@ function saveRegionAccountingPolicyRule() {
         const mode = modeInput ? String(modeInput.value || '').trim() : '';
         const defaultRegion = defaultRegionInput ? String(defaultRegionInput.value || '').trim() : '';
         if (!mode || !defaultRegion) {
-            throw new Error('请选择盘口统计模式和默认盘口');
+            throw new Error('请选择区域统计模式和默认区域');
         }
         const regionAliases = collectRegionAliasInputs();
         const saved = window.messageProcessor.setRegionAccountingPolicy({ mode, defaultRegion, regionAliases }, { scope, clientId });
@@ -6936,9 +6973,9 @@ function saveRegionAccountingPolicyRule() {
         renderBlockedPlayKeywordState();
         renderMessageTypeWhitelistState();
         previewMessage({ silent: true });
-        showSuccess(`${getScopeDisplayName(scope)}盘口规则已保存：${getRegionAccountingModeLabel(saved.mode)}，默认盘口 ${window.userManager && typeof window.userManager.getRegionLabel === 'function' ? window.userManager.getRegionLabel(saved.defaultRegion) : saved.defaultRegion}`);
+        showSuccess(`${getScopeDisplayName(scope)}区域规则已保存：${getRegionAccountingModeLabel(saved.mode)}，默认区域 ${window.userManager && typeof window.userManager.getRegionLabel === 'function' ? window.userManager.getRegionLabel(saved.defaultRegion) : saved.defaultRegion}`);
     } catch (error) {
-        showError('保存盘口规则失败', error.message || '未知错误');
+        showError('保存区域规则失败', error.message || '未知错误');
     }
 }
 
@@ -6965,10 +7002,10 @@ function resetAttributeCombinePolicyRule() {
 function resetRegionAccountingPolicyRule() {
     try {
         if (!window.messageProcessor || typeof window.messageProcessor.clearRegionAccountingPolicy !== 'function') {
-            throw new Error('当前版本不支持恢复盘口规则');
+            throw new Error('当前版本不支持恢复区域规则');
         }
         const { scope, clientId } = getRuleContext({ requireClientForClientScope: true });
-        const ok = confirm(`确定恢复${getScopeDisplayName(scope)}层的盘口规则为上层默认吗？`);
+        const ok = confirm(`确定恢复${getScopeDisplayName(scope)}层的区域规则为上层默认吗？`);
         if (!ok) return;
         window.messageProcessor.clearRegionAccountingPolicy({ scope, clientId });
         recalculateAllUsersByRuleChange();
@@ -6979,9 +7016,9 @@ function resetRegionAccountingPolicyRule() {
         renderBlockedPlayKeywordState();
         renderMessageTypeWhitelistState();
         previewMessage({ silent: true });
-        showSuccess(`${getScopeDisplayName(scope)}层盘口规则已恢复默认`);
+        showSuccess(`${getScopeDisplayName(scope)}层区域规则已恢复默认`);
     } catch (error) {
-        showError('恢复盘口规则失败', error.message || '未知错误');
+        showError('恢复区域规则失败', error.message || '未知错误');
     }
 }
 
@@ -7530,6 +7567,9 @@ function normalizeRecognizeVoiceServiceStatus(status) {
 
 function getRecognizeVoiceUnavailableHint(status = {}) {
     const reason = String(status.reason || '').trim();
+    if (reason === 'plan_locked') {
+        return status.message || '语音录入为 Pro 专属功能，请升级后使用。';
+    }
     if (reason === 'missing_files') {
         return status.installHint || '未找到内置语音模型文件。';
     }
@@ -7546,6 +7586,20 @@ function getRecognizeVoiceUnavailableHint(status = {}) {
 }
 
 async function refreshRecognizeVoiceStatus(options = {}) {
+    if (isPlanCapabilityLocked('voiceInput')) {
+        recognizeVoiceServiceStatus = {
+            checked: true,
+            available: false,
+            reason: 'plan_locked',
+            message: '语音录入为 Pro 专属功能，请升级后使用。',
+            model: '',
+            installHint: '',
+            loading: false
+        };
+        renderRecognizeVoiceUi();
+        return recognizeVoiceServiceStatus;
+    }
+
     if (!ipcRenderer || typeof ipcRenderer.invoke !== 'function') {
         recognizeVoiceServiceStatus = {
             checked: true,
@@ -7598,20 +7652,28 @@ async function ensureRecognizeVoiceStatusReady(forceRefresh = false) {
 function renderRecognizeVoiceUi() {
     const button = document.getElementById('recognizeVoiceButton');
     const statusEl = document.getElementById('recognizeVoiceStatus');
+    const planLocked = isPlanCapabilityLocked('voiceInput');
     const runtimeSupported = isRecognizeVoiceRuntimeSupported();
     const serviceAvailable = !!(recognizeVoiceServiceStatus && recognizeVoiceServiceStatus.available);
-    recognizeSpeechSupported = runtimeSupported && serviceAvailable;
+    recognizeSpeechSupported = !planLocked && runtimeSupported && serviceAvailable;
 
     if (button) {
-        const unsupported = !runtimeSupported || (recognizeVoiceServiceStatus.checked && !serviceAvailable && !recognizeSpeechListening && !recognizeSpeechTranscribing);
-        button.disabled = recognizeSpeechTranscribing || !runtimeSupported || (!serviceAvailable && !recognizeSpeechListening);
+        const unsupported = planLocked
+            || !runtimeSupported
+            || (recognizeVoiceServiceStatus.checked && !serviceAvailable && !recognizeSpeechListening && !recognizeSpeechTranscribing);
+        button.disabled = planLocked
+            || recognizeSpeechTranscribing
+            || !runtimeSupported
+            || (!serviceAvailable && !recognizeSpeechListening);
         button.classList.toggle('unsupported', unsupported);
         button.classList.toggle('listening', recognizeSpeechListening);
         button.textContent = recognizeSpeechTranscribing
             ? '转写中...'
             : (recognizeSpeechListening ? '停止录音' : '语音录入');
         button.setAttribute('aria-pressed', recognizeSpeechListening ? 'true' : 'false');
-        if (recognizeSpeechTranscribing) {
+        if (planLocked) {
+            button.title = '语音录入为 Pro 专属功能';
+        } else if (recognizeSpeechTranscribing) {
             button.title = '正在离线转写录音';
         } else if (recognizeSpeechListening) {
             button.title = '停止录音并开始本地转写';
@@ -7627,6 +7689,11 @@ function renderRecognizeVoiceUi() {
     if (!statusEl) return;
     statusEl.className = 'recognize-voice-status';
 
+    if (planLocked) {
+        statusEl.classList.add('error');
+        statusEl.textContent = '语音录入为 Pro 专属功能，请升级后使用。';
+        return;
+    }
     if (!runtimeSupported) {
         statusEl.classList.add('error');
         statusEl.textContent = '当前环境不支持麦克风录音。';
@@ -7799,6 +7866,9 @@ async function maybeEnhanceRecognizeVoiceTranscript(rawText, options = {}) {
     if (!text) {
         return { text: '', rewritten: false, model: '' };
     }
+    if (isPlanCapabilityLocked('localAiRewrite')) {
+        return { text, rewritten: false, model: '' };
+    }
     if (!window.messageProcessor || typeof window.messageProcessor.previewMessage !== 'function') {
         return { text, rewritten: false, model: '' };
     }
@@ -7857,6 +7927,10 @@ async function maybeEnhanceRecognizeVoiceTranscript(rawText, options = {}) {
 
 async function startRecognizeVoiceInput() {
     if (recognizeSpeechListening || recognizeSpeechTranscribing) return;
+    if (!requirePlanCapability('voiceInput', '语音录入')) {
+        renderRecognizeVoiceUi();
+        return;
+    }
     if (!isRecognizeVoiceRuntimeSupported()) {
         recognizeSpeechLastError = 'runtime-unsupported';
         renderRecognizeVoiceUi();
@@ -8254,6 +8328,9 @@ function updateOcrHint(stateText = '') {
 }
 
 function getLocalAiUnavailableHint(status = localAiSemanticStatus) {
+    if (status && status.reason === 'plan_locked') {
+        return status.message || '本地AI修正为 Pro 专属功能，请升级后使用。';
+    }
     const hint = status && status.installHint
         ? String(status.installHint)
         : '内置模型文件缺失，请重新安装软件或检查 assets/ai 资源。';
@@ -8263,12 +8340,15 @@ function getLocalAiUnavailableHint(status = localAiSemanticStatus) {
 function setLocalAiRewriteButtonState() {
     const button = document.getElementById('localAiFixButton');
     if (!button) return;
-    button.disabled = localAiRewriteBusy;
+    const locked = isPlanCapabilityLocked('localAiRewrite');
+    button.disabled = locked || localAiRewriteBusy;
     button.textContent = localAiRewriteBusy ? '本地AI修正中...' : '本地AI修正';
+    button.title = locked ? '本地AI修正为 Pro 专属功能' : '';
 }
 
 function renderLocalAiSemanticStatus(status = {}) {
     const nextStatus = status && typeof status === 'object' ? status : {};
+    const planLocked = isPlanCapabilityLocked('localAiRewrite');
     localAiSemanticStatus = {
         ...localAiSemanticStatus,
         ...nextStatus,
@@ -8278,7 +8358,10 @@ function renderLocalAiSemanticStatus(status = {}) {
     const el = document.getElementById('localAiAssistStatus');
     if (el) {
         el.className = 'local-ai-assist-status';
-        if (localAiRewriteBusy && localAiSemanticStatus.message) {
+        if (planLocked) {
+            el.classList.add('warning');
+            el.textContent = '本地 AI 语义修正：Pro 专属功能，请升级后使用。';
+        } else if (localAiRewriteBusy && localAiSemanticStatus.message) {
             el.classList.add('working');
             el.textContent = localAiSemanticStatus.message;
         } else if (localAiSemanticStatus.reason === 'loading') {
@@ -8303,6 +8386,15 @@ function renderLocalAiSemanticStatus(status = {}) {
 }
 
 async function refreshLocalAiSemanticStatus(options = {}) {
+    if (isPlanCapabilityLocked('localAiRewrite')) {
+        renderLocalAiSemanticStatus({
+            available: false,
+            reason: 'plan_locked',
+            message: '本地 AI 语义修正：Pro 专属功能，请升级后使用。',
+        });
+        return localAiSemanticStatus;
+    }
+
     if (!ipcRenderer || typeof ipcRenderer.invoke !== 'function') {
         renderLocalAiSemanticStatus({
             available: false,
@@ -8626,6 +8718,9 @@ async function tryEnhanceOcrCandidatesWithLocalAi(rankedCandidates) {
     if (!ranked.length) {
         return { candidates: ranked, used: false, model: '' };
     }
+    if (isPlanCapabilityLocked('localAiRewrite')) {
+        return { candidates: ranked, used: false, model: '' };
+    }
 
     const best = ranked[0];
     if (best && best.parserOk && best.parserScore >= 70) {
@@ -8809,6 +8904,11 @@ async function runOcrFromSelectedImage() {
 }
 
 async function rewriteMessageWithLocalAi(options = {}) {
+    if (!requirePlanCapability('localAiRewrite', '本地AI修正')) {
+        setLocalAiRewriteButtonState();
+        renderLocalAiSemanticStatus(localAiSemanticStatus);
+        return;
+    }
     const messageTextarea = document.getElementById('message');
     const rawValue = messageTextarea ? String(messageTextarea.value || '') : '';
     if (!rawValue.trim()) {
@@ -9847,7 +9947,7 @@ function showDuplicateClipboardActionDialog(duplicateUsers = [], regionKeys = []
         `;
 
         const usersText = duplicateUsers.length > 0 ? duplicateUsers.join('，') : '当前客户';
-        const regionsText = regionLabels.length > 0 ? regionLabels.join('、') : '当前盘口';
+        const regionsText = regionLabels.length > 0 ? regionLabels.join('、') : '当前区域';
         const messageList = (Array.isArray(duplicateMessages) ? duplicateMessages : [])
             .map(msg => String(msg || '').trim())
             .filter(Boolean);
@@ -9863,7 +9963,7 @@ function showDuplicateClipboardActionDialog(duplicateUsers = [], regionKeys = []
         dialog.innerHTML = `
             <div style="font-size:18px;font-weight:700;margin-bottom:8px;">检测到今日重复消息</div>
             <div style="margin-bottom:6px;">客户：${usersText}</div>
-            <div style="margin-bottom:8px;">盘口：${regionsText}</div>
+            <div style="margin-bottom:8px;">区域：${regionsText}</div>
             <div style="margin-bottom:8px;color:#374151;">重复内容如下：</div>
             <div style="max-height:190px;overflow:auto;margin-bottom:12px;">${messageItems}</div>
             <div style="margin-bottom:14px;color:#374151;">同一客户当天已录入过相同消息，是否继续添加？</div>
@@ -10102,7 +10202,7 @@ function renderViewRegionButtons() {
     if (!availableRegions || availableRegions.length === 0) {
         const empty = document.createElement('span');
         empty.className = 'view-region-empty';
-        empty.textContent = '暂无盘口数据';
+        empty.textContent = '暂无区域数据';
         container.appendChild(empty);
         return;
     }
@@ -10347,7 +10447,7 @@ function refreshRegionPnlPanel() {
         summary.innerHTML = `
             <div class="region-pnl-overview-context">${escapeHtml(contextText)}</div>
             <div class="region-pnl-overview-head">
-                <span class="region-pnl-overview-count">已计算 ${computedCount} 个盘口</span>
+                <span class="region-pnl-overview-count">已计算 ${computedCount} 个区域</span>
             </div>
             <div class="region-pnl-overview-metrics">
                 <span class="region-pnl-overview-metric">
@@ -10355,28 +10455,28 @@ function refreshRegionPnlPanel() {
                     <span class="region-pnl-overview-metric-value">${escapeHtml(formatNumericAmount(totalStake))}</span>
                 </span>
                 <span class="region-pnl-overview-metric">
-                    <span class="region-pnl-overview-metric-label">总派彩</span>
+                    <span class="region-pnl-overview-metric-label">总结果支出</span>
                     <span class="region-pnl-overview-metric-value">${escapeHtml(formatNumericAmount(totalPayout))}</span>
                 </span>
                 <span class="region-pnl-overview-metric">
-                    <span class="region-pnl-overview-metric-label">总返水</span>
+                    <span class="region-pnl-overview-metric-label">总返利</span>
                     <span class="region-pnl-overview-metric-value">${escapeHtml(formatNumericAmount(totalRebate))}</span>
                 </span>
             </div>
             <div class="region-pnl-overview-total">
-                <span class="region-pnl-overview-total-label">合计盈亏</span>
+                <span class="region-pnl-overview-total-label">合计结果</span>
                 <span class="region-pnl-overview-total-value ${summaryClass}">${escapeHtml(formatSignedAmount(totalPnl))}</span>
             </div>
         `;
     };
 
     const scopeInfo = getCurrentSettlementScopeUsers();
-    head.textContent = '盘口庄家盈亏（按客户赔率/返水结算）';
+    head.textContent = '区域结果汇总（按客户倍率/返利结算）';
     const manager = window.userManager;
     const viewRegionLabels = manager && typeof manager.getViewRegionLabels === 'function'
         ? manager.getViewRegionLabels()
         : [];
-    const contextText = `当前范围：${String(scopeInfo && scopeInfo.scopeLabel ? scopeInfo.scopeLabel : '未选择客户')}｜查看盘口：${(Array.isArray(viewRegionLabels) && viewRegionLabels.length > 0 ? viewRegionLabels.join('、') : '未选择盘口')}`;
+    const contextText = `当前范围：${String(scopeInfo && scopeInfo.scopeLabel ? scopeInfo.scopeLabel : '未选择客户')}｜查看区域：${(Array.isArray(viewRegionLabels) && viewRegionLabels.length > 0 ? viewRegionLabels.join('、') : '未选择区域')}`;
 
     const regionOptions = window.userManager && typeof window.userManager.getRegionOptions === 'function'
         ? window.userManager.getRegionOptions()
@@ -10388,7 +10488,7 @@ function refreshRegionPnlPanel() {
 
     rows.innerHTML = '';
     if (!Array.isArray(scopeInfo.users) || scopeInfo.users.length <= 0) {
-        renderOverviewMessage(contextText, '请先选择至少一个客户后再查看庄家盈亏。');
+        renderOverviewMessage(contextText, '请先选择至少一个客户后再查看结果汇总。');
         return;
     }
 
@@ -10436,11 +10536,11 @@ function refreshRegionPnlPanel() {
             invalidCount += 1;
             status.classList.add('invalid');
             status.textContent = parsed.error;
-            meta.textContent = `总注: ${formatNumericAmount(metrics.totalStake)}，返水: ${formatNumericAmount(metrics.rebate)}，请修正中奖号后再计算`;
+            meta.textContent = `总注: ${formatNumericAmount(metrics.totalStake)}，返利: ${formatNumericAmount(metrics.rebate)}，请修正中奖号后再计算`;
         } else if (parsed.number === null) {
             status.classList.add('wait');
             status.textContent = '待输入中奖号';
-            meta.textContent = `总注: ${formatNumericAmount(metrics.totalStake)}，返水: ${formatNumericAmount(metrics.rebate)}`;
+            meta.textContent = `总注: ${formatNumericAmount(metrics.totalStake)}，返利: ${formatNumericAmount(metrics.rebate)}`;
         } else {
             computedCount += 1;
             totalStake += metrics.totalStake;
@@ -10455,8 +10555,8 @@ function refreshRegionPnlPanel() {
             } else {
                 status.classList.add('loss');
             }
-            status.textContent = `盈亏 ${formatSignedAmount(metrics.pnl)}`;
-            meta.textContent = `总注: ${formatNumericAmount(metrics.totalStake)}，命中: ${formatNumericAmount(metrics.hitStake)}，派彩: ${formatNumericAmount(metrics.payout)}，返水: ${formatNumericAmount(metrics.rebate)}`;
+            status.textContent = `结果 ${formatSignedAmount(metrics.pnl)}`;
+            meta.textContent = `总注: ${formatNumericAmount(metrics.totalStake)}，命中: ${formatNumericAmount(metrics.hitStake)}，结果支出: ${formatNumericAmount(metrics.payout)}，返利: ${formatNumericAmount(metrics.rebate)}`;
         }
 
         top.appendChild(regionLabel);
@@ -10470,8 +10570,8 @@ function refreshRegionPnlPanel() {
     saveRegionWinningNumbersPreference();
     if (computedCount === 0) {
         renderOverviewMessage(contextText, invalidCount > 0
-            ? `当前范围总注 ${formatNumericAmount(visibleStakeTotal)}，总返水 ${formatNumericAmount(visibleRebateTotal)}；存在无效中奖号，请输入 01-49。`
-            : `当前范围总注 ${formatNumericAmount(visibleStakeTotal)}，总返水 ${formatNumericAmount(visibleRebateTotal)}；输入中奖号后可继续计算派彩与盈亏。`);
+            ? `当前范围总注 ${formatNumericAmount(visibleStakeTotal)}，总返利 ${formatNumericAmount(visibleRebateTotal)}；存在无效中奖号，请输入 01-49。`
+            : `当前范围总注 ${formatNumericAmount(visibleStakeTotal)}，总返利 ${formatNumericAmount(visibleRebateTotal)}；输入中奖号后可继续计算结果支出与结果汇总。`);
         return;
     }
 
@@ -10921,7 +11021,7 @@ function clearUserData() {
         if (userManager && typeof userManager.clearCurrentUserData === 'function') {
             const result = userManager.clearCurrentUserData();
             if (result && result.cleared) {
-                showSuccess(`客户 ${result.userName} 的投注数据已清空（设置保留）`);
+                showSuccess(`客户 ${result.userName} 的录入条目数据已清空（设置保留）`);
             }
             return;
         }
@@ -10931,7 +11031,7 @@ function clearUserData() {
             : false;
         if (cleared) {
             clearClipboardDupLedger();
-            showSuccess('所有客户投注数据已清空');
+            showSuccess('所有客户录入条目数据已清空');
         }
     } catch (error) {
         showError('清空失败', error.message);
@@ -12103,7 +12203,7 @@ function buildRecognizeBlockingActionPlan(warning, row) {
     }
 
     if (!suggestion && /检测到\s*\d+\s*组金额/u.test(reason)) {
-        suggestion = '这一行看起来有多组下注，建议拆成多行，或补清楚锚点后再保存。';
+        suggestion = '这一行看起来有多组录入条目，建议拆成多行，或补清楚锚点后再保存。';
     }
     if (!suggestion && /无效的数字/u.test(reason)) {
         suggestion = '这一行里可能把金额写成了号码，建议检查金额边界，必要时补“元/块/米”等单位。';
@@ -12388,7 +12488,7 @@ function renderRecognizePreviewSummary(summary) {
     `;
 }
 
-function renderCompareStandardEntries(entries, emptyText = '（本行未识别到可用投注）') {
+function renderCompareStandardEntries(entries, emptyText = '（本行未识别到可用录入条目）') {
     const safeEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
     if (!safeEntries.length) {
         return renderCompareCellValue('', emptyText, 'standard');
@@ -12720,7 +12820,7 @@ function buildRecognizePreviewHtml(previewResult, rawValue) {
         ? `
             <div class="parse-issue parse-issue-warning" style="margin-bottom: 12px;">
                 <div class="parse-issue-head">
-                    <span class="parse-issue-badge warning">当前客户不分盘口统计</span>
+                    <span class="parse-issue-badge warning">当前客户不分区域统计</span>
                 </div>
                 <div class="parse-issue-message">消息里识别到的新奥/老奥/香港不会拆账，最终统一记到 ${escapeHtml(String(regionAccounting.defaultRegionLabel || '新奥').trim() || '新奥')}。</div>
             </div>
@@ -12860,7 +12960,7 @@ async function confirmEdit() {
                 setRecognizePreviewBlocked(true);
                 setRecognizePreviewError(blockedMessage);
                 renderInlineParseError(blockedMessage, { context: 'confirm', clientId: userName });
-                showError('确认失败', `${userName}: 仍有 ${blockingUnresolvedLines.length} 行疑似下注内容未识别，已阻止保存`);
+                showError('确认失败', `${userName}: 仍有 ${blockingUnresolvedLines.length} 行疑似录入条目内容未识别，已阻止保存`);
                 return;
             }
             const originalMessageForStorage = messageTextarea
@@ -13332,11 +13432,11 @@ function renderHedgeReportRows(suggestions = []) {
         <table class="hedge-report-table">
             <thead>
                 <tr>
-                    <th>盘口</th>
+                    <th>区域</th>
                     <th>号码</th>
                     <th>当前总注</th>
-                    <th>当前派彩</th>
-                    <th>当前返水</th>
+                    <th>当前结果支出</th>
+                    <th>当前返利</th>
                     <th>当前盈亏</th>
                     <th>建议抛量</th>
                 </tr>
@@ -13352,7 +13452,7 @@ function openHedgeReportModal() {
 
     const oddsEl = document.getElementById('hedgeReportOdds');
     if (oddsEl) {
-        oddsEl.textContent = '按客户赔率 / 返水';
+        oddsEl.textContent = '按客户倍率 / 返利';
     }
 
     const scopeTextEl = document.getElementById('hedgeReportScope');
@@ -13364,7 +13464,7 @@ function openHedgeReportModal() {
                 ? '全部客户'
                 : (Array.isArray(scope.users) ? scope.users.join('、') : '-');
             const regionsLabel = Array.isArray(scope.viewRegionLabels) ? scope.viewRegionLabels.join('、') : '-';
-            scopeTextEl.textContent = `范围：${usersLabel}｜盘口：${regionsLabel}`;
+            scopeTextEl.textContent = `范围：${usersLabel}｜区域：${regionsLabel}`;
         } else {
             scopeTextEl.textContent = `范围：${scopeResult.reason || '-'}`;
         }
@@ -13780,7 +13880,7 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
             </tr>
         `;
         }).join('')
-        : '<tr><td colspan="8">暂无盘口庄家盈亏数据</td></tr>';
+        : '<tr><td colspan="8">暂无区域结果汇总数据</td></tr>';
 
     const rowsWithWinning = exportOriginalRows.filter((item) => {
         const config = winningConfigs[item.regionKey];
@@ -13798,7 +13898,7 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
     const totalPnlMetaText = hasWinningInput
         ? (hasWinningRows
             ? (computablePnlRows.length > 0 ? formatSignedAmount(totalPnl) : '无法计算')
-            : '当前范围无对应盘口数据')
+            : '当前范围无对应区域数据')
         : '未填写中奖号';
     const totalPnlMetaClass = !hasWinningInput || !hasWinningRows || computablePnlRows.length <= 0
         ? 'muted'
@@ -13806,7 +13906,7 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
     const pnlCoverageMetaText = hasWinningInput
         ? (hasWinningRows
             ? `${computablePnlRows.length}/${rowsWithWinning.length}${unresolvedPnlRows > 0 ? `（${unresolvedPnlRows}条未算）` : ''}`
-            : '当前范围无对应盘口数据')
+            : '当前范围无对应区域数据')
         : '-';
 
     const originalRowsHtml = exportOriginalRows.length > 0
@@ -13846,7 +13946,7 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
     const originalSummaryRowHtml = hasWinningRows
         ? `
             <tr class="summary-row">
-                <td colspan="5">庄家盈亏合计（${escapeHtml(`${computablePnlRows.length}/${rowsWithWinning.length}`)}）</td>
+                <td colspan="5">汇总合计（${escapeHtml(`${computablePnlRows.length}/${rowsWithWinning.length}`)}）</td>
                 <td style="text-align:right">${escapeHtml(computablePnlRows.length > 0 ? formatNumericAmount(totalOrderForPnl) : '-')}</td>
                 <td style="text-align:right">-</td>
                 <td style="text-align:right">${escapeHtml(computablePnlRows.length > 0 ? formatNumericAmount(totalRebateForPnl) : '-')}</td>
@@ -13885,20 +13985,20 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
   <div class="meta">
     导出范围：${escapeHtml(scopeData.scopeLabel || '-')}<br>
     客户：${escapeHtml(users.join('，') || '-')}<br>
-    查看盘口：${escapeHtml(regionLabels.join('、') || '-')}<br>
-    结算口径：庄家盈亏 = 总注 - 派彩 - 返水<br>
+    查看区域：${escapeHtml(regionLabels.join('、') || '-')}<br>
+    结算口径：结果汇总 = 总注 - 结果支出 - 返利<br>
     当前范围总注：${escapeHtml(formatNumericAmount(scopeData.totalCount || 0))}<br>
-    总返水：${escapeHtml(formatNumericAmount(totalRebateAll))}<br>
+    总返利：${escapeHtml(formatNumericAmount(totalRebateAll))}<br>
     中奖号：${escapeHtml(winningSummaryText)}<br>
-    庄家合计盈亏：<span class="${totalPnlMetaClass}">${escapeHtml(totalPnlMetaText)}</span><br>
-    庄家盈亏计算条数：${escapeHtml(pnlCoverageMetaText)}<br>
+    合计结果：<span class="${totalPnlMetaClass}">${escapeHtml(totalPnlMetaText)}</span><br>
+    结果汇总计算条数：${escapeHtml(pnlCoverageMetaText)}<br>
     导出时间：${escapeHtml(scopeData.exportedAt || new Date().toLocaleString('zh-CN'))}
   </div>
 
-  <h2>庄家盈亏汇总</h2>
+  <h2>结果汇总</h2>
   <table>
     <thead>
-      <tr><th>盘口</th><th>中奖号</th><th>当前总注</th><th>当前命中</th><th>当前派彩</th><th>当前返水</th><th>庄家盈亏</th><th>状态</th></tr>
+      <tr><th>区域</th><th>中奖号</th><th>当前总注</th><th>当前命中</th><th>当前结果支出</th><th>当前返利</th><th>结果汇总</th><th>状态</th></tr>
     </thead>
     <tbody>${regionPnlRowsHtml}</tbody>
   </table>
@@ -13906,7 +14006,7 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
   <h2>客户注额分布</h2>
   <table>
     <thead>
-      <tr><th>客户</th><th>当前总注</th><th>赔率</th><th>返水%</th></tr>
+      <tr><th>客户</th><th>当前总注</th><th>倍率</th><th>返利%</th></tr>
     </thead>
     <tbody>${userRowsHtml}</tbody>
   </table>
@@ -13927,10 +14027,10 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
     <tbody>${detailRowsHtml}</tbody>
   </table>
 
-  <h2>原始消息结算明细（庄家视角）</h2>
+  <h2>原始消息结算明细（结算视角）</h2>
   <table>
     <thead>
-      <tr><th>序号</th><th>客户</th><th>盘口</th><th>中奖号</th><th>庄家结果</th><th>本条总注</th><th>结算赔率</th><th>本条返水</th><th>本条派彩</th><th>庄家本条盈亏</th><th>内容</th></tr>
+      <tr><th>序号</th><th>客户</th><th>区域</th><th>中奖号</th><th>结果状态</th><th>本条总注</th><th>结算倍率</th><th>本条返利</th><th>本条结果支出</th><th>本条结果</th><th>内容</th></tr>
     </thead>
     <tbody>${originalRowsHtml}${originalSummaryRowHtml}</tbody>
   </table>
@@ -14081,15 +14181,15 @@ function generateCopyContent(scopeData) {
     }, 0);
 
     let content = `范围: ${scopeData.scopeLabel || '-'}\n`;
-    content += `盘口: ${regionLabel}\n`;
+    content += `区域: ${regionLabel}\n`;
     content += `用户: ${userLabel}\n`;
     content += `总数: ${scopeData.totalCount}\n`;
-    content += `总返水: ${formatNumericAmount(totalRebate)}\n`;
+    content += `总返利: ${formatNumericAmount(totalRebate)}\n`;
     content += `导出时间: ${scopeData.exportedAt || new Date().toLocaleString('zh-CN')}\n`;
     if (userConfigs.length > 0) {
         content += `结算参数:\n`;
         userConfigs.forEach((item) => {
-            content += `${item.userName}: 赔率 ${formatNumericAmount(item.odds)} / 返水 ${formatNumericAmount(item.rebateRate)}%\n`;
+            content += `${item.userName}: 倍率 ${formatNumericAmount(item.odds)} / 返利 ${formatNumericAmount(item.rebateRate)}%\n`;
         });
     }
     content += `数据统计:\n`;

@@ -9,9 +9,9 @@ const PLAN_DEFINITIONS = {
       lifetime: 1499,
     },
     currency: 'CNY',
-    description: '稳定录入、稳定统计、一次买断（永久授权）',
+    description: '核心录入与统计场景，适合稳定手工录入（永久授权）',
     features: [
-      '录入提效：手动消息批量录入，自动解析数字/生肖并实时校验格式',
+      '手动录入主链路：消息批量录入，自动解析数字/生肖并实时校验格式',
       '统计清晰：多用户独立账本 + 多地区维度统计，切换即看',
       '结果可交付：汇总排序、明细筛选、一键复制导出',
       '规则可控：属性词模板选择与自定义属性库维护',
@@ -19,6 +19,8 @@ const PLAN_DEFINITIONS = {
     ],
     capabilities: {
       ocr: false,
+      voiceInput: false,
+      localAiRewrite: false,
       clipboardAssist: false,
       autoUpdate: false,
     },
@@ -34,12 +36,15 @@ const PLAN_DEFINITIONS = {
     features: [
       '包含 Plus 全部能力，并针对高频业务深度优化',
       'OCR 智能识别引擎：图片批量识别、候选排序、低置信提醒、纠错回填',
+      '语音录入：离线麦克风录音转文字，并自动回填消息框',
+      '本地 AI 语义修正：针对 OCR 脏文本、口语化输入做纠错标准化',
       '微信自动监听中枢：复制即识别、同日去重拦截，显著减少重复工作',
-      '全链路自动化：识别 -> 统计 -> 导出连续处理，压缩人工操作时间',
       '持续更新（Pro 专属）：优先获得新规则、新能力与性能优化版本',
     ],
     capabilities: {
       ocr: true,
+      voiceInput: true,
+      localAiRewrite: true,
       clipboardAssist: true,
       autoUpdate: true,
     },

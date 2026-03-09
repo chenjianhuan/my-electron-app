@@ -361,15 +361,15 @@ class UserManager {
     getUserRegionModeSummary(userName = '') {
         const info = this.getUserRegionAccountingInfo(userName);
         if (info.separateStatsByRegion === false) {
-            return `不分盘口，统一记到${info.defaultRegionLabel}`;
+            return `不分区域，统一记到${info.defaultRegionLabel}`;
         }
-        return '按盘口分别统计';
+        return '按区域分别统计';
     }
 
     getUserRegionDisplayLabel(userName = '', regionKey = this.activeRegion) {
         const info = this.getUserRegionAccountingInfo(userName);
         if (info.separateStatsByRegion === false) {
-            return `统一盘口（记${info.defaultRegionLabel}）`;
+            return `统一区域（记${info.defaultRegionLabel}）`;
         }
         return this.getRegionLabel(regionKey);
     }
@@ -654,7 +654,7 @@ class UserManager {
                     clientId: userName
                 });
             } catch (error) {
-                console.warn(`同步客户识别赔率失败(${userName}):`, error);
+                console.warn(`同步客户识别倍率失败(${userName}):`, error);
             }
         }
 
@@ -1053,7 +1053,7 @@ class UserManager {
                     return regionTotal;
                 }
                 if (allRegionTotal > 0) {
-                    // 兼容历史数据：若当前规则默认盘口变更导致分区不匹配，至少展示该条原始消息的总额。
+                    // 兼容历史数据：若当前规则默认区域变更导致分区不匹配，至少展示该条原始消息的总额。
                     return allRegionTotal;
                 }
             } catch (error) {
@@ -1102,7 +1102,7 @@ class UserManager {
             return {
                 ok: false,
                 code: 'BLOCKING_UNRESOLVED_LINES',
-                message: `仍有 ${blockingUnresolvedLines.length} 行疑似下注内容未识别，已阻止保存`,
+                message: `仍有 ${blockingUnresolvedLines.length} 行疑似录入条目内容未识别，已阻止保存`,
                 blockingUnresolvedLines
             };
         }
@@ -2008,7 +2008,7 @@ class UserManager {
         if (!targetUser || !this.users[targetUser]) {
             throw new Error('请先选择客户');
         }
-        const ok = confirm(`确定清空客户 ${targetUser} 的投注数据吗？\n仅清空号码统计与原始消息，不会删除该客户的结算设置和解析偏好。`);
+        const ok = confirm(`确定清空客户 ${targetUser} 的录入条目数据吗？\n仅清空号码统计与原始消息，不会删除该客户的结算设置和解析偏好。`);
         if (!ok) {
             return { cleared: false, userName: targetUser };
         }
@@ -2028,7 +2028,7 @@ class UserManager {
         this.invalidateUserListDerivedCaches();
         this.renderAllSections();
         this.saveUserData();
-        console.log('已清空投注数据:', targetUser);
+        console.log('已清空录入条目数据:', targetUser);
         return { cleared: true, userName: targetUser };
     }
 
@@ -2125,12 +2125,12 @@ class UserManager {
 
         const settlementSummary = document.createElement('div');
         settlementSummary.className = 'user-settlement-summary';
-        settlementSummary.textContent = `赔率 ${this.formatAmountValue(settlementConfig.odds)} | 返水 ${this.formatAmountValue(settlementConfig.rebateRate)}%`;
+        settlementSummary.textContent = `倍率 ${this.formatAmountValue(settlementConfig.odds)} | 返利 ${this.formatAmountValue(settlementConfig.rebateRate)}%`;
         info.appendChild(settlementSummary);
 
         const regionModeSummary = document.createElement('div');
         regionModeSummary.className = 'user-region-mode-summary';
-        regionModeSummary.textContent = `盘口模式：${summary.regionModeSummary || '按盘口分别统计'}`;
+        regionModeSummary.textContent = `区域模式：${summary.regionModeSummary || '按区域分别统计'}`;
         info.appendChild(regionModeSummary);
 
         const parseSummary = document.createElement('div');
@@ -2149,10 +2149,10 @@ class UserManager {
             oddsField.className = 'user-settlement-field';
             const oddsLabel = document.createElement('span');
             oddsLabel.className = 'user-settlement-field-label';
-            oddsLabel.textContent = '赔率';
+            oddsLabel.textContent = '倍率';
             const oddsInput = document.createElement('input');
             oddsInput.value = this.formatAmountValue(settlementConfig.odds);
-            oddsInput.placeholder = '请输入赔率';
+            oddsInput.placeholder = '请输入倍率';
             this.bindSettlementNumericInput(oddsInput);
             oddsField.appendChild(oddsLabel);
             oddsField.appendChild(oddsInput);
@@ -2161,10 +2161,10 @@ class UserManager {
             rebateField.className = 'user-settlement-field';
             const rebateLabel = document.createElement('span');
             rebateLabel.className = 'user-settlement-field-label';
-            rebateLabel.textContent = '返水%';
+            rebateLabel.textContent = '返利%';
             const rebateInput = document.createElement('input');
             rebateInput.value = this.formatAmountValue(settlementConfig.rebateRate);
-            rebateInput.placeholder = '请输入返水';
+            rebateInput.placeholder = '请输入返利';
             this.bindSettlementNumericInput(rebateInput);
             rebateField.appendChild(rebateLabel);
             rebateField.appendChild(rebateInput);
@@ -2196,13 +2196,13 @@ class UserManager {
                 const nextTailShorthand = parseInput.checked === true;
                 if (!Number.isFinite(nextOdds) || nextOdds <= 0) {
                     if (window.showError) {
-                        window.showError('保存设置失败', '赔率请输入大于 0 的数字');
+                        window.showError('保存设置失败', '倍率请输入大于 0 的数字');
                     }
                     return;
                 }
                 if (!Number.isFinite(nextRebateRate) || nextRebateRate < 0) {
                     if (window.showError) {
-                        window.showError('保存设置失败', '返水请输入大于等于 0 的数字');
+                        window.showError('保存设置失败', '返利请输入大于等于 0 的数字');
                     }
                     return;
                 }
@@ -2225,7 +2225,7 @@ class UserManager {
                     this.renderAllSections();
                     this.saveUserData();
                     if (window.showSuccess) {
-                        window.showSuccess(`已保存 ${userName}：赔率 ${this.formatAmountValue(result.odds)}，返水 ${this.formatAmountValue(result.rebateRate)}%，尾数简写${parseResult.tailShorthandAsSeparateGroups ? '开' : '关'}`);
+                        window.showSuccess(`已保存 ${userName}：倍率 ${this.formatAmountValue(result.odds)}，返利 ${this.formatAmountValue(result.rebateRate)}%，尾数简写${parseResult.tailShorthandAsSeparateGroups ? '开' : '关'}`);
                     }
                 } catch (error) {
                     if (window.showError) {
@@ -2236,17 +2236,17 @@ class UserManager {
 
             const clearButton = document.createElement('button');
             clearButton.className = 'user-settlement-clear';
-            clearButton.textContent = '清空投注数据';
+            clearButton.textContent = '清空录入条目数据';
             clearButton.onclick = (event) => {
                 event.stopPropagation();
                 try {
                     const result = this.clearUserBetData(userName);
                     if (result && result.cleared && window.showSuccess) {
-                        window.showSuccess(`已清空 ${userName} 的投注数据`);
+                        window.showSuccess(`已清空 ${userName} 的录入条目数据`);
                     }
                 } catch (error) {
                     if (window.showError) {
-                        window.showError('清空投注数据失败', error && error.message ? error.message : '未知错误');
+                        window.showError('清空录入条目数据失败', error && error.message ? error.message : '未知错误');
                     }
                 }
             };
@@ -2786,7 +2786,7 @@ class UserManager {
     applyEditedOriginalData(userName, index, regionKey = this.activeRegion, nextValue = '') {
         const regionData = this.getUserRegionData(userName, regionKey);
         if (!regionData || !Array.isArray(regionData.originalData)) {
-            throw new Error('原始消息不存在或盘口无效');
+            throw new Error('原始消息不存在或区域无效');
         }
         if (!this.hasOriginalDataAt(regionData, index)) {
             throw new Error('原始消息已不存在，可能已被删除');

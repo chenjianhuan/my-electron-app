@@ -12,7 +12,7 @@
             <button onclick="openModal('recognize')">消息识别</button>
             <button onclick="copyClientData()">复制当前范围</button>
             <button onclick="exportClientDataDocument()">导出当前范围</button>
-            <button onclick="openHedgeReportModal()">吃单上报</button>
+            <button onclick="openHedgeReportModal()">数据上报</button>
         </div>
         <div class="top-menu-meta">
             <span id="planBadge" class="plan-badge">套餐: -</span>
@@ -49,10 +49,10 @@
                 <section class="right-column right-column-rank">
                     <div class="right-column-head panel-head right-column-head-with-pnl">
                         <h3>结果总览</h3>
-                        <div id="regionPnlSummary" class="region-pnl-overview">输入新奥、老奥、香港中奖号后可按客户赔率和返水计算各盘口盈亏。</div>
+                        <div id="regionPnlSummary" class="region-pnl-overview">输入新奥、老奥、香港中奖号后可按客户倍率和返利计算各区域结果汇总。</div>
                         <div class="rank-control-grid">
                             <div class="view-region-row rank-control-block">
-                                <span class="selection-mode-label">查看盘口</span>
+                                <span class="selection-mode-label">查看区域</span>
                                 <div id="viewRegionGroup" class="region-chip-group"></div>
                             </div>
                             <div class="selection-mode-row rank-control-block">
@@ -65,7 +65,7 @@
                             </div>
                         </div>
                         <div class="region-pnl-panel">
-                            <div id="regionPnlHead" class="region-pnl-head">盘口庄家盈亏</div>
+                            <div id="regionPnlHead" class="region-pnl-head">区域结果汇总</div>
                             <div id="regionPnlRows" class="region-pnl-rows"></div>
                         </div>
                     </div>
@@ -128,7 +128,7 @@
                 <section class="recognize-left-panel">
                     <div class="recognize-main">
                         <div class="recognize-region-row">
-                            <label>录入盘口</label>
+                            <label>录入区域</label>
                             <div id="recognizeRegionGroup" class="region-chip-group single"></div>
                         </div>
 
@@ -237,23 +237,23 @@
                                     <div id="attributeCombinePolicyExplain" class="anchor-policy-explain"></div>
                                 </div>
                                 <div class="anchor-console-card">
-                                    <div class="anchor-alias-title">盘口统计模式</div>
-                                    <div class="anchor-alias-subtitle">决定该客户是否按消息里的新奥/老奥/香港分别入账；关闭后统一记到默认盘口。</div>
+                                    <div class="anchor-alias-title">区域统计模式</div>
+                                    <div class="anchor-alias-subtitle">决定该客户是否按消息里的新奥/老奥/香港分别入账；关闭后统一记到默认区域。</div>
                                     <select id="regionAccountingMode">
-                                        <option value="split">按盘口区分统计</option>
-                                        <option value="merged">不分盘口，统一入账</option>
+                                        <option value="split">按区域区分统计</option>
+                                        <option value="merged">不分区域，统一入账</option>
                                     </select>
                                     <select id="regionAccountingDefaultRegion">
-                                        <option value="new_ao">默认盘口：新奥</option>
-                                        <option value="old_ao">默认盘口：老奥</option>
-                                        <option value="hongkong">默认盘口：香港</option>
+                                        <option value="new_ao">默认区域：新奥</option>
+                                        <option value="old_ao">默认区域：老奥</option>
+                                        <option value="hongkong">默认区域：香港</option>
                                     </select>
-                                    <div class="anchor-rule-inline-note">附加盘口词映射：系统默认词会继续保留，这里只需要补充你常用的别名，多个用逗号分隔。</div>
+                                    <div class="anchor-rule-inline-note">附加区域词映射：系统默认词会继续保留，这里只需要补充你常用的别名，多个用逗号分隔。</div>
                                     <input id="regionAliasInput_new_ao" type="text" placeholder="新奥附加词，例如：新澳门,澳盘">
                                     <input id="regionAliasInput_old_ao" type="text" placeholder="老奥附加词，例如：老澳门,旧澳">
                                     <input id="regionAliasInput_hongkong" type="text" placeholder="香港附加词，例如：港盘,港澳">
                                     <div class="anchor-alias-actions">
-                                        <button id="saveRegionAccountingPolicyBtn" class="confirm-button" type="button" onclick="saveRegionAccountingPolicyRule()">保存盘口规则</button>
+                                        <button id="saveRegionAccountingPolicyBtn" class="confirm-button" type="button" onclick="saveRegionAccountingPolicyRule()">保存区域规则</button>
                                         <button id="resetRegionAccountingPolicyBtn" class="cancel-button" type="button" onclick="resetRegionAccountingPolicyRule()">恢复默认</button>
                                     </div>
                                     <div id="regionAccountingPolicyState" class="anchor-policy-state"></div>
@@ -338,8 +338,8 @@
                                     </div>
 
                                     <div class="anchor-strategy-tabs" role="tablist" aria-label="策略分组">
-                                        <button id="anchorStrategyTab_per_number" class="anchor-strategy-tab active" type="button" role="tab" onclick="setAnchorStrategyTab('per_number')">每个号码下注金额</button>
-                                        <button id="anchorStrategyTab_per_target_equal_split" class="anchor-strategy-tab" type="button" role="tab" onclick="setAnchorStrategyTab('per_target_equal_split')">每个目标组下注金额</button>
+                                        <button id="anchorStrategyTab_per_number" class="anchor-strategy-tab active" type="button" role="tab" onclick="setAnchorStrategyTab('per_number')">每个号码录入金额</button>
+                                        <button id="anchorStrategyTab_per_target_equal_split" class="anchor-strategy-tab" type="button" role="tab" onclick="setAnchorStrategyTab('per_target_equal_split')">每个目标组录入金额</button>
                                         <button id="anchorStrategyTab_per_entry_equal_split" class="anchor-strategy-tab" type="button" role="tab" onclick="setAnchorStrategyTab('per_entry_equal_split')">本段总金额平分</button>
                                         <button id="anchorStrategyTab_undetermined" class="anchor-strategy-tab" type="button" role="tab" onclick="setAnchorStrategyTab('undetermined')">未确定（解析时确认）</button>
                                     </div>
@@ -396,8 +396,8 @@
                                             <div class="anchor-rule-drawer-section">
                                                 <div class="anchor-rule-drawer-field-label">请选择分配策略</div>
                                                 <select id="anchorRuleDrawerMode" onchange="renderAnchorRuleDrawerPreview()">
-                                                    <option value="per_number">每个号码下注金额</option>
-                                                    <option value="per_target_equal_split">每个目标组下注金额（组内平分）</option>
+                                                    <option value="per_number">每个号码录入金额</option>
+                                                    <option value="per_target_equal_split">每个目标组录入金额（组内平分）</option>
                                                     <option value="per_entry_equal_split">本段总金额平分到全部号码</option>
                                                     <option value="undetermined">未确定（解析时弹窗选择）</option>
                                                 </select>
@@ -405,9 +405,9 @@
                                             </div>
 
                                             <div class="anchor-rule-drawer-section">
-                                                <div class="anchor-rule-drawer-field-label">请输入锚点赔率（可选）</div>
-                                                <div class="anchor-rule-drawer-field-desc">留空表示跟随当前生效赔率；输入后该锚点使用独立赔率。</div>
-                                                <input id="anchorRuleDrawerOdds" type="number" min="0.0001" step="0.01" placeholder="留空 = 跟随当前生效赔率">
+                                                <div class="anchor-rule-drawer-field-label">请输入锚点倍率（可选）</div>
+                                                <div class="anchor-rule-drawer-field-desc">留空表示跟随当前生效倍率；输入后该锚点使用独立倍率。</div>
+                                                <input id="anchorRuleDrawerOdds" type="number" min="0.0001" step="0.01" placeholder="留空 = 跟随当前生效倍率">
                                             </div>
 
                                             <div class="anchor-rule-drawer-enable-cell">
@@ -605,7 +605,7 @@
                 <div class="settings-item">
                     <div class="settings-item-main">
                         <div class="settings-item-title">修改密码</div>
-                        <div class="settings-item-desc">修改“六合彩统计”模块访问密码。</div>
+                        <div class="settings-item-desc">修改“AI 消息统计”模块访问密码。</div>
                     </div>
                     <button class="edit-button" type="button" onclick="openPasswordChangeModal()">修改</button>
                 </div>
@@ -669,10 +669,10 @@
     <div id="hedgeReportModal" class="modal hedge-report-modal">
         <div class="modal-content">
             <span class="close" onclick="closeHedgeReportModal()">&times;</span>
-            <h2>吃单上报</h2>
+            <h2>数据上报</h2>
             <div class="hedge-report-toolbar">
                 <div id="hedgeReportScope" class="hedge-report-scope">范围：-</div>
-                <div class="hedge-report-odds">结算口径：<span id="hedgeReportOdds">按客户赔率</span></div>
+                <div class="hedge-report-odds">结算口径：<span id="hedgeReportOdds">按客户倍率</span></div>
                 <label class="hedge-report-loss-input">
                     最多可亏损
                     <input id="hedgeMaxLossInput" type="number" min="0" step="0.01" placeholder="例如 5000">
@@ -812,7 +812,7 @@
 
             <h3>合规与风险提示</h3>
             <ol>
-                <li>本软件不提供下注、交易、支付、提现、返奖等任何资金相关功能。</li>
+                <li>本软件不提供任何资金交易、支付、提现、返奖等相关功能。</li>
                 <li>严禁将本软件用于赌博、博彩、洗钱、诈骗或其他违法活动。</li>
                 <li>用户应自行确保使用行为符合所在地区法律法规与监管要求。</li>
                 <li>开发者仅提供通用统计能力，不参与用户业务决策，不对用户违法使用产生的后果负责。</li>
@@ -823,8 +823,8 @@
             <ol>
                 <li>先在左侧添加并选择客户；单人/多人模式可切换统计范围。</li>
                 <li>点击“消息识别”打开录入面板，输入原始消息后会自动解析预览，再点“添加”入库。</li>
-                <li>可在录入消息中写盘口关键字（如新奥/老奥/香港）；客户若设为“不分盘口”，则统一记到默认盘口。</li>
-                <li>右侧显示号码累计排行、各盘口盈亏与原始消息，可编辑/删除并自动重算。</li>
+                <li>可在录入消息中写区域关键字（如新奥/老奥/香港）；客户若设为“不分区域”，则统一记到默认区域。</li>
+                <li>右侧显示号码累计排行、各区域结果汇总与原始消息，可编辑/删除并自动重算。</li>
                 <li>识别页右侧支持号码属性、金额分配词、不入账规则、金额单位等配置，并可实时预览解析效果。</li>
                 <li>数据保存在本机，不上传云端。建议定期备份应用数据目录，避免设备故障导致数据丢失。</li>
             </ol>
