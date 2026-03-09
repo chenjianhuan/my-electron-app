@@ -34,8 +34,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          lfs: true
+
+      - name: Restore bundled AI model assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          model_dir="assets/ai/models/Mozilla/Qwen2.5-0.5B-Instruct/onnx"
+          mkdir -p "$model_dir"
+          curl -L --fail --retry 3 -o "$model_dir/model_q4f16.onnx" \
+            "https://huggingface.co/Mozilla/Qwen2.5-0.5B-Instruct/resolve/main/onnx/model_q4f16.onnx"
+          curl -L --fail --retry 3 -o "$model_dir/model_q4f16.onnx_data" \
+            "https://huggingface.co/Mozilla/Qwen2.5-0.5B-Instruct/resolve/main/onnx/model_q4f16.onnx_data"
 
       - name: Setup Node.js 18
         uses: actions/setup-node@v4
