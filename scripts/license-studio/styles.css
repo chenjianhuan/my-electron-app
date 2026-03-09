@@ -92,6 +92,7 @@ label {
 
 input,
 select,
+textarea,
 button {
   border-radius: 8px;
   border: 1px solid var(--line);
@@ -100,10 +101,18 @@ button {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
   background: #fff;
   color: var(--text);
+}
+
+textarea {
+  resize: vertical;
+  min-height: 96px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.45;
 }
 
 button {

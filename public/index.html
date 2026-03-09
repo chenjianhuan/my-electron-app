@@ -738,7 +738,14 @@
                 <div id="licenseOfflineHint" class="license-offline-hint">可复制本机离线授权信息发给管理员签发。</div>
                 <div id="licenseOfflinePaths" class="license-offline-paths"></div>
             </div>
+            <div class="license-activate-box">
+                <div class="license-activate-title">授权码激活</div>
+                <div class="license-activate-hint">支持粘贴管理员发来的授权码，或整个 license.dat 文件内容。系统会自动保存到本机授权目录。</div>
+                <textarea id="licenseActivateInput" class="license-activate-input" placeholder="请粘贴授权码或 license.dat 内容"></textarea>
+                <div id="licenseActivateStatus" class="settings-inline-status"></div>
+            </div>
             <div class="modal-buttons">
+                <button class="edit-button" onclick="activateLicenseFromInput()">激活授权码</button>
                 <button class="edit-button" onclick="copyOfflineLicenseRequest()">复制离线授权信息</button>
                 <button class="edit-button" onclick="refreshLicenseStatus()">刷新状态</button>
                 <button class="cancel-button" onclick="closeLicenseModal()">关闭</button>

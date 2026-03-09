@@ -83,11 +83,20 @@ class LicenseGuard {
     }
   }
 
-  updateStatus(status) {
+  updateStatus(status, options = {}) {
     this.lastStatus = status;
+    if (options.notify === false) {
+      return;
+    }
     if (typeof this.onStatusChange === 'function') {
       this.onStatusChange(status);
     }
+  }
+
+  refreshStatus(options = {}) {
+    const status = this.checkAuthorization();
+    this.updateStatus(status, options);
+    return status;
   }
 
   checkAuthorization() {

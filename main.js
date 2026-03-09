@@ -1,12 +1,13 @@
 // main.js
-const { app, BrowserWindow, ipcMain, dialog, clipboard, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, clipboard, screen, systemPreferences } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
 const MainController = require('./src/controllers/MainController');
-const { LicenseGuard } = require('./src/services/LicenseGuard');
+const { LicenseGuard, LICENSE_FILE_NAME } = require('./src/services/LicenseGuard');
 const { TrialGuard } = require('./src/services/TrialGuard');
+const { normalizeLicenseInputToString } = require('./src/services/LicenseCodec');
 const { buildPlanContext, getPublicPlanCatalog } = require('./src/services/PlanCatalog');
 const {
   MODULE_IDS,
@@ -31,6 +32,7 @@ let unlockedModuleSecret = '';
 let activeModuleId = MODULE_IDS.AUTH;
 const MODULE_PASSWORD_OVERRIDE_FILE = 'module-password-overrides.json';
 const TRIAL_PLAN_PREFERENCE_FILE = 'trial-plan-preference.json';
+const TRIAL_DAYS = 3;
 const basePasswordRoutes = buildPasswordRoutesFromEnv(process.env);
 
 const modulePasswordRouter = new ModulePasswordRouter({
@@ -358,6 +360,62 @@ async function loadModulePage(moduleId) {
   }
 }
 
+function isMicrophonePermissionRequest(permission, details = {}) {
+  const safePermission = String(permission || '').trim().toLowerCase();
+  if (safePermission === 'microphone') {
+    return true;
+  }
+  if (safePermission !== 'media') {
+    return false;
+  }
+  const mediaTypes = Array.isArray(details.mediaTypes)
+    ? details.mediaTypes.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean)
+    : [];
+  if (mediaTypes.length === 0) {
+    return true;
+  }
+  return mediaTypes.includes('audio') && !mediaTypes.includes('video');
+}
+
+async function ensureMicrophoneSystemAccess() {
+  if (process.platform !== 'darwin') {
+    return true;
+  }
+  try {
+    return await systemPreferences.askForMediaAccess('microphone');
+  } catch (error) {
+    console.warn('Failed to request microphone access:', error);
+    return false;
+  }
+}
+
+function configureMediaPermissionHandlers(targetWindow) {
+  if (!targetWindow || targetWindow.isDestroyed()) {
+    return;
+  }
+
+  const targetSession = targetWindow.webContents && targetWindow.webContents.session;
+  if (!targetSession) {
+    return;
+  }
+
+  targetSession.setPermissionCheckHandler((_webContents, permission, _requestingOrigin, details) => {
+    if (isMicrophonePermissionRequest(permission, details)) {
+      return true;
+    }
+    return false;
+  });
+
+  targetSession.setPermissionRequestHandler(async (_webContents, permission, callback, details) => {
+    if (!isMicrophonePermissionRequest(permission, details)) {
+      callback(false);
+      return;
+    }
+    const granted = await ensureMicrophoneSystemAccess();
+    callback(!!granted);
+  });
+}
+
 function createWindow() {
   const adaptiveBounds = computeAdaptiveWindowBounds();
   win = new BrowserWindow({
@@ -381,6 +439,8 @@ function createWindow() {
     // 添加窗口显示状态
     show: false
   });
+
+  configureMediaPermissionHandlers(win);
 
   loadModulePage(MODULE_IDS.AUTH);
 
@@ -445,6 +505,173 @@ function showErrorDialog(title, message) {
   dialog.showErrorBox(safeTitle, safeMessage);
 }
 
+function buildLicenseGuard() {
+  return new LicenseGuard({
+    app,
+    onRevoked: (status) => {
+      console.error('License revoked:', status.reason);
+      enforceLicenseExit(status.reason || '授权已失效');
+    },
+    onStatusChange: (status) => {
+      if (status && status.authorized && appAccessStatus && appAccessStatus.mode === 'licensed') {
+        appAccessStatus.plan = buildAccessPlanContext({
+          tier: status.tier || (appAccessStatus.plan && appAccessStatus.plan.tier) || 'pro',
+          billingCycle: status.billingCycle || (appAccessStatus.plan && appAccessStatus.plan.billingCycle) || 'lifetime',
+          source: status.licenseSource || 'license',
+        });
+      }
+      notifyAccessStatusChanged();
+    },
+  });
+}
+
+function ensureLicenseGuard() {
+  if (!licenseGuard) {
+    licenseGuard = buildLicenseGuard();
+  }
+  return licenseGuard;
+}
+
+function ensureTrialGuard() {
+  if (!trialGuard) {
+    trialGuard = new TrialGuard({ app, trialDays: TRIAL_DAYS });
+  }
+  return trialGuard;
+}
+
+function notifyAccessStatusChanged() {
+  if (!win || win.isDestroyed()) {
+    return;
+  }
+  win.webContents.send(
+    'license-status-changed',
+    licenseGuard ? licenseGuard.getStatus() : { authorized: false, reason: '授权未初始化' }
+  );
+  win.webContents.send(
+    'app-access-status-changed',
+    appAccessStatus || { mode: 'blocked', authorized: false, reason: '访问状态未初始化' }
+  );
+}
+
+function refreshAccessControl(options = {}) {
+  if (process.env.SKIP_LICENSE_CHECK === '1') {
+    console.warn('License check skipped by SKIP_LICENSE_CHECK=1');
+    appAccessStatus = {
+      mode: 'dev-bypass',
+      authorized: true,
+      reason: '开发模式已跳过授权检查',
+      plan: buildAccessPlanContext({ tier: 'pro', billingCycle: 'lifetime', source: 'dev-bypass' }),
+    };
+    if (options.notify !== false) {
+      notifyAccessStatusChanged();
+    }
+    return {
+      accessStatus: appAccessStatus,
+      licenseStatus: licenseGuard ? licenseGuard.getStatus() : { authorized: false, reason: '开发模式跳过授权检查' },
+    };
+  }
+
+  let currentLicenseStatus = { authorized: false, mode: 'blocked', reason: '授权检查未执行' };
+  try {
+    const guard = ensureLicenseGuard();
+    currentLicenseStatus = guard.refreshStatus({ notify: false });
+  } catch (error) {
+    currentLicenseStatus = { authorized: false, mode: 'blocked', reason: `授权检查失败: ${error.message}` };
+    if (licenseGuard) {
+      licenseGuard.updateStatus(currentLicenseStatus, { notify: false });
+      licenseGuard.stopMonitoring();
+    }
+  }
+
+  if (currentLicenseStatus.authorized) {
+    appAccessStatus = {
+      mode: 'licensed',
+      authorized: true,
+      license: currentLicenseStatus,
+      plan: buildAccessPlanContext({
+        tier: currentLicenseStatus.tier || 'pro',
+        billingCycle: currentLicenseStatus.billingCycle || 'lifetime',
+        source: currentLicenseStatus.licenseSource || 'license',
+      }),
+    };
+    if (licenseGuard) {
+      licenseGuard.startMonitoring();
+    }
+  } else {
+    if (licenseGuard) {
+      licenseGuard.stopMonitoring();
+    }
+    const activeTrialGuard = ensureTrialGuard();
+    const trialStatus = activeTrialGuard.checkTrialAccess();
+    if (trialStatus.allowed) {
+      const trialTier = readTrialPlanTierPreference();
+      appAccessStatus = {
+        mode: 'trial',
+        authorized: true,
+        trial: trialStatus,
+        license: currentLicenseStatus,
+        plan: buildAccessPlanContext({ tier: trialTier, billingCycle: 'lifetime', source: 'trial' }),
+      };
+    } else {
+      appAccessStatus = {
+        mode: 'blocked',
+        authorized: false,
+        trial: trialStatus,
+        license: currentLicenseStatus,
+        reason: trialStatus.reason || currentLicenseStatus.reason || '请插入授权U盘或导入离线授权文件后重试。',
+        plan: buildAccessPlanContext({ tier: 'plus', billingCycle: 'lifetime', source: 'blocked' }),
+      };
+    }
+  }
+
+  if (options.notify !== false) {
+    notifyAccessStatusChanged();
+  }
+  return {
+    accessStatus: appAccessStatus,
+    licenseStatus: currentLicenseStatus,
+  };
+}
+
+function getManagedOfflineLicensePath() {
+  return path.join(app.getPath('userData'), LICENSE_FILE_NAME);
+}
+
+function activateOfflineLicenseFromInput(rawInput) {
+  const guard = ensureLicenseGuard();
+  const normalizedLicenseText = normalizeLicenseInputToString(rawInput);
+  const verified = guard.verifyLicenseFile(normalizedLicenseText);
+  const targetPath = getManagedOfflineLicensePath();
+  const previewStatus = guard.evaluatePayload(verified.payload, {
+    source: 'offline',
+    sourceLabel: '离线授权',
+    drive: null,
+    licensePath: targetPath,
+  });
+
+  if (!previewStatus.authorized) {
+    throw new Error(previewStatus.reason || '授权不可用');
+  }
+
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  fs.writeFileSync(targetPath, `${normalizedLicenseText.trim()}\n`, 'utf8');
+
+  const refreshed = refreshAccessControl({ notify: true });
+  if (!refreshed.licenseStatus || !refreshed.licenseStatus.authorized) {
+    throw new Error(
+      (refreshed.licenseStatus && refreshed.licenseStatus.reason)
+      || '授权已写入，但未能生效'
+    );
+  }
+
+  return {
+    ok: true,
+    savedPath: targetPath,
+    licenseStatus: refreshed.licenseStatus,
+    accessStatus: refreshed.accessStatus,
+  };
+}
+
 function isSharpRuntimeLoadError(reason) {
   const text = String(
     reason instanceof Error
@@ -458,6 +685,33 @@ function isSharpRuntimeLoadError(reason) {
 function registerLicenseIpc() {
   ipcMain.handle('license:get-status', () => {
     return licenseGuard ? licenseGuard.getStatus() : { authorized: false, reason: '授权未初始化' };
+  });
+  ipcMain.handle('license:refresh-status', () => {
+    try {
+      const refreshed = refreshAccessControl({ notify: true });
+      return {
+        ok: true,
+        status: refreshed.licenseStatus,
+        accessStatus: refreshed.accessStatus,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        reason: error && error.message ? error.message : String(error),
+        status: licenseGuard ? licenseGuard.getStatus() : { authorized: false, reason: '授权未初始化' },
+        accessStatus: appAccessStatus || { mode: 'blocked', authorized: false, reason: '访问状态未初始化' },
+      };
+    }
+  });
+  ipcMain.handle('license:activate-from-input', (_event, payload) => {
+    try {
+      return activateOfflineLicenseFromInput(payload && payload.input);
+    } catch (error) {
+      return {
+        ok: false,
+        reason: error && error.message ? error.message : String(error),
+      };
+    }
   });
   ipcMain.handle('license:build-offline-request', () => {
     const status = licenseGuard ? (licenseGuard.getStatus() || {}) : {};
@@ -540,6 +794,18 @@ function registerLicenseIpc() {
       return String(clipboard.readText() || '');
     } catch (error) {
       return '';
+    }
+  });
+  ipcMain.handle('clipboard:write-text', (_event, payload) => {
+    try {
+      const text = String((payload && payload.text) || '');
+      clipboard.writeText(text);
+      return { ok: true };
+    } catch (error) {
+      return {
+        ok: false,
+        reason: error && error.message ? error.message : '写入剪贴板失败'
+      };
     }
   });
   ipcMain.handle('reader:read-book-file', (_event, payload) => {
@@ -655,83 +921,7 @@ function registerModuleRoutingIpc() {
 }
 
 function setupAccessControl() {
-  if (process.env.SKIP_LICENSE_CHECK === '1') {
-    console.warn('License check skipped by SKIP_LICENSE_CHECK=1');
-    appAccessStatus = {
-      mode: 'dev-bypass',
-      authorized: true,
-      reason: '开发模式已跳过授权检查',
-      plan: buildAccessPlanContext({ tier: 'pro', billingCycle: 'lifetime', source: 'dev-bypass' }),
-    };
-    return true;
-  }
-
-  let initialLicenseStatus = { authorized: false, mode: 'blocked', reason: '授权检查未执行' };
-  try {
-    licenseGuard = new LicenseGuard({
-      app,
-      onRevoked: (status) => {
-        console.error('License revoked:', status.reason);
-        enforceLicenseExit(status.reason || '授权已失效');
-      },
-      onStatusChange: (status) => {
-        if (status && status.authorized && appAccessStatus && appAccessStatus.mode === 'licensed') {
-          appAccessStatus.plan = buildAccessPlanContext({
-            tier: status.tier || (appAccessStatus.plan && appAccessStatus.plan.tier) || 'pro',
-            billingCycle: status.billingCycle || (appAccessStatus.plan && appAccessStatus.plan.billingCycle) || 'lifetime',
-            source: status.licenseSource || 'license',
-          });
-        }
-        if (win && !win.isDestroyed()) {
-          win.webContents.send('license-status-changed', status);
-          win.webContents.send('app-access-status-changed', appAccessStatus);
-        }
-      },
-    });
-    initialLicenseStatus = licenseGuard.checkAuthorization();
-    licenseGuard.updateStatus(initialLicenseStatus);
-  } catch (error) {
-    initialLicenseStatus = { authorized: false, mode: 'blocked', reason: `授权检查失败: ${error.message}` };
-  }
-
-  if (initialLicenseStatus.authorized) {
-    const licensedPlan = buildAccessPlanContext({
-      tier: initialLicenseStatus.tier || 'pro',
-      billingCycle: initialLicenseStatus.billingCycle || 'lifetime',
-      source: initialLicenseStatus.licenseSource || 'license',
-    });
-    appAccessStatus = {
-      mode: 'licensed',
-      authorized: true,
-      license: initialLicenseStatus,
-      plan: licensedPlan,
-    };
-    licenseGuard.startMonitoring();
-    return true;
-  }
-
-  trialGuard = new TrialGuard({ app, trialDays: 3 });
-  const trialStatus = trialGuard.checkTrialAccess();
-  if (trialStatus.allowed) {
-    const trialTier = readTrialPlanTierPreference();
-    appAccessStatus = {
-      mode: 'trial',
-      authorized: true,
-      trial: trialStatus,
-      license: initialLicenseStatus,
-      plan: buildAccessPlanContext({ tier: trialTier, billingCycle: 'lifetime', source: 'trial' }),
-    };
-    return true;
-  }
-
-  appAccessStatus = {
-    mode: 'blocked',
-    authorized: false,
-    trial: trialStatus,
-    license: initialLicenseStatus,
-    reason: trialStatus.reason || initialLicenseStatus.reason || '请插入授权U盘或导入离线授权文件后重试。',
-    plan: buildAccessPlanContext({ tier: 'plus', billingCycle: 'lifetime', source: 'blocked' }),
-  };
+  refreshAccessControl({ notify: false });
   return true;
 }
 

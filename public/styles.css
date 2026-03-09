@@ -1858,8 +1858,9 @@ textarea#message,
 .message-input-wrap {
   width: 100%;
   min-height: 150px;
-  max-height: 38vh;
-  height: 150px;
+  height: auto;
+  max-height: none;
+  flex: 1 1 auto;
   border: 1px solid #cfe0ef;
   border-radius: 12px;
   background: #fff;
@@ -2209,6 +2210,7 @@ textarea#message:focus,
   display: flex;
   flex-direction: column;
   min-height: 0;
+  height: 100%;
   overflow: hidden;
 }
 
@@ -2246,6 +2248,8 @@ textarea#message:focus,
 .recognize-main {
   min-width: 0;
   min-height: 0;
+  height: 100%;
+  flex: 1 1 auto;
   border: 1px solid #d8e5f1;
   border-radius: 14px;
   background: #f8fbff;
@@ -5600,6 +5604,52 @@ textarea#message:focus,
   font-size: var(--font-size-xs);
   line-height: 1.5;
   word-break: break-all;
+}
+
+.license-activate-box {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #d8e3ef;
+  background: #ffffff;
+}
+
+.license-activate-title {
+  font-size: var(--font-size-sm);
+  font-weight: 800;
+  color: #1e293b;
+}
+
+.license-activate-hint {
+  margin-top: 6px;
+  color: #475569;
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+}
+
+.license-activate-input {
+  width: 100%;
+  min-height: 112px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #d8e3ef;
+  background: #f8fbff;
+  color: #1e293b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.license-activate-input:focus {
+  outline: none;
+  border-color: #8ab4e2;
+  box-shadow: 0 0 0 3px rgba(47, 110, 162, 0.12);
+}
+
+.license-activate-box .settings-inline-status {
+  margin-top: 10px;
 }
 
 .plan-modal .modal-content {

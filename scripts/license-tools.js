@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const readline = require('readline');
+const { encodeLicenseCodeFromString } = require('../src/services/LicenseCodec');
 
 const LICENSE_NAME = 'license.dat';
 const PLAN_TIERS = ['plus', 'pro'];
@@ -211,6 +212,8 @@ function cmdIssueOffline(args) {
   console.log(`machineFingerprint: ${result.payload.machineFingerprint}`);
   console.log(`套餐档位: ${result.payload.tier}`);
   console.log(`计费周期: ${result.payload.billingCycle}`);
+  console.log('授权码:');
+  console.log(result.licenseCode);
 }
 
 function cmdIssueToUsb(args) {
@@ -426,10 +429,13 @@ function issueOfflineLicense(options) {
   const privateKeyPath = resolvePrivateKeyPath(options.privateKeyPath);
   const { payload } = buildOfflinePayload(options);
   const license = signLicense(payload, privateKeyPath);
-  fs.writeFileSync(options.outputPath, JSON.stringify(license, null, 2), 'utf8');
+  const licenseText = JSON.stringify(license, null, 2);
+  fs.writeFileSync(options.outputPath, licenseText, 'utf8');
   return {
     outputPath: options.outputPath,
     payload,
+    licenseText,
+    licenseCode: encodeLicenseCodeFromString(licenseText),
   };
 }
 
@@ -477,7 +483,7 @@ async function main() {
   console.log('  node scripts/license-tools.js machine-fingerprint');
   console.log(`  # 私钥可通过 --private-key 传入，或设置环境变量 ${PRIVATE_KEY_ENV_PRIMARY}`);
   console.log('  node scripts/license-tools.js issue-license --private-key /path/private.pem --customer-id C001 --usb-fingerprint <fingerprint> --expire-at 2027-12-31 --output /tmp/license.dat --grace-days 3 --tier plus --billing-cycle lifetime');
-  console.log('  node scripts/license-tools.js issue-offline --private-key /path/private.pem --customer-id C001 --machine-fingerprint <fingerprint> --expire-at 2027-12-31 --output /tmp/license.dat --grace-days 3 --tier plus --billing-cycle lifetime');
+  console.log('  node scripts/license-tools.js issue-offline --private-key /path/private.pem --customer-id C001 --machine-fingerprint <fingerprint> --expire-at 2027-12-31 --output /tmp/license.dat --grace-days 3 --tier plus --billing-cycle lifetime  # 同时打印授权码');
   console.log('  node scripts/license-tools.js issue-to-usb --private-key /path/private.pem --customer-id C001 --mount-path E:\\ --expire-at 2027-12-31 --grace-days 3 --tier pro --billing-cycle lifetime');
   console.log('  node scripts/license-tools.js issue-wizard [--private-key /path/private.pem] [--tier plus|pro] [--billing-cycle lifetime]');
 }

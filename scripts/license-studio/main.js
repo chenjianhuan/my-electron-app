@@ -112,6 +112,7 @@ function registerIpc() {
     return {
       outputPath: result.outputPath,
       payload: result.payload,
+      licenseCode: result.licenseCode,
     };
   });
 }

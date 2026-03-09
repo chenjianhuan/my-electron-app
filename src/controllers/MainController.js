@@ -5,6 +5,7 @@ const path = require('path');
 const UserModel = require('../models/userModel');
 const OcrService = require('../services/OcrService');
 const AiSemanticService = require('../services/AiSemanticService');
+const VoiceInputService = require('../services/VoiceInputService');
 const WechatModel = require('../models/wechatModel');
 
 function sanitizeExportBaseName(rawName, fallbackName) {
@@ -22,6 +23,7 @@ class MainController {
     this.userModel = new UserModel(app);
     this.ocrService = new OcrService(app);
     this.aiSemanticService = new AiSemanticService(app);
+    this.voiceInputService = new VoiceInputService(app);
     this.wechatModel = new WechatModel(app, {
       getSecret: typeof options.getWechatSecret === 'function' ? options.getWechatSecret : () => '',
     });
@@ -160,6 +162,32 @@ class MainController {
           available: false,
           reason: 'rewrite_failed',
           message: error.message || '本地 AI 语义修正失败',
+        };
+      }
+    });
+
+    ipcMain.handle('voice:get-status', async (_event, payload) => {
+      try {
+        return await this.voiceInputService.getStatus(payload || {});
+      } catch (error) {
+        return {
+          ok: false,
+          available: false,
+          reason: 'status_failed',
+          message: error.message || '读取本地语音状态失败',
+        };
+      }
+    });
+
+    ipcMain.handle('voice:transcribe-audio', async (_event, payload) => {
+      try {
+        return await this.voiceInputService.transcribeAudio(payload || {});
+      } catch (error) {
+        return {
+          ok: false,
+          available: false,
+          reason: 'transcribe_failed',
+          message: error.message || '本地语音转写失败',
         };
       }
     });

@@ -22,6 +22,31 @@ function requireValue(value, label) {
   return text;
 }
 
+async function copyOfflineCode() {
+  const code = String(($('offlineLicenseCode') && $('offlineLicenseCode').value) || '').trim();
+  if (!code) {
+    throw new Error('请先签发离线授权，再复制授权码');
+  }
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    await navigator.clipboard.writeText(code);
+  } else {
+    const textarea = document.createElement('textarea');
+    textarea.value = code;
+    textarea.setAttribute('readonly', 'readonly');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    const copied = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    if (!copied) {
+      throw new Error('当前环境不支持自动复制，请手动复制授权码');
+    }
+  }
+  appendLog('已复制授权码');
+}
+
 async function loadDefaults() {
   const defaults = await window.licenseStudio.getDefaults();
   $('privateKeyPath').value = defaults.privateKeyPath || '';
@@ -104,8 +129,12 @@ async function issueOffline() {
   };
 
   const result = await window.licenseStudio.issueOffline(payload);
+  $('offlineLicenseCode').value = result.licenseCode || '';
   appendLog(`离线签发成功 -> ${result.outputPath}`);
   appendLog(`客户编号: ${result.payload.customerId} | 套餐: ${result.payload.tier} | 机器指纹: ${result.payload.machineFingerprint}`);
+  if (result.licenseCode) {
+    appendLog('已生成可直接发送给用户的授权码');
+  }
   alert(`离线授权签发成功\n${result.outputPath}`);
 }
 
@@ -114,6 +143,7 @@ function bindEvents() {
   $('pickPrivateKeyBtn').addEventListener('click', () => withErrorGuard(pickPrivateKey));
   $('pickOutputBtn').addEventListener('click', () => withErrorGuard(pickOutputPath));
   $('loadMachineFingerprintBtn').addEventListener('click', () => withErrorGuard(loadMachineFingerprint));
+  $('copyOfflineCodeBtn').addEventListener('click', () => withErrorGuard(copyOfflineCode));
   $('issueUsbBtn').addEventListener('click', () => withErrorGuard(issueUsb));
   $('issueOfflineBtn').addEventListener('click', () => withErrorGuard(issueOffline));
 }

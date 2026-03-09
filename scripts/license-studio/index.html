@@ -104,7 +104,12 @@
         <input id="offlineOutputPath" type="text" placeholder="选择 license.dat 保存位置">
         <button id="pickOutputBtn" class="secondary">选择路径</button>
       </div>
+      <div class="field">
+        <label for="offlineLicenseCode">授权码</label>
+        <textarea id="offlineLicenseCode" rows="5" placeholder="签发后会自动生成可直接发给用户的授权码" readonly></textarea>
+      </div>
       <div class="actions">
+        <button id="copyOfflineCodeBtn" class="secondary" type="button">复制授权码</button>
         <button id="issueOfflineBtn">签发离线授权文件</button>
       </div>
     </section>

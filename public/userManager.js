@@ -410,6 +410,10 @@ class UserManager {
         return 47;
     }
 
+    getSystemDefaultRebateRate() {
+        return 4;
+    }
+
     getInitialSettlementOdds(userName = '') {
         if (userName && window.messageProcessor && typeof window.messageProcessor.getEffectiveDefaultOdds === 'function') {
             const odds = Number(window.messageProcessor.getEffectiveDefaultOdds(userName));
@@ -426,12 +430,12 @@ class UserManager {
         return Number.isFinite(fallback) && fallback > 0 ? fallback : this.getSystemDefaultSettlementOdds();
     }
 
-    normalizeRebateRateValue(rawRate, fallback = 0) {
+    normalizeRebateRateValue(rawRate, fallback = this.getSystemDefaultRebateRate()) {
         const parsed = Number(rawRate);
         if (Number.isFinite(parsed) && parsed >= 0) {
             return parsed;
         }
-        return Number.isFinite(fallback) && fallback >= 0 ? fallback : 0;
+        return Number.isFinite(fallback) && fallback >= 0 ? fallback : this.getSystemDefaultRebateRate();
     }
 
     normalizePositiveDecimalInput(rawValue = '') {
@@ -478,7 +482,7 @@ class UserManager {
     getDefaultUserSettlementConfig(userName = '') {
         return {
             odds: this.getInitialSettlementOdds(userName),
-            rebateRate: 0
+            rebateRate: this.getSystemDefaultRebateRate()
         };
     }
 

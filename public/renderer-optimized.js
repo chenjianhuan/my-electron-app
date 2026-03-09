@@ -16,11 +16,20 @@ let speechVoice = null;
 let recognizeSpeechRecognition = null;
 let recognizeSpeechListening = false;
 let recognizeSpeechSupported = false;
+let recognizeSpeechTranscribing = false;
 let recognizeSpeechFinalText = '';
 let recognizeSpeechInterimText = '';
 let recognizeSpeechLastError = '';
-let recognizeSpeechDiscardOnEnd = false;
-let recognizeSpeechManualStop = false;
+let recognizeSpeechStartedAt = 0;
+let recognizeVoiceServiceStatus = {
+    checked: false,
+    available: false,
+    reason: 'unknown',
+    message: '本地语音模型检测中...',
+    model: '',
+    installHint: '',
+    loading: false
+};
 let currentLicenseStatus = null;
 let licenseLastUpdatedAt = null;
 let currentOfflineLicenseRequest = null;
@@ -103,7 +112,7 @@ const RECOGNIZE_ATTR_MAX_WIDTH_DESKTOP = 860;
 const RECOGNIZE_ATTR_MAX_WIDTH_COMPACT = 720;
 const RECOGNIZE_MESSAGE_MIN_HEIGHT_DESKTOP = 150;
 const RECOGNIZE_MESSAGE_MIN_HEIGHT_COMPACT = 132;
-const RECOGNIZE_MESSAGE_MAX_VH_RATIO = 0.38;
+const RECOGNIZE_MESSAGE_MAX_VH_RATIO = 0.78;
 const REGION_WINNING_NUMBERS_KEY = 'regionWinningNumbers.v1';
 const TELEGRAM_SUPPORT_USERNAME = '@Wffftttp';
 const TELEGRAM_SUPPORT_LINK = 'https://t.me/Wffftttp';
@@ -1263,6 +1272,7 @@ function openLicenseModal() {
     const modal = document.getElementById('licenseModal');
     if (!modal) return;
     renderLicenseStatusPanel();
+    setLicenseActivateStatus('', '');
     modal.style.display = 'block';
     refreshLicenseStatus();
 }
@@ -1278,18 +1288,86 @@ async function refreshLicenseStatus() {
         return;
     }
     try {
-        const [status, offlineRequest] = await Promise.all([
-            ipcRenderer.invoke('license:get-status'),
+        const [refreshResult, offlineRequest] = await Promise.all([
+            ipcRenderer.invoke('license:refresh-status'),
             ipcRenderer.invoke('license:build-offline-request').catch(() => null),
         ]);
         currentOfflineLicenseRequest = offlineRequest || null;
-        applyLicenseStatus(status);
+        if (refreshResult && refreshResult.accessStatus) {
+            applyAppAccessStatus(refreshResult.accessStatus);
+        }
+        applyLicenseStatus((refreshResult && refreshResult.status) || null);
+        if (refreshResult && refreshResult.ok === false) {
+            setLicenseActivateStatus(`刷新失败：${refreshResult.reason || '请重试'}`, 'error');
+        } else {
+            setLicenseActivateStatus('', '');
+        }
     } catch (error) {
         currentOfflineLicenseRequest = null;
         applyLicenseStatus({
             authorized: false,
             mode: 'blocked',
             reason: `刷新失败: ${error.message}`
+        });
+        setLicenseActivateStatus(`刷新失败：${error.message}`, 'error');
+    }
+}
+
+function setLicenseActivateStatus(message, type) {
+    const statusEl = document.getElementById('licenseActivateStatus');
+    if (!statusEl) return;
+    statusEl.textContent = message || '';
+    statusEl.classList.remove('is-success', 'is-error');
+    if (type === 'success' || type === 'error') {
+        statusEl.classList.add(`is-${type}`);
+    }
+}
+
+async function activateLicenseFromInput() {
+    const inputEl = document.getElementById('licenseActivateInput');
+    if (!inputEl) return;
+    const input = String(inputEl.value || '').trim();
+    if (!input) {
+        setLicenseActivateStatus('请先粘贴授权码或 license.dat 内容', 'error');
+        inputEl.focus();
+        return;
+    }
+    if (!ipcRenderer || typeof ipcRenderer.invoke !== 'function') {
+        setLicenseActivateStatus('IPC 不可用，请重启应用', 'error');
+        return;
+    }
+
+    const buttons = Array.from(document.querySelectorAll('#licenseModal .modal-buttons button'));
+    buttons.forEach(node => {
+        node.disabled = true;
+    });
+    inputEl.disabled = true;
+    setLicenseActivateStatus('正在校验并写入授权，请稍候...', '');
+
+    try {
+        const result = await ipcRenderer.invoke('license:activate-from-input', { input });
+        if (!result || !result.ok) {
+            setLicenseActivateStatus((result && result.reason) || '授权激活失败，请重试', 'error');
+            return;
+        }
+
+        if (result.accessStatus) {
+            applyAppAccessStatus(result.accessStatus);
+        }
+        if (result.licenseStatus) {
+            applyLicenseStatus(result.licenseStatus);
+        }
+        currentOfflineLicenseRequest = null;
+        renderLicenseOfflineAssist();
+        inputEl.value = '';
+        setLicenseActivateStatus(`授权已生效，保存位置：${result.savedPath || '-'}`, 'success');
+        showSuccess('授权激活成功');
+    } catch (error) {
+        setLicenseActivateStatus(error && error.message ? error.message : '授权激活失败，请重试', 'error');
+    } finally {
+        inputEl.disabled = false;
+        buttons.forEach(node => {
+            node.disabled = false;
         });
     }
 }
@@ -1342,7 +1420,7 @@ function renderLicenseOfflineAssist() {
     const cycleLabel = request.billingCycle ? formatBillingCycleLabel(request.billingCycle) : '-';
     const intro = currentLicenseStatus && currentLicenseStatus.authorized
         ? '如需改为离线授权，可复制下方离线授权信息发给管理员重新签发。'
-        : '当前可复制本机离线授权信息发给管理员签发。管理员返回 license.dat 后，放到下方任一路径，再点“刷新状态”或重启应用。';
+        : '当前可复制本机离线授权信息发给管理员签发。管理员返回授权码后，直接粘贴到下方输入框激活即可。';
 
     hintEl.textContent = `${intro}${machineFingerprint ? ` 设备码：${machineFingerprint}` : ''}${tierLabel ? `；当前套餐：${tierLabel}` : ''}${cycleLabel ? `；计费：${cycleLabel}` : ''}`;
 
@@ -1369,7 +1447,7 @@ function buildOfflineLicenseRequestText(request) {
         `计费周期：${payload.billingCycle ? formatBillingCycleLabel(payload.billingCycle) : '-'}`,
         `当前原因：${payload.reason || '-'}`,
         payload.platform || payload.arch ? `系统：${payload.platform || '-'} / ${payload.arch || '-'}` : '',
-        '签发说明：请按上面的设备码签发离线授权 license.dat 并回传。',
+        '签发说明：请按上面的设备码签发离线授权，并回传授权码（或 license.dat 内容）。',
     ].filter(Boolean);
 
     const importPaths = Array.isArray(payload.importPaths) ? payload.importPaths.filter(Boolean) : [];
@@ -1494,17 +1572,46 @@ async function copyPlainText(text) {
         throw new Error('没有可复制的内容');
     }
 
+    let lastError = null;
     if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(normalized);
-        return;
+        try {
+            await navigator.clipboard.writeText(normalized);
+            return;
+        } catch (error) {
+            lastError = error;
+        }
+    }
+
+    if (ipcRenderer && typeof ipcRenderer.invoke === 'function') {
+        try {
+            const result = await ipcRenderer.invoke('clipboard:write-text', { text: normalized });
+            if (result && result.ok) {
+                return;
+            }
+            throw new Error(result && result.reason ? result.reason : '写入剪贴板失败');
+        } catch (error) {
+            lastError = error;
+        }
     }
 
     const area = document.createElement('textarea');
     area.value = normalized;
+    area.setAttribute('readonly', 'readonly');
+    area.style.position = 'fixed';
+    area.style.left = '-9999px';
     document.body.appendChild(area);
     area.select();
-    document.execCommand('copy');
-    document.body.removeChild(area);
+    area.setSelectionRange(0, area.value.length);
+    try {
+        const copied = document.execCommand('copy');
+        if (copied) {
+            return;
+        }
+    } finally {
+        document.body.removeChild(area);
+    }
+
+    throw lastError || new Error('写入剪贴板失败');
 }
 
 function initLegalNotice() {
@@ -7291,15 +7398,27 @@ function syncRecognizeMessageAutoHeight() {
     const wrap = messageTextarea.closest('.message-input-wrap');
     const { minHeight, maxHeight } = getRecognizeMessageHeightBounds();
 
-    messageTextarea.style.height = 'auto';
-    const contentHeight = Math.max(minHeight, messageTextarea.scrollHeight || 0);
-    const nextHeight = Math.min(maxHeight, contentHeight);
-    messageTextarea.style.height = `${nextHeight}px`;
-    messageTextarea.style.overflowY = contentHeight > maxHeight ? 'auto' : 'hidden';
-
     if (wrap) {
         wrap.style.minHeight = `${minHeight}px`;
         wrap.style.maxHeight = `${maxHeight}px`;
+        wrap.style.height = `${minHeight}px`;
+    }
+
+    messageTextarea.style.height = 'auto';
+    const contentHeight = Math.max(minHeight, messageTextarea.scrollHeight || 0);
+    let availableHeight = minHeight;
+    if (wrap) {
+        const mainPanel = wrap.closest('.recognize-main');
+        if (mainPanel) {
+            const extraSpace = Math.max(0, mainPanel.clientHeight - mainPanel.scrollHeight);
+            availableHeight = minHeight + extraSpace;
+        }
+    }
+    const nextHeight = Math.min(maxHeight, Math.max(contentHeight, availableHeight));
+    messageTextarea.style.height = `${nextHeight}px`;
+    messageTextarea.style.overflowY = contentHeight > nextHeight ? 'auto' : 'hidden';
+
+    if (wrap) {
         wrap.style.height = `${nextHeight}px`;
     }
 }
@@ -7339,9 +7458,17 @@ function canSubmitRecognizeMessageOnEnter() {
     });
 }
 
-function getRecognizeSpeechRecognitionCtor() {
+function getRecognizeVoiceAudioContextCtor() {
     if (typeof window === 'undefined') return null;
-    return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+    return window.AudioContext || window.webkitAudioContext || null;
+}
+
+function isRecognizeVoiceRuntimeSupported() {
+    if (typeof navigator === 'undefined') return false;
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+        return false;
+    }
+    return !!getRecognizeVoiceAudioContextCtor();
 }
 
 function resetRecognizeSpeechBuffer() {
@@ -7367,11 +7494,20 @@ function getRecognizeSpeechErrorMessage(errorCode) {
     if (code === 'audio-capture') {
         return '未检测到可用麦克风，请检查设备后重试。';
     }
-    if (code === 'network') {
-        return '语音识别服务暂不可用，请检查网络后重试。';
+    if (code === 'runtime-unsupported') {
+        return '当前环境不支持本地录音。';
     }
-    if (code === 'no-speech') {
-        return '没有识别到语音，请重新说一遍。';
+    if (code === 'model-unavailable') {
+        return getRecognizeVoiceUnavailableHint(recognizeVoiceServiceStatus);
+    }
+    if (code === 'audio-too-short') {
+        return '录音太短，请稍微多说一点再停止。';
+    }
+    if (code === 'empty-result' || code === 'no-speech') {
+        return '没有识别到清晰语音，请重新说一遍。';
+    }
+    if (code === 'ipc-unavailable') {
+        return '语音录入通道不可用。';
     }
     if (code === 'aborted') {
         return '语音录入已停止。';
@@ -7379,32 +7515,131 @@ function getRecognizeSpeechErrorMessage(errorCode) {
     return code ? `语音录入失败：${code}` : '语音录入失败，请重试。';
 }
 
+function normalizeRecognizeVoiceServiceStatus(status) {
+    const safe = status && typeof status === 'object' ? status : {};
+    return {
+        checked: true,
+        available: !!safe.available,
+        reason: String(safe.reason || (safe.available ? 'ready' : 'unknown')).trim() || 'unknown',
+        message: String(safe.message || '').trim() || '本地语音模型状态未知',
+        model: String(safe.model || '').trim(),
+        installHint: String(safe.installHint || '').trim(),
+        loading: String(safe.reason || '').trim() === 'loading'
+    };
+}
+
+function getRecognizeVoiceUnavailableHint(status = {}) {
+    const reason = String(status.reason || '').trim();
+    if (reason === 'missing_files') {
+        return status.installHint || '未找到内置语音模型文件。';
+    }
+    if (reason === 'load_failed') {
+        return status.message || '内置语音模型初始化失败。';
+    }
+    if (reason === 'status_failed') {
+        return status.message || '读取本地语音状态失败。';
+    }
+    if (reason === 'unknown') {
+        return '本地语音模型状态未知，请稍后重试。';
+    }
+    return status.message || '本地语音录入暂不可用。';
+}
+
+async function refreshRecognizeVoiceStatus(options = {}) {
+    if (!ipcRenderer || typeof ipcRenderer.invoke !== 'function') {
+        recognizeVoiceServiceStatus = {
+            checked: true,
+            available: false,
+            reason: 'ipc_unavailable',
+            message: '语音录入通道不可用',
+            model: '',
+            installHint: '',
+            loading: false
+        };
+        renderRecognizeVoiceUi();
+        return recognizeVoiceServiceStatus;
+    }
+
+    recognizeVoiceServiceStatus = {
+        ...recognizeVoiceServiceStatus,
+        loading: true,
+        message: '本地语音模型检测中...'
+    };
+    renderRecognizeVoiceUi();
+
+    try {
+        const result = await ipcRenderer.invoke('voice:get-status', {
+            forceRefresh: !!(options && options.forceRefresh)
+        });
+        recognizeVoiceServiceStatus = normalizeRecognizeVoiceServiceStatus(result);
+    } catch (error) {
+        recognizeVoiceServiceStatus = {
+            checked: true,
+            available: false,
+            reason: 'status_failed',
+            message: error && error.message ? error.message : '读取本地语音状态失败',
+            model: '',
+            installHint: '',
+            loading: false
+        };
+    }
+
+    renderRecognizeVoiceUi();
+    return recognizeVoiceServiceStatus;
+}
+
+async function ensureRecognizeVoiceStatusReady(forceRefresh = false) {
+    if (!recognizeVoiceServiceStatus.checked || forceRefresh) {
+        return refreshRecognizeVoiceStatus({ forceRefresh });
+    }
+    return recognizeVoiceServiceStatus;
+}
+
 function renderRecognizeVoiceUi() {
     const button = document.getElementById('recognizeVoiceButton');
     const statusEl = document.getElementById('recognizeVoiceStatus');
-    recognizeSpeechSupported = !!getRecognizeSpeechRecognitionCtor();
+    const runtimeSupported = isRecognizeVoiceRuntimeSupported();
+    const serviceAvailable = !!(recognizeVoiceServiceStatus && recognizeVoiceServiceStatus.available);
+    recognizeSpeechSupported = runtimeSupported && serviceAvailable;
 
     if (button) {
-        button.disabled = !recognizeSpeechSupported;
-        button.classList.toggle('unsupported', !recognizeSpeechSupported);
+        const unsupported = !runtimeSupported || (recognizeVoiceServiceStatus.checked && !serviceAvailable && !recognizeSpeechListening && !recognizeSpeechTranscribing);
+        button.disabled = recognizeSpeechTranscribing || !runtimeSupported || (!serviceAvailable && !recognizeSpeechListening);
+        button.classList.toggle('unsupported', unsupported);
         button.classList.toggle('listening', recognizeSpeechListening);
-        button.textContent = recognizeSpeechListening ? '停止语音' : '语音录入';
+        button.textContent = recognizeSpeechTranscribing
+            ? '转写中...'
+            : (recognizeSpeechListening ? '停止录音' : '语音录入');
         button.setAttribute('aria-pressed', recognizeSpeechListening ? 'true' : 'false');
-        button.title = recognizeSpeechSupported ? '使用麦克风把语音转成文字' : '当前环境不支持语音录入';
+        if (recognizeSpeechTranscribing) {
+            button.title = '正在离线转写录音';
+        } else if (recognizeSpeechListening) {
+            button.title = '停止录音并开始本地转写';
+        } else if (!runtimeSupported) {
+            button.title = '当前环境不支持麦克风录音';
+        } else if (!serviceAvailable) {
+            button.title = getRecognizeVoiceUnavailableHint(recognizeVoiceServiceStatus);
+        } else {
+            button.title = '使用麦克风录音并离线转成文字';
+        }
     }
 
     if (!statusEl) return;
     statusEl.className = 'recognize-voice-status';
-    if (!recognizeSpeechSupported) {
+
+    if (!runtimeSupported) {
         statusEl.classList.add('error');
-        statusEl.textContent = '当前环境不支持语音录入。';
+        statusEl.textContent = '当前环境不支持麦克风录音。';
+        return;
+    }
+    if (recognizeSpeechTranscribing) {
+        statusEl.classList.add('listening');
+        statusEl.textContent = '录音结束，正在离线转写，请稍候...';
         return;
     }
     if (recognizeSpeechListening) {
         statusEl.classList.add('listening');
-        statusEl.textContent = recognizeSpeechInterimText
-            ? `正在听写：${recognizeSpeechInterimText}`
-            : '正在听写，请开始说话。';
+        statusEl.textContent = '正在录音，请开始说话，再次点击“停止录音”结束。';
         return;
     }
     if (recognizeSpeechLastError) {
@@ -7416,7 +7651,16 @@ function renderRecognizeVoiceUi() {
         statusEl.textContent = `已识别：${recognizeSpeechFinalText}`;
         return;
     }
-    statusEl.textContent = '语音录入可用，点击“语音录入”开始听写。';
+    if (!recognizeVoiceServiceStatus.checked || recognizeVoiceServiceStatus.loading) {
+        statusEl.textContent = recognizeVoiceServiceStatus.message || '本地语音模型检测中...';
+        return;
+    }
+    if (!serviceAvailable) {
+        statusEl.classList.add('error');
+        statusEl.textContent = getRecognizeVoiceUnavailableHint(recognizeVoiceServiceStatus);
+        return;
+    }
+    statusEl.textContent = `离线语音录入可用，点击“语音录入”开始录音${recognizeVoiceServiceStatus.model ? `（${recognizeVoiceServiceStatus.model}）` : ''}。`;
 }
 
 function appendRecognizeSpeechText(fragment) {
@@ -7431,132 +7675,365 @@ function appendRecognizeSpeechText(fragment) {
     previewMessage({ silent: true, realtime: true });
 }
 
-function ensureRecognizeSpeechRecognition() {
-    const RecognitionCtor = getRecognizeSpeechRecognitionCtor();
-    if (!RecognitionCtor) {
-        recognizeSpeechSupported = false;
-        renderRecognizeVoiceUi();
-        return null;
-    }
-    if (recognizeSpeechRecognition) {
-        return recognizeSpeechRecognition;
+function mergeRecognizeVoiceChunks(chunks) {
+    const safeChunks = Array.isArray(chunks) ? chunks.filter(item => item instanceof Float32Array && item.length > 0) : [];
+    if (!safeChunks.length) {
+        return new Float32Array();
     }
 
-    const recognition = new RecognitionCtor();
-    recognition.lang = 'zh-CN';
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.maxAlternatives = 1;
-
-    recognition.onstart = () => {
-        recognizeSpeechListening = true;
-        recognizeSpeechLastError = '';
-        renderRecognizeVoiceUi();
-    };
-
-    recognition.onresult = (event) => {
-        let interimText = '';
-        for (let i = event.resultIndex; i < event.results.length; i += 1) {
-            const result = event.results[i];
-            const transcript = normalizeRecognizeSpeechTranscript(result && result[0] ? result[0].transcript : '');
-            if (!transcript) continue;
-            if (result.isFinal) {
-                recognizeSpeechFinalText = normalizeRecognizeSpeechTranscript(`${recognizeSpeechFinalText} ${transcript}`);
-            } else {
-                interimText = normalizeRecognizeSpeechTranscript(`${interimText} ${transcript}`);
-            }
-        }
-        recognizeSpeechInterimText = interimText;
-        renderRecognizeVoiceUi();
-    };
-
-    recognition.onerror = (event) => {
-        const code = event && event.error ? String(event.error) : 'unknown';
-        if (recognizeSpeechManualStop && code === 'aborted') {
-            return;
-        }
-        recognizeSpeechLastError = code;
-        renderRecognizeVoiceUi();
-        if (code !== 'no-speech' && code !== 'aborted') {
-            showError('语音录入失败', getRecognizeSpeechErrorMessage(code));
-        }
-    };
-
-    recognition.onend = () => {
-        const shouldDiscard = recognizeSpeechDiscardOnEnd;
-        const finalText = recognizeSpeechFinalText;
-        recognizeSpeechListening = false;
-        recognizeSpeechInterimText = '';
-        recognizeSpeechDiscardOnEnd = false;
-        recognizeSpeechManualStop = false;
-
-        if (!shouldDiscard && finalText) {
-            appendRecognizeSpeechText(finalText);
-            showSuccess('语音已转成文字');
-            recognizeSpeechLastError = '';
-        } else if (!shouldDiscard && recognizeSpeechLastError === 'no-speech') {
-            showError('语音录入失败', getRecognizeSpeechErrorMessage('no-speech'));
-        }
-
-        recognizeSpeechFinalText = '';
-        renderRecognizeVoiceUi();
-    };
-
-    recognizeSpeechRecognition = recognition;
-    recognizeSpeechSupported = true;
-    return recognition;
+    const totalLength = safeChunks.reduce((sum, item) => sum + item.length, 0);
+    const merged = new Float32Array(totalLength);
+    let offset = 0;
+    safeChunks.forEach((item) => {
+        merged.set(item, offset);
+        offset += item.length;
+    });
+    return merged;
 }
 
-function startRecognizeVoiceInput() {
-    const recognition = ensureRecognizeSpeechRecognition();
-    if (!recognition) {
-        showError('语音录入不可用', '当前环境不支持语音录入。');
+function downsampleRecognizeVoiceAudio(input, inputRate, outputRate = 16000) {
+    if (!(input instanceof Float32Array) || input.length <= 0) {
+        return new Float32Array();
+    }
+    if (!Number.isFinite(inputRate) || inputRate <= 0 || inputRate === outputRate) {
+        return input.slice();
+    }
+
+    const ratio = inputRate / outputRate;
+    const newLength = Math.max(1, Math.round(input.length / ratio));
+    const output = new Float32Array(newLength);
+
+    for (let i = 0; i < newLength; i += 1) {
+        const start = Math.floor(i * ratio);
+        const end = Math.min(input.length, Math.floor((i + 1) * ratio));
+        if (end <= start) {
+            output[i] = input[Math.min(start, input.length - 1)] || 0;
+            continue;
+        }
+        let sum = 0;
+        for (let j = start; j < end; j += 1) {
+            sum += input[j];
+        }
+        output[i] = sum / (end - start);
+    }
+
+    return output;
+}
+
+function trimRecognizeVoiceAudio(input) {
+    if (!(input instanceof Float32Array) || input.length <= 0) {
+        return new Float32Array();
+    }
+
+    const threshold = 0.008;
+    const padding = 1600;
+    let start = 0;
+    let end = input.length - 1;
+
+    while (start < input.length && Math.abs(input[start]) < threshold) {
+        start += 1;
+    }
+    while (end > start && Math.abs(input[end]) < threshold) {
+        end -= 1;
+    }
+
+    if (start >= end) {
+        return input.slice();
+    }
+
+    return input.slice(Math.max(0, start - padding), Math.min(input.length, end + padding + 1));
+}
+
+async function cleanupRecognizeVoiceRecorder(session) {
+    const target = session || recognizeSpeechRecognition;
+    if (!target) return;
+
+    if (target.processor && typeof target.processor.disconnect === 'function') {
+        try {
+            target.processor.disconnect();
+        } catch (error) {}
+    }
+    if (target.source && typeof target.source.disconnect === 'function') {
+        try {
+            target.source.disconnect();
+        } catch (error) {}
+    }
+    if (target.silentGain && typeof target.silentGain.disconnect === 'function') {
+        try {
+            target.silentGain.disconnect();
+        } catch (error) {}
+    }
+    if (target.stream && typeof target.stream.getTracks === 'function') {
+        target.stream.getTracks().forEach((track) => {
+            try {
+                track.stop();
+            } catch (error) {}
+        });
+    }
+    if (target.audioContext && typeof target.audioContext.close === 'function' && target.audioContext.state !== 'closed') {
+        try {
+            await target.audioContext.close();
+        } catch (error) {}
+    }
+}
+
+function mapRecognizeVoiceStartError(error) {
+    const name = String(error && error.name ? error.name : '').trim();
+    if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+        return 'not-allowed';
+    }
+    if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+        return 'audio-capture';
+    }
+    if (name === 'NotReadableError' || name === 'TrackStartError') {
+        return 'audio-capture';
+    }
+    if (name === 'AbortError') {
+        return 'aborted';
+    }
+    return 'runtime-unsupported';
+}
+
+async function maybeEnhanceRecognizeVoiceTranscript(rawText, options = {}) {
+    const text = normalizeRecognizeSpeechTranscript(rawText);
+    if (!text) {
+        return { text: '', rewritten: false, model: '' };
+    }
+    if (!window.messageProcessor || typeof window.messageProcessor.previewMessage !== 'function') {
+        return { text, rewritten: false, model: '' };
+    }
+
+    const clientId = options && options.clientId ? String(options.clientId) : getPreviewClientId();
+    let baselinePreview = null;
+    try {
+        baselinePreview = window.messageProcessor.previewMessage(text, { clientId, allowPartial: true });
+    } catch (error) {
+        baselinePreview = null;
+    }
+
+    const baselineQuality = summarizePreviewQuality(baselinePreview);
+    const unresolvedCount = Number.isFinite(Number(baselineQuality.unresolvedCount))
+        ? Number(baselineQuality.unresolvedCount)
+        : Number.MAX_SAFE_INTEGER;
+    if (baselinePreview && baselinePreview.success && unresolvedCount === 0) {
+        return { text, rewritten: false, model: '' };
+    }
+
+    const status = await ensureLocalAiSemanticStatusReady();
+    if (!status.available) {
+        return { text, rewritten: false, model: '' };
+    }
+
+    const parserError = baselinePreview && !baselinePreview.success
+        ? String(baselinePreview.error || '').trim()
+        : (unresolvedCount > 0 && unresolvedCount !== Number.MAX_SAFE_INTEGER
+            ? `当前有 ${unresolvedCount} 行待修正`
+            : '');
+    const result = await requestLocalAiRewrite(text, {
+        source: 'voice',
+        parserError,
+        clientId,
+        rewriteMode: 'full_message'
+    });
+    if (!result || !result.ok || result.shouldApply === false) {
+        return { text, rewritten: false, model: '' };
+    }
+
+    const candidates = buildLocalAiRewriteCandidates(result).map(item => item && item.text ? item.text : '');
+    const best = pickBestLocalAiRewriteCandidate(candidates, {
+        clientId,
+        baselineQuality
+    });
+    if (!best || !best.text || !best.preview || !best.preview.success || best.improvement <= 0) {
+        return { text, rewritten: false, model: '' };
+    }
+
+    return {
+        text: best.text,
+        rewritten: best.text !== text,
+        model: result.model || ''
+    };
+}
+
+async function startRecognizeVoiceInput() {
+    if (recognizeSpeechListening || recognizeSpeechTranscribing) return;
+    if (!isRecognizeVoiceRuntimeSupported()) {
+        recognizeSpeechLastError = 'runtime-unsupported';
+        renderRecognizeVoiceUi();
+        showError('语音录入不可用', getRecognizeSpeechErrorMessage('runtime-unsupported'));
         return;
     }
-    if (recognizeSpeechListening) return;
+
+    const status = await ensureRecognizeVoiceStatusReady();
+    if (!status.available) {
+        recognizeSpeechLastError = 'model-unavailable';
+        renderRecognizeVoiceUi();
+        showError('语音录入不可用', getRecognizeVoiceUnavailableHint(status));
+        return;
+    }
 
     resetRecognizeSpeechBuffer();
-    recognizeSpeechDiscardOnEnd = false;
-    recognizeSpeechManualStop = false;
     renderRecognizeVoiceUi();
+
     try {
-        recognition.start();
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+                channelCount: 1,
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+            }
+        });
+        const AudioContextCtor = getRecognizeVoiceAudioContextCtor();
+        const audioContext = new AudioContextCtor();
+        if (audioContext.state === 'suspended' && typeof audioContext.resume === 'function') {
+            await audioContext.resume();
+        }
+
+        const source = audioContext.createMediaStreamSource(stream);
+        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+        const silentGain = audioContext.createGain();
+        silentGain.gain.value = 0;
+        const chunks = [];
+
+        processor.onaudioprocess = (event) => {
+            if (!recognizeSpeechListening) return;
+            if (!event || !event.inputBuffer || event.inputBuffer.numberOfChannels <= 0) return;
+            const channelData = event.inputBuffer.getChannelData(0);
+            if (!channelData || channelData.length <= 0) return;
+            chunks.push(new Float32Array(channelData));
+        };
+
+        source.connect(processor);
+        processor.connect(silentGain);
+        silentGain.connect(audioContext.destination);
+
+        recognizeSpeechRecognition = {
+            stream,
+            audioContext,
+            source,
+            processor,
+            silentGain,
+            chunks,
+            sampleRate: audioContext.sampleRate
+        };
+        recognizeSpeechListening = true;
+        recognizeSpeechStartedAt = Date.now();
+        recognizeSpeechLastError = '';
+        renderRecognizeVoiceUi();
     } catch (error) {
-        const message = error && error.message ? error.message : '';
-        if (/already started/i.test(message)) {
-            recognizeSpeechListening = true;
-            renderRecognizeVoiceUi();
-            return;
-        }
-        showError('语音录入失败', message || '无法启动麦克风听写');
+        recognizeSpeechLastError = mapRecognizeVoiceStartError(error);
+        await cleanupRecognizeVoiceRecorder(recognizeSpeechRecognition);
+        recognizeSpeechRecognition = null;
+        renderRecognizeVoiceUi();
+        showError('语音录入失败', getRecognizeSpeechErrorMessage(recognizeSpeechLastError));
     }
 }
 
-function stopRecognizeVoiceInput(options = {}) {
-    recognizeSpeechManualStop = true;
-    recognizeSpeechDiscardOnEnd = !!(options && options.discard);
-    if (recognizeSpeechRecognition && recognizeSpeechListening) {
-        try {
-            recognizeSpeechRecognition.stop();
-        } catch (error) {
-            recognizeSpeechListening = false;
-            renderRecognizeVoiceUi();
-        }
-        return;
-    }
-    if (recognizeSpeechDiscardOnEnd) {
-        resetRecognizeSpeechBuffer();
-    }
+async function stopRecognizeVoiceInput(options = {}) {
+    const discard = !!(options && options.discard);
+    const session = recognizeSpeechRecognition;
     recognizeSpeechListening = false;
-    renderRecognizeVoiceUi();
-}
+    recognizeSpeechInterimText = '';
+    recognizeSpeechStartedAt = 0;
 
-function toggleRecognizeVoiceInput() {
-    if (recognizeSpeechListening) {
-        stopRecognizeVoiceInput();
+    if (!session) {
+        if (discard) {
+            resetRecognizeSpeechBuffer();
+        }
+        renderRecognizeVoiceUi();
         return;
     }
-    startRecognizeVoiceInput();
+
+    recognizeSpeechRecognition = null;
+    const mergedAudio = mergeRecognizeVoiceChunks(session.chunks);
+    await cleanupRecognizeVoiceRecorder(session);
+
+    if (discard) {
+        resetRecognizeSpeechBuffer();
+        renderRecognizeVoiceUi();
+        return;
+    }
+
+    const audio16k = trimRecognizeVoiceAudio(
+        downsampleRecognizeVoiceAudio(mergedAudio, Number(session.sampleRate) || 16000, 16000)
+    );
+    if (!(audio16k instanceof Float32Array) || audio16k.length < 5600) {
+        recognizeSpeechLastError = 'audio-too-short';
+        renderRecognizeVoiceUi();
+        showError('语音录入失败', getRecognizeSpeechErrorMessage('audio-too-short'));
+        return;
+    }
+
+    recognizeSpeechTranscribing = true;
+    renderRecognizeVoiceUi();
+
+    try {
+        if (!ipcRenderer || typeof ipcRenderer.invoke !== 'function') {
+            recognizeSpeechLastError = 'ipc-unavailable';
+            throw new Error(getRecognizeSpeechErrorMessage('ipc-unavailable'));
+        }
+
+        const payload = {
+            audioBuffer: audio16k.buffer.slice(0),
+            sampleRate: 16000
+        };
+        const result = await ipcRenderer.invoke('voice:transcribe-audio', payload);
+        if (!result || !result.ok) {
+            if (result && typeof result === 'object') {
+                recognizeVoiceServiceStatus = normalizeRecognizeVoiceServiceStatus(result);
+            }
+            const reason = result && result.reason ? String(result.reason) : 'transcribe_failed';
+            if (reason === 'audio_too_short') {
+                recognizeSpeechLastError = 'audio-too-short';
+            } else if (reason === 'empty_result') {
+                recognizeSpeechLastError = 'empty-result';
+            } else {
+                recognizeSpeechLastError = result && result.available === false ? 'model-unavailable' : 'transcribe_failed';
+            }
+            throw new Error(result && result.message ? result.message : '本地语音转写失败');
+        }
+
+        const transcript = normalizeRecognizeSpeechTranscript(result.text || '');
+        if (!transcript) {
+            recognizeSpeechLastError = 'empty-result';
+            throw new Error(getRecognizeSpeechErrorMessage('empty-result'));
+        }
+
+        const enhanced = await maybeEnhanceRecognizeVoiceTranscript(transcript, {
+            clientId: getPreviewClientId()
+        });
+        const finalText = normalizeRecognizeSpeechTranscript(enhanced && enhanced.text ? enhanced.text : transcript);
+        if (!finalText) {
+            recognizeSpeechLastError = 'empty-result';
+            throw new Error(getRecognizeSpeechErrorMessage('empty-result'));
+        }
+
+        recognizeSpeechFinalText = finalText;
+        recognizeSpeechLastError = '';
+        appendRecognizeSpeechText(finalText);
+        showSuccess(enhanced && enhanced.rewritten
+            ? `语音已转成文字，并已用本地AI修正${enhanced.model ? `（${enhanced.model}）` : ''}`
+            : '语音已转成文字');
+        void refreshRecognizeVoiceStatus();
+    } catch (error) {
+        if (!recognizeSpeechLastError) {
+            recognizeSpeechLastError = 'transcribe_failed';
+        }
+        renderRecognizeVoiceUi();
+        showError('语音录入失败', error && error.message ? error.message : getRecognizeSpeechErrorMessage(recognizeSpeechLastError));
+    } finally {
+        recognizeSpeechTranscribing = false;
+        renderRecognizeVoiceUi();
+    }
+}
+
+async function toggleRecognizeVoiceInput() {
+    if (recognizeSpeechListening) {
+        await stopRecognizeVoiceInput();
+        return;
+    }
+    await startRecognizeVoiceInput();
 }
 
 function setupRecognizeMessageInput() {
@@ -7633,6 +8110,7 @@ function setupRecognizeMessageInput() {
     }
     document.addEventListener('paste', handleGlobalOcrPaste, true);
     renderRecognizeVoiceUi();
+    void refreshRecognizeVoiceStatus();
 
     syncRecognizeMessageAutoHeight();
     renderMessageLineNumbers();
@@ -11425,6 +11903,7 @@ function openModal(modalType, options = {}) {
         syncPlanCapabilityUI();
         refreshClipboardMonitorState();
         renderRecognizeVoiceUi();
+        void refreshRecognizeVoiceStatus();
         ensureAnchorGuideVisibleWhenRecognizeOpen();
         requestAnimationFrame(() => {
             ensureRecognizeAttrWidth();
@@ -12481,7 +12960,7 @@ async function confirmEdit() {
 }
 
 // 复制客户端数据
-function copyClientData() {
+async function copyClientData() {
     try {
         const scoped = collectCurrentLotteryScopeData();
         if (!scoped.ok) {
@@ -12490,17 +12969,8 @@ function copyClientData() {
         }
 
         const copyContent = generateCopyContent(scoped.scopeData);
-        navigator.clipboard.writeText(copyContent).then(() => {
-            showSuccess('数据已复制到剪贴板');
-        }).catch(() => {
-            const textArea = document.createElement('textarea');
-            textArea.value = copyContent;
-            document.body.appendChild(textArea);
-            textArea.select();
-            document.execCommand('copy');
-            document.body.removeChild(textArea);
-            showSuccess('数据已复制到剪贴板');
-        });
+        await copyPlainText(copyContent);
+        showSuccess('数据已复制到剪贴板');
     } catch (error) {
         showError('复制失败', error.message);
     }
@@ -12991,7 +13461,7 @@ function calculateHedgeReport() {
     }
 }
 
-function copyHedgeReportMessage() {
+async function copyHedgeReportMessage() {
     const messageEl = document.getElementById('hedgeReportMessage');
     const text = messageEl ? String(messageEl.value || '').trim() : '';
     if (!text) {
@@ -12999,22 +13469,12 @@ function copyHedgeReportMessage() {
         return;
     }
 
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(() => {
-            showSuccess('上报消息已复制');
-        }).catch(() => {
-            showError('复制失败', '请重试');
-        });
-        return;
+    try {
+        await copyPlainText(text);
+        showSuccess('上报消息已复制');
+    } catch (error) {
+        showError('复制失败', error && error.message ? error.message : '请重试');
     }
-
-    const area = document.createElement('textarea');
-    area.value = text;
-    document.body.appendChild(area);
-    area.select();
-    document.execCommand('copy');
-    document.body.removeChild(area);
-    showSuccess('上报消息已复制');
 }
 
 function buildGroupedByValueRows(data = []) {
@@ -13954,6 +14414,7 @@ window.closePasswordChangeModal = closePasswordChangeModal;
 window.submitPasswordChange = submitPasswordChange;
 window.openLicenseModal = openLicenseModal;
 window.closeLicenseModal = closeLicenseModal;
+window.activateLicenseFromInput = activateLicenseFromInput;
 window.refreshLicenseStatus = refreshLicenseStatus;
 window.openPlanModal = openPlanModal;
 window.closePlanModal = closePlanModal;
