@@ -1907,6 +1907,7 @@ textarea#message {
   height: 100%;
   resize: none;
   overflow-y: auto;
+  overscroll-behavior: contain;
   line-height: 1.5;
   position: relative;
   z-index: 1;

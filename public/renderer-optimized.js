@@ -7433,31 +7433,18 @@ function syncRecognizeMessageAutoHeight() {
     const messageTextarea = document.getElementById('message');
     if (!messageTextarea) return;
     const wrap = messageTextarea.closest('.message-input-wrap');
-    const { minHeight, maxHeight } = getRecognizeMessageHeightBounds();
+    const { minHeight } = getRecognizeMessageHeightBounds();
 
     if (wrap) {
         wrap.style.minHeight = `${minHeight}px`;
-        wrap.style.maxHeight = `${maxHeight}px`;
-        wrap.style.height = `${minHeight}px`;
+        wrap.style.removeProperty('max-height');
+        wrap.style.removeProperty('height');
     }
 
-    messageTextarea.style.height = 'auto';
-    const contentHeight = Math.max(minHeight, messageTextarea.scrollHeight || 0);
-    let availableHeight = minHeight;
-    if (wrap) {
-        const mainPanel = wrap.closest('.recognize-main');
-        if (mainPanel) {
-            const extraSpace = Math.max(0, mainPanel.clientHeight - mainPanel.scrollHeight);
-            availableHeight = minHeight + extraSpace;
-        }
-    }
-    const nextHeight = Math.min(maxHeight, Math.max(contentHeight, availableHeight));
-    messageTextarea.style.height = `${nextHeight}px`;
-    messageTextarea.style.overflowY = contentHeight > nextHeight ? 'auto' : 'hidden';
-
-    if (wrap) {
-        wrap.style.height = `${nextHeight}px`;
-    }
+    messageTextarea.style.removeProperty('min-height');
+    messageTextarea.style.removeProperty('max-height');
+    messageTextarea.style.removeProperty('height');
+    messageTextarea.style.overflowY = 'auto';
 }
 
 function canSubmitRecognizeMessageOnEnter() {
@@ -12646,7 +12633,12 @@ function buildRecognizePreviewGroupedRows(result, rawValue) {
 
     return {
         countedRows: buildEntryRows(Array.isArray(result && result.entries) ? result.entries : [], 'counted'),
-        playRows: buildEntryRows(Array.isArray(result && result.playEntries) ? result.playEntries : [], 'play'),
+        playRows: buildEntryRows(
+            Array.isArray(result && result.playEntries)
+                ? result.playEntries.filter(entry => !(entry && entry.blocking))
+                : [],
+            'play'
+        ),
         blockedRows: buildIssueRows(Array.isArray(result && result.blockingUnresolvedLines) ? result.blockingUnresolvedLines : [], 'blocked'),
         ignoredRows: buildIssueRows(Array.isArray(result && result.ignoredUnresolvedLines) ? result.ignoredUnresolvedLines : [], 'ignored')
     };
@@ -12737,7 +12729,7 @@ function buildRecognizePreviewHtml(previewResult, rawValue) {
         {
             title: '待人工处理',
             note: '这些内容当前不会入账。请先看建议并处理后，再重新预览。',
-            countLabel: `${Number(summary.blockedCount) || 0} 行`,
+            countLabel: `${Number(summary.blockedCount) || 0} 条`,
             tone: 'blocked',
             rowsHtml: renderRecognizePreviewGroupedCompareRows(groupedRows.blockedRows, 'blocked'),
             rightHeader: '处理建议',
@@ -12796,7 +12788,7 @@ function buildRecognizePreviewHtml(previewResult, rawValue) {
                 <div class="parse-issue-head">
                     <span class="parse-issue-badge blocking">当前消息${blockedBadgeText}</span>
                 </div>
-                <div class="parse-issue-message">当前仍有 ${blockingUnresolvedLines.length} 行待人工处理，已阻止${confirmActionVerb}。${escapeHtml(blockedLineSummaryText)}${blockedReasonSummaryText ? `<br>原因：${escapeHtml(blockedReasonSummaryText)}` : ''}</div>
+                <div class="parse-issue-message">当前存在 ${blockingUnresolvedLines.length} 条被拦截内容，已阻止${confirmActionVerb}。${escapeHtml(blockedLineSummaryText)}${blockedReasonSummaryText ? `<br>原因：${escapeHtml(blockedReasonSummaryText)}` : ''}</div>
                 ${firstBlockedLineNo
                     ? `
                         <div class="parse-issue-actions">
@@ -12894,15 +12886,17 @@ async function previewMessage(options = {}) {
         const blockingUnresolvedLines = Array.isArray(previewResult.result && previewResult.result.blockingUnresolvedLines)
             ? previewResult.result.blockingUnresolvedLines.filter(Boolean)
             : [];
-        if (unresolvedLines.length > 0) {
-            setMessageLineErrors(unresolvedLines.map(item => item.lineNo).filter(lineNo => Number.isFinite(Number(lineNo))));
-            if (blockingUnresolvedLines.length > 0) {
-                setRecognizePreviewBlocked(true);
-                setRecognizePreviewError(`当前消息${getRecognizeBlockedBadgeText()}：仍有 ${blockingUnresolvedLines.length} 行待人工处理`);
-            } else {
-                setRecognizePreviewBlocked(false);
-                setRecognizePreviewError(`已忽略 ${unresolvedLines.length} 行暂未识别内容`);
-            }
+        const issueLineNos = Array.from(new Set([
+            ...blockingUnresolvedLines.map(item => item && item.lineNo),
+            ...unresolvedLines.map(item => item && item.lineNo)
+        ].filter(lineNo => Number.isFinite(Number(lineNo)))));
+        setMessageLineErrors(issueLineNos);
+        if (blockingUnresolvedLines.length > 0) {
+            setRecognizePreviewBlocked(true);
+            setRecognizePreviewError(`当前消息${getRecognizeBlockedBadgeText()}：存在 ${blockingUnresolvedLines.length} 条被拦截内容`);
+        } else if (unresolvedLines.length > 0) {
+            setRecognizePreviewBlocked(false);
+            setRecognizePreviewError(`已忽略 ${unresolvedLines.length} 行暂未识别内容`);
         } else {
             setRecognizePreviewBlocked(false);
             setRecognizePreviewError('');
@@ -12956,11 +12950,11 @@ async function confirmEdit() {
                 ? previewResult.result.blockingUnresolvedLines.filter(Boolean)
                 : [];
             if (blockingUnresolvedLines.length > 0) {
-                const blockedMessage = `当前消息不可保存：仍有 ${blockingUnresolvedLines.length} 行待人工处理`;
+                const blockedMessage = `当前消息不可保存：存在 ${blockingUnresolvedLines.length} 条被拦截内容`;
                 setRecognizePreviewBlocked(true);
                 setRecognizePreviewError(blockedMessage);
                 renderInlineParseError(blockedMessage, { context: 'confirm', clientId: userName });
-                showError('确认失败', `${userName}: 仍有 ${blockingUnresolvedLines.length} 行疑似录入条目内容未识别，已阻止保存`);
+                showError('确认失败', `${userName}: 存在 ${blockingUnresolvedLines.length} 条被拦截内容，已阻止保存`);
                 return;
             }
             const originalMessageForStorage = messageTextarea
@@ -13889,6 +13883,7 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
     const computablePnlRows = rowsWithWinning.filter(item => Number.isFinite(item.pnl));
     const unresolvedPnlRows = rowsWithWinning.length - computablePnlRows.length;
     const totalOrderForPnl = computablePnlRows.reduce((sum, item) => sum + (Number(item.orderTotal) || 0), 0);
+    const totalHitStakeForPnl = computablePnlRows.reduce((sum, item) => sum + (Number(item.hitStake) || 0), 0);
     const totalRebateForPnl = computablePnlRows.reduce((sum, item) => sum + (Number(item.rebate) || 0), 0);
     const totalPayoutForPnl = computablePnlRows.reduce((sum, item) => sum + (Number(item.payout) || 0), 0);
     const totalPnl = computablePnlRows.reduce((sum, item) => sum + (Number(item.pnl) || 0), 0);
@@ -13911,10 +13906,12 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
 
     const originalRowsHtml = exportOriginalRows.length > 0
         ? exportOriginalRows.map((item) => {
+            const hitStake = Number(item.hitStake);
             const payout = Number(item.payout);
             const rebate = Number(item.rebate);
             const pnl = Number(item.pnl);
             const totalText = Number.isFinite(item.orderTotal) ? formatNumericAmount(item.orderTotal) : '-';
+            const hitText = Number.isFinite(hitStake) ? formatNumericAmount(hitStake) : '-';
             const oddsText = Number.isFinite(item.odds) ? formatNumericAmount(item.odds) : '-';
             const rebateText = Number.isFinite(rebate) ? formatNumericAmount(rebate) : '-';
             const payoutText = Number.isFinite(payout) ? formatNumericAmount(payout) : '-';
@@ -13933,6 +13930,7 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
                 <td style="text-align:right">${escapeHtml(item.winningNumber || '-')}</td>
                 <td class="${bankerOutcomeClass}">${escapeHtml(item.bankerOutcome || '-')}</td>
                 <td style="text-align:right">${escapeHtml(totalText)}</td>
+                <td style="text-align:right">${escapeHtml(hitText)}</td>
                 <td style="text-align:right">${escapeHtml(oddsText)}</td>
                 <td style="text-align:right">${escapeHtml(rebateText)}</td>
                 <td style="text-align:right">${escapeHtml(payoutText)}</td>
@@ -13941,13 +13939,14 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
             </tr>
         `;
         }).join('')
-        : '<tr><td colspan="11">暂无原始消息</td></tr>';
+        : '<tr><td colspan="12">暂无原始消息</td></tr>';
 
     const originalSummaryRowHtml = hasWinningRows
         ? `
             <tr class="summary-row">
                 <td colspan="5">汇总合计（${escapeHtml(`${computablePnlRows.length}/${rowsWithWinning.length}`)}）</td>
                 <td style="text-align:right">${escapeHtml(computablePnlRows.length > 0 ? formatNumericAmount(totalOrderForPnl) : '-')}</td>
+                <td style="text-align:right">${escapeHtml(computablePnlRows.length > 0 ? formatNumericAmount(totalHitStakeForPnl) : '-')}</td>
                 <td style="text-align:right">-</td>
                 <td style="text-align:right">${escapeHtml(computablePnlRows.length > 0 ? formatNumericAmount(totalRebateForPnl) : '-')}</td>
                 <td style="text-align:right">${escapeHtml(computablePnlRows.length > 0 ? formatNumericAmount(totalPayoutForPnl) : '-')}</td>
@@ -14027,13 +14026,13 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
     <tbody>${detailRowsHtml}</tbody>
   </table>
 
-  <h2>原始消息结算明细（结算视角）</h2>
-  <table>
-    <thead>
-      <tr><th>序号</th><th>客户</th><th>区域</th><th>中奖号</th><th>结果状态</th><th>本条总注</th><th>结算倍率</th><th>本条返利</th><th>本条结果支出</th><th>本条结果</th><th>内容</th></tr>
-    </thead>
-    <tbody>${originalRowsHtml}${originalSummaryRowHtml}</tbody>
-  </table>
+	  <h2>原始消息结算明细（结算视角）</h2>
+	  <table>
+	    <thead>
+	      <tr><th>序号</th><th>客户</th><th>区域</th><th>中奖号</th><th>结果状态</th><th>本条总注</th><th>本条命中</th><th>结算倍率</th><th>本条返利</th><th>本条结果支出</th><th>本条结果</th><th>内容</th></tr>
+	    </thead>
+	    <tbody>${originalRowsHtml}${originalSummaryRowHtml}</tbody>
+	  </table>
 </body>
 </html>`;
 }

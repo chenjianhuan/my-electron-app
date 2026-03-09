@@ -2,7 +2,7 @@ directories:
   output: dist
   buildResources: build
 appId: com.messagecounter.app
-productName: MessageCounter
+productName: 古典小说阅读器
 asar: true
 files:
   - filter:
@@ -16,10 +16,13 @@ mac:
     - dmg
     - zip
   icon: public/icon.icns
+  extendInfo:
+    NSMicrophoneUsageDescription: 语音录入需要使用麦克风，把语音转成文字消息。
+    NSSpeechRecognitionUsageDescription: 语音录入需要语音识别权限，把说话内容转成文字消息。
+  identity: null
 win:
   target:
     - nsis
-    - zip
   signAndEditExecutable: false
 nsis:
   oneClick: false
@@ -29,4 +32,19 @@ extraResources:
     to: public
     filter:
       - '**/*'
-electronVersion: 25.9.8
+  - from: keys/
+    to: keys
+    filter:
+      - license-public.pem
+  - from: assets/ocr/
+    to: ocr
+    filter:
+      - '**/*'
+  - from: assets/ai/
+    to: ai
+    filter:
+      - '**/*'
+publish:
+  - provider: github
+    releaseType: release
+electronVersion: 27.3.11

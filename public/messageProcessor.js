@@ -3035,7 +3035,8 @@ class MessageProcessor {
             playFamily: String(entry.playFamily || '').trim(),
             playLabel: String(entry.playLabel || '未开放玩法').trim(),
             playStatus: 'blocked',
-            blockReason: '当前玩法未开放，不参与号码统计',
+            blockReason: String(entry.blockReason || '当前玩法未开放，不参与号码统计').trim(),
+            blocking: entry.blocking === true || this.isBlockingPlayEntry(entry),
             rawText: String(entry.rawText || '').trim(),
             displayText,
             regionKey,
@@ -3047,10 +3048,27 @@ class MessageProcessor {
         };
     }
 
+    isBlockingPlayEntry(entry = {}) {
+        if (!entry || typeof entry !== 'object') return false;
+        if (entry.blocking === true) return true;
+        return String(entry.playType || '').trim() === 'pingte_xiao';
+    }
+
+    buildBlockingIssueFromPlayEntry(entry = {}) {
+        return {
+            lineNo: Number.isFinite(Number(entry && entry.lineNo)) ? Number(entry.lineNo) : null,
+            rawText: String(entry && (entry.displayText || entry.rawText || entry.canonical) ? (entry.displayText || entry.rawText || entry.canonical) : '').trim(),
+            reason: String(entry && (entry.blockReason || entry.playLabel || entry.playType || '未开放玩法') ? (entry.blockReason || entry.playLabel || entry.playType || '未开放玩法') : '未开放玩法').trim()
+        };
+    }
+
     parseBlockedPingPlaySegment(segment) {
         const gapPattern = `[\\s,，。．；;:：~～\\-—_/\\\\#*'"$￥¥!！?？]*`;
         const amountPattern = '[0-9]+(?:[.．。][0-9]+)?|[零〇一二两三四五六七八九十百千万]+';
         const rawSegmentText = String(segment && segment.text ? segment.text : '').trim();
+        const animalPattern = '[鼠牛虎兔龙蛇马羊猴鸡狗猪]';
+        const inlineAnchorPattern = this.buildAnchorTokenPattern();
+        const amountSuffixPattern = this.buildAmountSuffixPattern({ includeGeneric: true });
         const candidateTexts = Array.from(new Set([
             this.stripTrailingSummaryTail(rawSegmentText),
             this.stripTrailingSummaryTailForSpecialPlay(rawSegmentText),
@@ -3058,31 +3076,41 @@ class MessageProcessor {
         ].map(item => String(item || '').trim()).filter(Boolean)));
 
         for (const rawText of candidateTexts) {
-            if (!rawText || this.containsConfiguredAnchor(rawText)) continue;
+            if (!rawText) continue;
             const normalizedText = String(rawText || '')
                 .replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 65248))
                 .trim();
             if (!normalizedText) continue;
+            const compactText = normalizedText
+                .replace(/[\s,，。．；;:：~～\-—_/\\#*'"$￥¥!！?？]+/g, '')
+                .trim();
 
             let matchedDefinition = null;
-            let animalToken = '';
+            let targetToken = '';
             let amount = NaN;
 
             for (const definition of this.getBlockedPingPlayDefinitions()) {
-                const suffixPattern = this.buildAmountSuffixPattern({ includeGeneric: true });
-                const pattern = new RegExp(
-                    `^${this.escapeRegex(definition.token)}${gapPattern}([鼠牛虎兔龙蛇马羊猴鸡狗猪])${gapPattern}(${amountPattern})${suffixPattern ? `(?:\\s*(?:${suffixPattern}))?` : ''}${gapPattern}$`,
+                const tokenPattern = this.escapeRegex(definition.token);
+                const singleTargetPattern = new RegExp(
+                    `^${tokenPattern}${gapPattern}(${animalPattern})${gapPattern}(${amountPattern})${amountSuffixPattern ? `(?:\\s*(?:${amountSuffixPattern}))?` : ''}${gapPattern}$`,
                     'u'
                 );
-                const match = normalizedText.match(pattern);
+                const multiTargetPattern = new RegExp(
+                    `^${tokenPattern}((?:${animalPattern})+)(?:${inlineAnchorPattern})?(${amountPattern})(?:${amountSuffixPattern})?$`,
+                    'u'
+                );
+                const match = normalizedText.match(singleTargetPattern)
+                    || compactText.match(multiTargetPattern);
                 if (!match) continue;
-                animalToken = String(match[1] || '').trim();
+                targetToken = String(match[1] || '').trim();
                 try {
                     amount = this.parseFlexibleAmount(match[2]);
                 } catch (error) {
                     amount = NaN;
                 }
-                if (!animalToken || !this.animalMap[animalToken] || !Number.isFinite(amount) || amount <= 0) {
+                const hasValidAnimalTarget = targetToken
+                    && Array.from(targetToken).every(token => !!this.animalMap[token]);
+                if (!hasValidAnimalTarget || !Number.isFinite(amount) || amount <= 0) {
                     matchedDefinition = null;
                     break;
                 }
@@ -3102,6 +3130,31 @@ class MessageProcessor {
                 lineNo: segment.lineNo || null,
                 segmentNo: segment.segmentNo || null
             });
+        }
+
+        for (const rawText of candidateTexts) {
+            if (!rawText) continue;
+            const normalizedText = String(rawText || '')
+                .replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 65248))
+                .trim();
+            const compactText = normalizedText
+                .replace(/[\s,，。．；;:：~～\-—_/\\#*'"$￥¥!！?？]+/g, '')
+                .trim();
+            if (!compactText) continue;
+            for (const definition of this.getBlockedPingPlayDefinitions()) {
+                if (!compactText.includes(String(definition.token || '').trim())) continue;
+                return this.buildBlockedPlayEntry({
+                    playType: definition.playType,
+                    playFamily: 'ping',
+                    playLabel: definition.playLabel,
+                    rawText: rawSegmentText,
+                    displayText: normalizedText,
+                    blockReason: '命中特平特类关键词，已按未开放玩法拦截',
+                    regionKey: segment.regionKey || this.getDefaultRegionKey(),
+                    lineNo: segment.lineNo || null,
+                    segmentNo: segment.segmentNo || null
+                });
+            }
         }
 
         return null;
@@ -5094,7 +5147,28 @@ class MessageProcessor {
             }
             const blockedPlayEntries = Array.isArray(parsedMessage.playEntries) ? parsedMessage.playEntries : [];
             const unresolvedLines = Array.isArray(parsedMessage.unresolvedLines) ? parsedMessage.unresolvedLines : [];
-            const blockingUnresolvedLines = this.getBlockingUnresolvedLines(unresolvedLines);
+            const blockingPlayIssues = blockedPlayEntries
+                .filter(entry => this.isBlockingPlayEntry(entry))
+                .map(entry => this.buildBlockingIssueFromPlayEntry(entry));
+            const blockingUnresolvedLines = [
+                ...blockingPlayIssues,
+                ...this.getBlockingUnresolvedLines(unresolvedLines)
+            ];
+            if (blockingPlayIssues.length > 0) {
+                const previewText = blockedPlayEntries
+                    .slice(0, 2)
+                    .map(entry => String(entry && (entry.displayText || entry.rawText) ? (entry.displayText || entry.rawText) : '').trim())
+                    .filter(Boolean)
+                    .join(' / ');
+                const blockingPlayError = new Error(previewText
+                    ? `检测到未开放玩法：${previewText}`
+                    : '检测到未开放玩法，已阻止自动入账');
+                blockingPlayError.code = 'BLOCKING_UNSUPPORTED_PLAY';
+                blockingPlayError.playEntries = blockedPlayEntries;
+                blockingPlayError.unresolvedLines = unresolvedLines;
+                blockingPlayError.blockingUnresolvedLines = blockingUnresolvedLines;
+                throw blockingPlayError;
+            }
             if (parsedMessage.entries.length === 0 && blockedPlayEntries.length > 0) {
                 const previewText = blockedPlayEntries
                     .slice(0, 2)
@@ -5288,6 +5362,7 @@ class MessageProcessor {
     buildPreviewSummary(payload = {}) {
         const entries = Array.isArray(payload.entries) ? payload.entries.filter(Boolean) : [];
         const playEntries = Array.isArray(payload.playEntries) ? payload.playEntries.filter(Boolean) : [];
+        const nonBlockingPlayEntries = playEntries.filter(entry => !this.isBlockingPlayEntry(entry));
         const unresolvedLines = Array.isArray(payload.unresolvedLines) ? payload.unresolvedLines.filter(Boolean) : [];
         const blockingUnresolvedLines = Array.isArray(payload.blockingUnresolvedLines)
             ? payload.blockingUnresolvedLines.filter(Boolean)
@@ -5302,9 +5377,9 @@ class MessageProcessor {
         let status = 'empty_or_noise';
         if (blockingUnresolvedLines.length > 0) {
             status = 'blocked';
-        } else if (entries.length > 0 && playEntries.length === 0 && ignoredUnresolvedLines.length === 0) {
+        } else if (entries.length > 0 && nonBlockingPlayEntries.length === 0 && ignoredUnresolvedLines.length === 0) {
             status = 'complete';
-        } else if (entries.length === 0 && playEntries.length > 0 && ignoredUnresolvedLines.length === 0) {
+        } else if (entries.length === 0 && nonBlockingPlayEntries.length > 0 && ignoredUnresolvedLines.length === 0) {
             status = 'play_only';
         } else if (entries.length > 0 || playEntries.length > 0 || ignoredUnresolvedLines.length > 0 || unresolvedLines.length > 0) {
             status = 'partial';
@@ -5319,7 +5394,7 @@ class MessageProcessor {
         };
 
         const issues = [];
-        playEntries.forEach((entry) => {
+        nonBlockingPlayEntries.forEach((entry) => {
             issues.push({
                 kind: 'play',
                 lineNo: Number.isFinite(Number(entry && entry.lineNo)) ? Number(entry.lineNo) : null,
@@ -5349,7 +5424,7 @@ class MessageProcessor {
             statusLabel: statusLabelMap[status] || '部分统计',
             countedEntryCount: entries.length,
             countedAmount,
-            playCount: playEntries.length,
+            playCount: nonBlockingPlayEntries.length,
             blockedCount: blockingUnresolvedLines.length,
             ignoredCount: ignoredUnresolvedLines.length,
             unresolvedCount: unresolvedLines.length,
@@ -5400,6 +5475,7 @@ class MessageProcessor {
                     playFamily: String(entry && entry.playFamily ? entry.playFamily : '').trim(),
                     playLabel: String(entry && entry.playLabel ? entry.playLabel : '').trim(),
                     playStatus: String(entry && entry.playStatus ? entry.playStatus : 'blocked').trim(),
+                    blocking: !!(entry && entry.blocking),
                     blockReason: String(entry && entry.blockReason ? entry.blockReason : '').trim(),
                     rawText: String(entry && entry.rawText ? entry.rawText : '').trim(),
                     displayText: String(entry && entry.displayText ? entry.displayText : '').trim(),
@@ -5418,7 +5494,13 @@ class MessageProcessor {
                     return Number.isFinite(value) ? sum + value : sum;
                 }, 0);
                 const unresolvedLines = Array.isArray(parsedMessage.unresolvedLines) ? parsedMessage.unresolvedLines : [];
-                const blockingUnresolvedLines = this.getBlockingUnresolvedLines(unresolvedLines);
+                const blockingPlayIssues = playResultEntries
+                    .filter(entry => this.isBlockingPlayEntry(entry))
+                    .map(entry => this.buildBlockingIssueFromPlayEntry(entry));
+                const blockingUnresolvedLines = [
+                    ...blockingPlayIssues,
+                    ...this.getBlockingUnresolvedLines(unresolvedLines)
+                ];
                 const blockingIssueKeys = new Set(blockingUnresolvedLines.map((issue) => this.buildPreviewIssueKey(issue)));
                 const ignoredUnresolvedLines = unresolvedLines.filter((issue) => !blockingIssueKeys.has(this.buildPreviewIssueKey(issue)));
                 const summary = this.buildPreviewSummary({
