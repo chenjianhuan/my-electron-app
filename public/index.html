@@ -69,12 +69,6 @@
                             <div id="regionPnlRows" class="region-pnl-rows"></div>
                         </div>
                     </div>
-                    <div class="right-column-body">
-                        <div class="rank-list-head">
-                            <h2 id="sortedResultsTitle">号码累计排行</h2>
-                        </div>
-                        <ul id="sortedResults"></ul>
-                    </div>
                 </section>
 
                 <div id="rightColumnsResizer" class="main-page-resizer main-page-resizer-inner" role="separator" aria-orientation="vertical" aria-label="调整右侧双列宽度"></div>
@@ -103,18 +97,25 @@
             </div>
         </section>
 
-        <div id="mainResizerMiddle" class="main-page-resizer" role="separator" aria-orientation="vertical" aria-label="调整统计区与号码总览宽度"></div>
+        <div id="mainResizerMiddle" class="main-page-resizer" role="separator" aria-orientation="vertical" aria-label="调整统计区与号码视图宽度"></div>
 
         <section class="left-side panel-shell">
-            <div class="zodiac-compare-grid zodiac-single-grid">
-                <section class="zodiac-panel">
-                    <div class="subpanel-shell panel-shell">
-                        <div class="subpanel-head">
-                            <h3 id="currentUser">号码总览：未选择客户</h3>
-                        </div>
+            <div class="subpanel-shell panel-shell number-view-shell">
+                <div class="subpanel-head number-view-head">
+                    <h3 id="numberPanelTitle">号码累计排行</h3>
+                    <div class="number-view-switcher" role="group" aria-label="号码视图切换">
+                        <button id="numberViewSortedBtn" type="button" class="region-chip active" onclick="userManager.setNumberViewMode('sorted')">号码累计</button>
+                        <button id="numberViewOverviewBtn" type="button" class="region-chip" onclick="userManager.setNumberViewMode('overview')">生肖总览</button>
+                    </div>
+                </div>
+                <div class="number-view-body">
+                    <div id="numberSortedView" class="number-view-panel">
+                        <div id="sortedResults" class="number-ranking-shell"></div>
+                    </div>
+                    <div id="numberOverviewView" class="number-view-panel" hidden>
                         <div class="section" id="section1"></div>
                     </div>
-                </section>
+                </div>
             </div>
         </section>
     </div>
@@ -136,6 +137,10 @@
                             <span>输入后自动识别，右侧实时核对标准格式。</span>
                             <div class="recognize-inline-action-buttons">
                                 <button id="recognizeVoiceButton" class="edit-button recognize-voice-toggle" type="button" onclick="toggleRecognizeVoiceInput()" aria-pressed="false">语音录入</button>
+                                <div class="recognize-input-mode-toggle" role="group" aria-label="输入模式">
+                                    <button id="recognizeInputModeFormatted" class="recognize-input-mode-button" type="button" onclick="setRecognizeInputMode('formatted')">格式输入</button>
+                                    <button id="recognizeInputModeFree" class="recognize-input-mode-button" type="button" onclick="setRecognizeInputMode('free')">自由输入</button>
+                                </div>
                                 <button id="toggleAttributePanelBtn" class="edit-button recognize-attr-toggle" type="button" onclick="toggleRecognizeAttributePanel()">隐藏属性面板</button>
                             </div>
                         </div>
@@ -448,9 +453,9 @@
                             </button>
                             <div id="recognizeGroupNoiseBody" class="recognize-side-group-body">
                                 <input id="noiseRuleScope" type="hidden" value="global">
-                                <div class="anchor-console-card">
-                                    <div class="anchor-alias-title">新增噪音规则</div>
-                                    <div class="anchor-alias-subtitle">适合忽略尾部摘要、统计尾巴等无须入账的片段。支持固定文本，也支持 `{金额}` 模板，例如：`共{金额}`、`合计{金额}`。</div>
+                                <div class="anchor-console-card noise-shared-scope-card">
+                                    <div class="anchor-alias-title">统一作用范围</div>
+                                    <div class="anchor-alias-subtitle">下面两个子组共用同一套作用范围。切到“当前客户”后，噪音规则和解析前忽略字符/词都会只对当前客户生效。</div>
                                     <div class="anchor-rule-scope-shell">
                                         <div class="anchor-rule-scope-row">
                                             <label>作用范围</label>
@@ -465,43 +470,109 @@
                                         </div>
                                         <div id="noiseRuleScopeExplain" class="anchor-scope-explain"></div>
                                     </div>
-                                    <input id="noiseRulePatternInput" type="text" placeholder="例如：共{金额} / 合计{金额}">
-                                    <div class="anchor-alias-actions">
-                                        <button id="saveNoiseRuleBtn" class="confirm-button" type="button" onclick="saveNoiseRulePattern()">保存噪音规则</button>
-                                        <button id="resetNoiseRuleBtn" class="cancel-button" type="button" onclick="resetNoiseRulePatternInput()">清空输入</button>
-                                    </div>
-                                    <div id="noiseRuleEditorState" class="anchor-policy-state"></div>
-                                    <div class="noise-rule-helper-list">
-                                        <button class="noise-rule-helper-chip" type="button" data-noise-rule-example="共{金额}">共{金额}</button>
-                                        <button class="noise-rule-helper-chip" type="button" data-noise-rule-example="合计{金额}">合计{金额}</button>
-                                        <button class="noise-rule-helper-chip" type="button" data-noise-rule-example="总计{金额}">总计{金额}</button>
-                                    </div>
                                 </div>
 
-                                <div class="anchor-rule-workspace noise-rule-workspace">
-                                    <div class="anchor-rule-list-column">
-                                        <div class="anchor-alias-toolbar">
-                                            <input id="noiseRuleSearch" type="text" placeholder="搜索噪音规则">
-                                            <select id="noiseRuleSourceFilter">
-                                                <option value="all">全部来源</option>
-                                                <option value="client">客户</option>
-                                                <option value="global">全局</option>
-                                                <option value="system">系统默认</option>
-                                            </select>
-                                        </div>
-                                        <div id="noiseRuleList" class="anchor-alias-list"></div>
-                                    </div>
+                                <div id="noiseWorkspaceSubgroups" class="recognize-side-subgroups">
+                                    <section id="noiseRuleWorkspaceGroup" class="recognize-side-subgroup">
+                                        <button id="noiseRuleWorkspaceToggle" class="recognize-side-subgroup-toggle" type="button" onclick="toggleNoiseWorkspaceGroup('noiseRules')" aria-expanded="true">
+                                            <span class="recognize-side-subgroup-title">新增噪音规则</span>
+                                            <span class="recognize-side-subgroup-caret">▾</span>
+                                        </button>
+                                        <div class="recognize-side-subgroup-body">
+                                            <div class="anchor-console-card">
+                                                <div class="anchor-alias-title">规则配置</div>
+                                                <div class="anchor-alias-subtitle">适合忽略尾部摘要、统计尾巴等无须入账的片段。支持固定文本，也支持 `{金额}` 模板，例如：`共{金额}`、`合计{金额}`。</div>
+                                                <input id="noiseRulePatternInput" type="text" placeholder="例如：共{金额} / 合计{金额}">
+                                                <div class="anchor-alias-actions">
+                                                    <button id="saveNoiseRuleBtn" class="confirm-button" type="button" onclick="saveNoiseRulePattern()">保存噪音规则</button>
+                                                    <button id="resetNoiseRuleBtn" class="cancel-button" type="button" onclick="resetNoiseRulePatternInput()">清空输入</button>
+                                                </div>
+                                                <div id="noiseRuleEditorState" class="anchor-policy-state"></div>
+                                                <div class="noise-rule-helper-list">
+                                                    <button class="noise-rule-helper-chip" type="button" data-noise-rule-example="共{金额}">共{金额}</button>
+                                                    <button class="noise-rule-helper-chip" type="button" data-noise-rule-example="合计{金额}">合计{金额}</button>
+                                                    <button class="noise-rule-helper-chip" type="button" data-noise-rule-example="总计{金额}">总计{金额}</button>
+                                                </div>
+                                            </div>
 
-                                    <div class="anchor-impact-panel">
-                                        <div class="anchor-impact-title">噪音命中预览</div>
-                                        <div class="anchor-impact-subtitle">输入一段尾巴或整条原始消息，实时查看当前规则是否会忽略该内容。</div>
-                                        <textarea id="noiseRuleSampleInput" placeholder="例如：01 02 03 各十 共30"></textarea>
-                                        <div class="anchor-impact-actions">
-                                            <button type="button" class="edit-button" onclick="applyNoiseRuleExample()">套用示例</button>
-                                            <button type="button" class="recognize-button" onclick="renderNoiseRulePreview()">刷新预览</button>
+                                            <div class="anchor-rule-workspace noise-rule-workspace">
+                                                <div class="anchor-rule-list-column">
+                                                    <div class="anchor-alias-toolbar">
+                                                        <input id="noiseRuleSearch" type="text" placeholder="搜索噪音规则">
+                                                        <select id="noiseRuleSourceFilter">
+                                                            <option value="all">全部来源</option>
+                                                            <option value="client">客户</option>
+                                                            <option value="global">全局</option>
+                                                            <option value="system">系统默认</option>
+                                                        </select>
+                                                    </div>
+                                                    <div id="noiseRuleList" class="anchor-alias-list"></div>
+                                                </div>
+
+                                                <div class="anchor-impact-panel">
+                                                    <div class="anchor-impact-title">噪音命中预览</div>
+                                                    <div class="anchor-impact-subtitle">输入一段尾巴或整条原始消息，实时查看当前规则是否会忽略该内容。</div>
+                                                    <textarea id="noiseRuleSampleInput" placeholder="例如：01 02 03 各十 共30"></textarea>
+                                                    <div class="anchor-impact-actions">
+                                                        <button type="button" class="edit-button" onclick="applyNoiseRuleExample()">套用示例</button>
+                                                        <button type="button" class="recognize-button" onclick="renderNoiseRulePreview()">刷新预览</button>
+                                                    </div>
+                                                    <div id="noiseRulePreview" class="anchor-impact-preview"></div>
+                                                </div>
+                                            </div>
                                         </div>
-                                        <div id="noiseRulePreview" class="anchor-impact-preview"></div>
-                                    </div>
+                                    </section>
+
+                                    <section id="ignoreTokenWorkspaceGroup" class="recognize-side-subgroup collapsed">
+                                        <button id="ignoreTokenWorkspaceToggle" class="recognize-side-subgroup-toggle" type="button" onclick="toggleNoiseWorkspaceGroup('ignoreTokens')" aria-expanded="false">
+                                            <span class="recognize-side-subgroup-title">解析前忽略字符/词</span>
+                                            <span class="recognize-side-subgroup-caret">▾</span>
+                                        </button>
+                                        <div class="recognize-side-subgroup-body">
+                                            <div class="anchor-console-card">
+                                                <div class="anchor-alias-title">规则配置</div>
+                                                <div class="anchor-alias-subtitle">这里不是整段噪音忽略；会在解析前先删掉这些字符/词，再继续识别。适合 `现`、`讯`、`拖`、`现打` 这类聊天噪点或 OCR 夹杂字。</div>
+                                                <input id="ignoreTokenInput" type="text" placeholder="例如：现 / 讯 / 拖 / 现打">
+                                                <div class="anchor-alias-actions">
+                                                    <button id="saveIgnoreTokenBtn" class="confirm-button" type="button" onclick="saveIgnoreToken()">保存忽略词</button>
+                                                    <button id="resetIgnoreTokenBtn" class="cancel-button" type="button" onclick="resetIgnoreTokenInput()">清空输入</button>
+                                                </div>
+                                                <div id="ignoreTokenEditorState" class="anchor-policy-state"></div>
+                                                <div class="noise-rule-helper-list">
+                                                    <button class="noise-rule-helper-chip" type="button" data-ignore-token-example="现">现</button>
+                                                    <button class="noise-rule-helper-chip" type="button" data-ignore-token-example="讯">讯</button>
+                                                    <button class="noise-rule-helper-chip" type="button" data-ignore-token-example="拖">拖</button>
+                                                    <button class="noise-rule-helper-chip" type="button" data-ignore-token-example="现打">现打</button>
+                                                </div>
+                                            </div>
+
+                                            <div class="anchor-rule-workspace noise-rule-workspace">
+                                                <div class="anchor-rule-list-column">
+                                                    <div class="anchor-alias-toolbar">
+                                                        <input id="ignoreTokenSearch" type="text" placeholder="搜索忽略字符/词">
+                                                        <select id="ignoreTokenSourceFilter">
+                                                            <option value="all">全部来源</option>
+                                                            <option value="client">客户</option>
+                                                            <option value="global">全局</option>
+                                                            <option value="system">系统默认</option>
+                                                        </select>
+                                                    </div>
+                                                    <div id="ignoreTokenList" class="anchor-alias-list"></div>
+                                                </div>
+
+                                                <div class="anchor-impact-panel">
+                                                    <div class="anchor-impact-title">解析前忽略预览</div>
+                                                    <div class="anchor-impact-subtitle">输入原始脏文本，实时查看哪些字符/词会先被清洗，以及清洗后是否能正常识别。</div>
+                                                    <textarea id="ignoreTokenSampleInput" placeholder="例如：12现18现23各20"></textarea>
+                                                    <div class="anchor-impact-actions">
+                                                        <button type="button" class="edit-button" onclick="applyIgnoreTokenExample()">套用示例</button>
+                                                        <button type="button" class="recognize-button" onclick="renderIgnoreTokenPreview()">刷新预览</button>
+                                                    </div>
+                                                    <div id="ignoreTokenPreview" class="anchor-impact-preview"></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </section>
                                 </div>
                             </div>
                         </section>
@@ -667,23 +738,111 @@
     </div>
 
     <div id="hedgeReportModal" class="modal hedge-report-modal">
-        <div class="modal-content">
+        <div class="modal-content hedge-report-modal-content">
             <span class="close" onclick="closeHedgeReportModal()">&times;</span>
-            <h2>数据上报</h2>
-            <div class="hedge-report-toolbar">
-                <div id="hedgeReportScope" class="hedge-report-scope">范围：-</div>
-                <div class="hedge-report-odds">结算口径：<span id="hedgeReportOdds">按客户倍率</span></div>
-                <label class="hedge-report-loss-input">
-                    最多可亏损
-                    <input id="hedgeMaxLossInput" type="number" min="0" step="0.01" placeholder="例如 5000">
-                </label>
-                <button class="edit-button" type="button" onclick="calculateHedgeReport()">计算并生成</button>
-                <button class="edit-button" type="button" onclick="copyHedgeReportMessage()">复制上报消息</button>
+            <div class="hedge-report-header">
+                <div>
+                    <h2>数据上报</h2>
+                    <div class="hedge-report-header-note">按当前范围、客户倍率与返水自动反推需要抛出的号码和整数抛量。</div>
+                </div>
             </div>
-            <div id="hedgeReportSummary" class="hedge-report-summary">请输入“最多可亏损”后点击“计算并生成”。</div>
-            <div id="hedgeReportRows" class="hedge-report-rows"></div>
-            <label class="hedge-report-message-label" for="hedgeReportMessage">上报消息</label>
-            <textarea id="hedgeReportMessage" rows="5" readonly placeholder="计算后自动生成"></textarea>
+            <div class="hedge-report-layout">
+                <section class="hedge-report-main">
+                    <div class="hedge-report-panel">
+                        <div class="hedge-report-panel-title">上报范围</div>
+                        <div class="hedge-report-context-grid">
+                            <div id="hedgeReportScope" class="hedge-report-scope">范围：-</div>
+                            <div class="hedge-report-odds">结算口径：<span id="hedgeReportOdds">按客户倍率 / 返水</span></div>
+                        </div>
+                        <div class="hedge-report-formula">当前盈亏 = 当前总注 - 号码结果支出 - 当前返水；建议抛量按整数向上取整。</div>
+                    </div>
+
+                    <div class="hedge-report-panel">
+                        <div class="hedge-report-panel-title">计算参数</div>
+                        <div class="hedge-report-toolbar">
+                            <div class="hedge-report-mode-field">
+                                <div class="hedge-report-mode-label">上报模式</div>
+                                <div id="hedgeModeGroup" class="hedge-report-mode-group" role="group" aria-label="上报模式切换">
+                                    <button id="hedgeModePreciseBtn" class="region-chip active" type="button" onclick="setHedgeReportMode('precise')">逐号最省</button>
+                                    <button id="hedgeModeRegionBtn" class="region-chip" type="button" onclick="setHedgeReportMode('region_uniform')">同盘同率</button>
+                                    <button id="hedgeModeGlobalBtn" class="region-chip" type="button" onclick="setHedgeReportMode('global_uniform')">全局同率</button>
+                                </div>
+                            </div>
+                            <label class="hedge-report-loss-input">
+                                最多可亏损
+                                <input id="hedgeMaxLossInput" type="number" min="0" step="0.01" placeholder="例如 5000">
+                            </label>
+                        </div>
+                    </div>
+
+                    <div id="hedgeReportSummary" class="hedge-report-summary">请输入“最多可亏损”后会自动计算并生成。</div>
+                </section>
+
+                <aside class="hedge-report-panel hedge-report-preview-panel">
+                    <div class="hedge-report-preview-head">
+                        <div class="hedge-report-panel-title">抛量预览</div>
+                        <div id="hedgeReportPreviewMeta" class="hedge-report-preview-meta">按当前亏损从大到小排列，建议抛量自动向上取整。</div>
+                    </div>
+                    <div id="hedgeReportRows" class="hedge-report-rows"></div>
+                    <div class="hedge-report-explain hedge-report-preview-explain">
+                        <div class="hedge-report-explain-title">计算说明</div>
+                        <div class="hedge-report-explain-scroll">
+                            <section class="hedge-report-explain-section">
+                                <div class="hedge-report-explain-section-title">共同口径</div>
+                                <ul class="hedge-report-explain-list">
+                                    <li>先按当前范围汇总总注、结果支出和返水，再看每个号码一旦开出时，庄家当前会盈亏多少。</li>
+                                    <li>你填的“最多可亏损”，意思是：任何一个号码开出来，最差也不要低于这条亏损线。</li>
+                                    <li>系统会先找出超线的危险号码，再倒推这些号码至少要抛多少，建议抛量统一按整数向上取整。</li>
+                                    <li>所有模式都不会让建议抛量超过该号码当前总注；如果某个号码就算抛满仍压不到目标线，会标成“抛满仍超线”。</li>
+                                </ul>
+                            </section>
+                            <section class="hedge-report-explain-section">
+                                <div class="hedge-report-explain-section-title">逐号最省</div>
+                                <ul class="hedge-report-explain-list">
+                                    <li>一个号码算一个号码，每个号都只给出刚好够用的最小抛量。</li>
+                                    <li>优点是总抛量通常最省，不会把不需要多抛的号码一起抬高。</li>
+                                    <li>缺点是不同号码的抛量可能差很多，生成出来的消息会更碎一些。</li>
+                                    <li>适合你想先追求“总共少抛一点”，再去决定怎么发消息的时候用。</li>
+                                </ul>
+                            </section>
+                            <section class="hedge-report-explain-section">
+                                <div class="hedge-report-explain-section-title">同盘同率</div>
+                                <ul class="hedge-report-explain-list">
+                                    <li>同一个盘口里的危险号码，统一按同一个“抛出比例”去算，不是统一抛同一个金额。</li>
+                                    <li>比如某盘口算出来需要按 40% 去抛，那这个盘口里总注高的号会抛得多，总注低的号会抛得少。</li>
+                                    <li>这样比“同盘同额”更合理，因为不会出现总注只有 1600，却建议你抛 3700 这种错误结果。</li>
+                                    <li>适合你希望同一个盘口发出去的口径更整齐，但又不想完全失真时用。</li>
+                                </ul>
+                            </section>
+                            <section class="hedge-report-explain-section">
+                                <div class="hedge-report-explain-section-title">全局同率</div>
+                                <ul class="hedge-report-explain-list">
+                                    <li>当前范围里所有危险号码，不分盘口，统一按一个抛出比例去算。</li>
+                                    <li>它的消息最整齐，整盘看起来最统一，但通常也最保守，容易让一些本来不用抛那么多的号码被一起抬高。</li>
+                                    <li>如果你更在意发单口径统一、方便一眼看懂，这个模式更顺手；如果更在意少抛，总量一般不如逐号最省。</li>
+                                </ul>
+                            </section>
+                            <section class="hedge-report-explain-section">
+                                <div class="hedge-report-explain-section-title">结果怎么看</div>
+                                <ul class="hedge-report-explain-list">
+                                    <li>上面的“抛量预览”已经按当前亏损从大到小排，越靠上说明越危险。</li>
+                                    <li>右边“上报消息”会把相同抛量的号码自动合并；如果只有一个盘口，会先写盘口，再把号码行缩进两个字。</li>
+                                    <li>如果你改了“最多可亏损”或者切换模式，系统会自动重算，不需要再点按钮。</li>
+                                </ul>
+                            </section>
+                        </div>
+                    </div>
+                </aside>
+
+                <aside class="hedge-report-panel hedge-report-message-panel">
+                    <div class="hedge-report-message-head">
+                        <label class="hedge-report-message-label" for="hedgeReportMessage">上报消息</label>
+                        <span>同抛量号码会自动聚合；如果只有一个盘口，会先单独写盘口名，后续号码行缩进两个字。可直接选中文本复制。</span>
+                    </div>
+                    <button class="edit-button hedge-report-copy-button" type="button" onclick="copyHedgeReportMessage()">复制上报消息</button>
+                    <textarea id="hedgeReportMessage" rows="5" readonly placeholder="输入后会自动生成"></textarea>
+                </aside>
+            </div>
             <div class="modal-buttons">
                 <button class="cancel-button" onclick="closeHedgeReportModal()">关闭</button>
             </div>

@@ -29,7 +29,12 @@ class UserManager {
             users: []
         };
         this.userListSummaryCache = new Map();
+        this.numberViewMode = 'sorted';
+        this.numberRankingSortKey = 'pnl';
         this.userSearchKeyword = '';
+        this.numberRankingFitRaf = 0;
+        this.numberRankingResizeObserver = null;
+        this.numberRankingObservedElement = null;
     }
 
     getVirtualListKey(container) {
@@ -62,10 +67,13 @@ class UserManager {
                 totalEstimateHeight: 0,
                 rafId: null,
                 lastPaintTs: 0,
-                bound: false
+                bound: false,
+                disabled: false,
+                scrollHandler: null
             };
             this.virtualListStates[key] = state;
         }
+        state.disabled = false;
 
         state.options = {
             estimateItemHeight: 56,
@@ -99,7 +107,8 @@ class UserManager {
         }
 
         if (!state.bound) {
-            container.addEventListener('scroll', () => {
+            state.scrollHandler = () => {
+                if (state.disabled) return;
                 const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
                     ? performance.now()
                     : Date.now();
@@ -109,8 +118,44 @@ class UserManager {
                     return;
                 }
                 this.scheduleVirtualListRender(state);
-            }, { passive: true });
+            };
+            container.addEventListener('scroll', state.scrollHandler, { passive: true });
             state.bound = true;
+        }
+    }
+
+    deactivateVirtualList(container) {
+        if (!container) return;
+        const key = this.getVirtualListKey(container);
+        if (!key) return;
+        const state = this.virtualListStates[key];
+        if (!state) return;
+
+        state.disabled = true;
+        state.items = [];
+        state.renderItem = null;
+        state.lastStartIndex = -1;
+        state.lastEndIndex = -1;
+        state.lastTotalCount = -1;
+        state.appliedVersion = -1;
+        state.estimateOffsets = null;
+        state.totalEstimateHeight = 0;
+
+        if (state.rafId) {
+            cancelAnimationFrame(state.rafId);
+            state.rafId = null;
+        }
+        if (state.emptyNode) {
+            state.emptyNode.remove();
+            state.emptyNode = null;
+        }
+        if (state.topSpacer) {
+            state.topSpacer.remove();
+            state.topSpacer = null;
+        }
+        if (state.bottomSpacer) {
+            state.bottomSpacer.remove();
+            state.bottomSpacer = null;
         }
     }
 
@@ -969,7 +1014,110 @@ class UserManager {
         return null;
     }
 
-    buildStoredOriginalDataEntry(message, totalAmount = null, createdAt = '', editedAt = '') {
+    extractOriginalMessageParseSummary(entry) {
+        if (!entry || typeof entry !== 'object' || !entry.parseSummary || typeof entry.parseSummary !== 'object') {
+            return null;
+        }
+        return this.normalizeOriginalParseSummary(entry.parseSummary, {
+            fallbackAmount: this.extractOriginalMessageTotal(entry)
+        });
+    }
+
+    normalizeOriginalParseIssue(issue) {
+        if (!issue || typeof issue !== 'object') return null;
+        const rawKind = String(issue.kind || '').trim();
+        const kind = ['blocked', 'play', 'ignored'].includes(rawKind) ? rawKind : 'ignored';
+        const lineNo = Number.isFinite(Number(issue.lineNo)) ? Number(issue.lineNo) : null;
+        const reason = String(issue.reason || '').trim();
+        const rawText = String(issue.rawText || '').trim();
+        if (!reason && !rawText && !lineNo) {
+            return null;
+        }
+        return {
+            kind,
+            lineNo,
+            reason: reason || (kind === 'blocked' ? '疑似录入条目内容未识别' : (kind === 'play' ? '未开放玩法' : '格式无法识别')),
+            rawText
+        };
+    }
+
+    normalizeOriginalParseSummary(summary, options = {}) {
+        if (!summary || typeof summary !== 'object') return null;
+        const fallbackAmount = Number.isFinite(Number(options && options.fallbackAmount))
+            ? Number(options.fallbackAmount)
+            : 0;
+        const countedEntryCount = Number.isFinite(Number(summary.countedEntryCount))
+            ? Number(summary.countedEntryCount)
+            : 0;
+        const countedAmount = Number.isFinite(Number(summary.countedAmount))
+            ? Number(summary.countedAmount)
+            : fallbackAmount;
+        const playCount = Number.isFinite(Number(summary.playCount)) ? Number(summary.playCount) : 0;
+        const blockedCount = Number.isFinite(Number(summary.blockedCount)) ? Number(summary.blockedCount) : 0;
+        const ignoredCount = Number.isFinite(Number(summary.ignoredCount)) ? Number(summary.ignoredCount) : 0;
+        const unresolvedCount = Number.isFinite(Number(summary.unresolvedCount)) ? Number(summary.unresolvedCount) : 0;
+        const issues = Array.isArray(summary.issues)
+            ? summary.issues.map((issue) => this.normalizeOriginalParseIssue(issue)).filter(Boolean)
+            : [];
+
+        let status = String(summary.status || '').trim();
+        if (!status) {
+            if (blockedCount > 0) {
+                status = 'blocked';
+            } else if (countedEntryCount > 0 && playCount === 0 && ignoredCount === 0) {
+                status = 'complete';
+            } else if (countedEntryCount === 0 && playCount > 0 && ignoredCount === 0) {
+                status = 'play_only';
+            } else if (countedEntryCount > 0 || playCount > 0 || ignoredCount > 0 || unresolvedCount > 0) {
+                status = 'partial';
+            } else {
+                status = countedAmount > 0 ? 'partial' : 'empty_or_noise';
+            }
+        }
+
+        const statusLabelMap = {
+            complete: '已完整统计',
+            partial: '部分统计',
+            blocked: '待处理',
+            play_only: '仅未开放玩法',
+            empty_or_noise: '仅噪音/摘要'
+        };
+
+        const derivedFocusIssues = issues
+            .filter((issue) => issue && issue.kind !== 'ignored')
+            .sort((left, right) => {
+                const order = { blocked: 0, play: 1, ignored: 2 };
+                const leftOrder = order[String(left && left.kind ? left.kind : 'ignored')] ?? 9;
+                const rightOrder = order[String(right && right.kind ? right.kind : 'ignored')] ?? 9;
+                if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+                const leftLine = Number.isFinite(Number(left && left.lineNo)) ? Number(left.lineNo) : Number.MAX_SAFE_INTEGER;
+                const rightLine = Number.isFinite(Number(right && right.lineNo)) ? Number(right.lineNo) : Number.MAX_SAFE_INTEGER;
+                return leftLine - rightLine;
+            })
+            .slice(0, 3);
+        const explicitFocusIssues = Array.isArray(summary.focusIssues)
+            ? summary.focusIssues.map((issue) => this.normalizeOriginalParseIssue(issue)).filter(Boolean)
+            : [];
+        const focusIssues = explicitFocusIssues.length > 0 ? explicitFocusIssues.slice(0, 3) : derivedFocusIssues;
+
+        const normalized = {
+            status,
+            statusLabel: statusLabelMap[status] || '部分统计',
+            countedEntryCount,
+            countedAmount,
+            playCount,
+            blockedCount,
+            ignoredCount,
+            unresolvedCount,
+            issues,
+            focusIssues
+        };
+        const providedSummaryText = String(summary.summaryText || '').trim();
+        normalized.summaryText = providedSummaryText || this.buildOriginalParseSummaryText(normalized);
+        return normalized;
+    }
+
+    buildStoredOriginalDataEntry(message, totalAmount = null, createdAt = '', editedAt = '', parseSummary = null) {
         const entry = {
             message: this.extractOriginalMessageText(message)
         };
@@ -984,6 +1132,14 @@ class UserManager {
         const normalizedEditedAt = this.normalizeOriginalMessageCreatedAt(editedAt);
         if (normalizedEditedAt) {
             entry.editedAt = normalizedEditedAt;
+        }
+        if (parseSummary && typeof parseSummary === 'object') {
+            const normalizedParseSummary = this.normalizeOriginalParseSummary(parseSummary, {
+                fallbackAmount: Number.isFinite(normalizedTotal) && normalizedTotal >= 0 ? normalizedTotal : 0
+            });
+            if (normalizedParseSummary) {
+                entry.parseSummary = normalizedParseSummary;
+            }
         }
         return entry;
     }
@@ -1110,6 +1266,59 @@ class UserManager {
         return { ok: true, preview };
     }
 
+    buildOriginalParseSummaryFromPreview(preview, regionKey = this.activeRegion, fallbackAmount = 0) {
+        const safeRegionKey = String(regionKey || this.activeRegion || 'new_ao').trim() || 'new_ao';
+        if (preview && preview.success && preview.result) {
+            const result = preview.result;
+            const allEntries = Array.isArray(result.entries) ? result.entries.filter(Boolean) : [];
+            const regionEntries = allEntries.filter((entry) => {
+                const entryRegion = String(entry && entry.regionKey ? entry.regionKey : safeRegionKey).trim() || safeRegionKey;
+                return entryRegion === safeRegionKey;
+            });
+            const baseSummary = result.summary && typeof result.summary === 'object' ? result.summary : {};
+            const storedAmount = Number.isFinite(Number(fallbackAmount)) ? Number(fallbackAmount) : 0;
+            const countedAmount = regionEntries.length > 0
+                ? regionEntries.reduce((sum, entry) => sum + (Number(entry && entry.totalAmount) || 0), 0)
+                : storedAmount;
+            const countedEntryCount = regionEntries.length > 0
+                ? regionEntries.length
+                : ((countedAmount > 0 && allEntries.length > 0) ? allEntries.length : 0);
+            return this.normalizeOriginalParseSummary({
+                status: String(baseSummary.status || '').trim(),
+                countedEntryCount,
+                countedAmount,
+                playCount: Number(baseSummary.playCount) || 0,
+                blockedCount: Number(baseSummary.blockedCount) || 0,
+                ignoredCount: Number(baseSummary.ignoredCount) || 0,
+                unresolvedCount: Number(baseSummary.unresolvedCount) || 0,
+                issues: Array.isArray(baseSummary.issues) ? baseSummary.issues.filter(Boolean) : []
+            }, {
+                fallbackAmount: countedAmount
+            });
+        }
+
+        if (preview && !preview.success) {
+            return this.normalizeOriginalParseSummary({
+                status: 'blocked',
+                countedEntryCount: 0,
+                countedAmount: Number.isFinite(Number(fallbackAmount)) ? Number(fallbackAmount) : 0,
+                playCount: 0,
+                blockedCount: 1,
+                ignoredCount: 0,
+                issues: [{
+                    kind: 'blocked',
+                    lineNo: null,
+                    reason: String(preview.error || '消息解析失败').trim() || '消息解析失败',
+                    rawText: ''
+                }]
+            }, {
+                fallbackAmount
+            });
+        }
+
+        return null;
+    }
+
     getOriginalOrderTotalCached(row) {
         if (!row || typeof row !== 'object') return 0;
         const storedTotal = this.extractOriginalMessageTotal(row.originalEntry);
@@ -1119,6 +1328,14 @@ class UserManager {
         const cacheKey = this.getOriginalRowDerivedCacheKey(row);
         if (this.originalOrderTotalCache.has(cacheKey)) {
             return this.originalOrderTotalCache.get(cacheKey) || 0;
+        }
+        if (this.originalParseSummaryCache.has(cacheKey)) {
+            const cachedSummary = this.originalParseSummaryCache.get(cacheKey);
+            const cachedAmount = Number(cachedSummary && cachedSummary.countedAmount);
+            if (Number.isFinite(cachedAmount) && cachedAmount >= 0) {
+                this.originalOrderTotalCache.set(cacheKey, cachedAmount);
+                return cachedAmount;
+            }
         }
 
         const userName = String(row.userName || '');
@@ -1152,121 +1369,50 @@ class UserManager {
         }
         const userName = String(row.userName || '').trim();
         const regionKey = String(row.regionKey || this.activeRegion || 'new_ao').trim() || 'new_ao';
-        const message = this.extractOriginalMessageText(row.message);
         const cacheKey = this.getOriginalRowDerivedCacheKey(row);
         if (this.originalParseSummaryCache.has(cacheKey)) {
             return this.originalParseSummaryCache.get(cacheKey);
         }
 
         const storedTotal = this.extractOriginalMessageTotal(row.originalEntry);
+        const storedSummary = this.extractOriginalMessageParseSummary(row.originalEntry);
+        if (storedSummary) {
+            this.originalParseSummaryCache.set(cacheKey, storedSummary);
+            if (this.originalParseSummaryCache.size > 8000) {
+                const first = this.originalParseSummaryCache.keys().next();
+                if (!first.done) {
+                    this.originalParseSummaryCache.delete(first.value);
+                }
+            }
+            return storedSummary;
+        }
+
+        const message = this.extractOriginalMessageText(row.message);
         let summary = null;
         if (window.messageProcessor && typeof window.messageProcessor.previewMessage === 'function') {
             const preview = window.messageProcessor.previewMessage(message, {
                 clientId: userName,
                 allowPartial: true
             });
-            if (preview && preview.success && preview.result) {
-                const result = preview.result;
-                const allEntries = Array.isArray(result.entries) ? result.entries.filter(Boolean) : [];
-                const regionEntries = allEntries.filter((entry) => {
-                    const entryRegion = String(entry && entry.regionKey ? entry.regionKey : regionKey).trim() || regionKey;
-                    return entryRegion === regionKey;
-                });
-                const fallbackCountedAmount = Number.isFinite(Number(storedTotal))
-                    ? Number(storedTotal)
-                    : regionEntries.reduce((sum, entry) => sum + (Number(entry && entry.totalAmount) || 0), 0);
-                const regionCountedEntryCount = regionEntries.length > 0
-                    ? regionEntries.length
-                    : ((fallbackCountedAmount > 0 && allEntries.length > 0) ? allEntries.length : 0);
-                const baseSummary = result.summary && typeof result.summary === 'object' ? result.summary : {};
-                const issues = Array.isArray(baseSummary.issues) ? baseSummary.issues.filter(Boolean) : [];
-                const playCount = Number(baseSummary.playCount) || 0;
-                const blockedCount = Number(baseSummary.blockedCount) || 0;
-                const ignoredCount = Number(baseSummary.ignoredCount) || 0;
-                let status = 'empty_or_noise';
-                if (blockedCount > 0) {
-                    status = 'blocked';
-                } else if (regionCountedEntryCount > 0 && playCount === 0 && ignoredCount === 0) {
-                    status = 'complete';
-                } else if (regionCountedEntryCount === 0 && playCount > 0 && ignoredCount === 0) {
-                    status = 'play_only';
-                } else if (regionCountedEntryCount > 0 || playCount > 0 || ignoredCount > 0) {
-                    status = 'partial';
-                } else if (String(baseSummary.status || '').trim()) {
-                    status = String(baseSummary.status).trim();
-                }
-                const statusLabelMap = {
-                    complete: '已完整统计',
-                    partial: '部分统计',
-                    blocked: '待处理',
-                    play_only: '仅未开放玩法',
-                    empty_or_noise: '仅噪音/摘要'
-                };
-                const focusIssues = issues
-                    .filter((issue) => issue && issue.kind !== 'ignored')
-                    .sort((left, right) => {
-                        const order = { blocked: 0, play: 1, ignored: 2 };
-                        const leftOrder = order[String(left && left.kind ? left.kind : 'ignored')] ?? 9;
-                        const rightOrder = order[String(right && right.kind ? right.kind : 'ignored')] ?? 9;
-                        if (leftOrder !== rightOrder) return leftOrder - rightOrder;
-                        const leftLine = Number.isFinite(Number(left && left.lineNo)) ? Number(left.lineNo) : Number.MAX_SAFE_INTEGER;
-                        const rightLine = Number.isFinite(Number(right && right.lineNo)) ? Number(right.lineNo) : Number.MAX_SAFE_INTEGER;
-                        return leftLine - rightLine;
-                    })
-                    .slice(0, 3);
-
-                summary = {
-                    status,
-                    statusLabel: statusLabelMap[status] || '部分统计',
-                    countedEntryCount: regionCountedEntryCount,
-                    countedAmount: fallbackCountedAmount,
-                    playCount,
-                    blockedCount,
-                    ignoredCount,
-                    issues,
-                    focusIssues
-                };
-            } else if (preview && !preview.success) {
-                summary = {
-                    status: 'blocked',
-                    statusLabel: '待处理',
-                    countedEntryCount: 0,
-                    countedAmount: Number.isFinite(Number(storedTotal)) ? Number(storedTotal) : 0,
-                    playCount: 0,
-                    blockedCount: 1,
-                    ignoredCount: 0,
-                    issues: [{
-                        kind: 'blocked',
-                        lineNo: null,
-                        reason: String(preview.error || '消息解析失败').trim() || '消息解析失败',
-                        rawText: message
-                    }],
-                    focusIssues: [{
-                        kind: 'blocked',
-                        lineNo: null,
-                        reason: String(preview.error || '消息解析失败').trim() || '消息解析失败',
-                        rawText: message
-                    }]
-                };
-            }
+            summary = this.buildOriginalParseSummaryFromPreview(preview, regionKey, storedTotal);
         }
 
         if (!summary) {
             const fallbackAmount = Number.isFinite(Number(storedTotal)) ? Number(storedTotal) : 0;
-            summary = {
+            summary = this.normalizeOriginalParseSummary({
                 status: fallbackAmount > 0 ? 'partial' : 'empty_or_noise',
-                statusLabel: fallbackAmount > 0 ? '部分统计' : '仅噪音/摘要',
                 countedEntryCount: fallbackAmount > 0 ? 1 : 0,
                 countedAmount: fallbackAmount,
                 playCount: 0,
                 blockedCount: 0,
                 ignoredCount: 0,
-                issues: [],
-                focusIssues: []
-            };
+                unresolvedCount: 0,
+                issues: []
+            }, {
+                fallbackAmount
+            });
         }
 
-        summary.summaryText = this.buildOriginalParseSummaryText(summary);
         this.originalParseSummaryCache.set(cacheKey, summary);
         if (this.originalParseSummaryCache.size > 8000) {
             const first = this.originalParseSummaryCache.keys().next();
@@ -1339,7 +1485,7 @@ class UserManager {
                 const editedAt = this.extractOriginalMessageEditedAt(item);
                 if (item && typeof item === 'object') {
                     const totalAmount = this.extractOriginalMessageTotal(item);
-                    return this.buildStoredOriginalDataEntry(message, totalAmount, createdAt, editedAt);
+                    return this.buildStoredOriginalDataEntry(message, totalAmount, createdAt, editedAt, item.parseSummary);
                 }
                 return message;
             });
@@ -1641,6 +1787,42 @@ class UserManager {
         return 'single';
     }
 
+    normalizeNumberViewMode(modeRaw) {
+        return String(modeRaw || '').trim() === 'overview' ? 'overview' : 'sorted';
+    }
+
+    getNumberViewMode() {
+        this.numberViewMode = this.normalizeNumberViewMode(this.numberViewMode);
+        return this.numberViewMode;
+    }
+
+    normalizeNumberRankingSortKey(sortKeyRaw) {
+        const sortKey = String(sortKeyRaw || '').trim().toLowerCase();
+        if (sortKey === 'number' || sortKey === 'value' || sortKey === 'sequence' || sortKey === 'pnl') {
+            return sortKey;
+        }
+        return 'pnl';
+    }
+
+    getNumberRankingSortKey() {
+        this.numberRankingSortKey = this.normalizeNumberRankingSortKey(this.numberRankingSortKey);
+        return this.numberRankingSortKey;
+    }
+
+    setNumberRankingSortKey(sortKeyRaw) {
+        const nextKey = this.normalizeNumberRankingSortKey(sortKeyRaw);
+        if (nextKey === this.getNumberRankingSortKey()) return;
+        this.numberRankingSortKey = nextKey;
+        this.renderSortedResults();
+    }
+
+    setNumberViewMode(modeRaw) {
+        const nextMode = this.normalizeNumberViewMode(modeRaw);
+        if (nextMode === this.getNumberViewMode()) return;
+        this.numberViewMode = nextMode;
+        this.updateCurrentUserDisplay();
+    }
+
     applyScopeModeFlags() {
         this.scopeMode = this.normalizeScopeMode(this.scopeMode);
         this.isSummaryMode = this.scopeMode === 'all';
@@ -1856,28 +2038,50 @@ class UserManager {
 
     // 更新当前用户显示
     updateCurrentUserDisplay() {
-        const currentUserElement = document.getElementById('currentUser');
+        const titleElement = document.getElementById('numberPanelTitle');
+        const sortedView = document.getElementById('numberSortedView');
+        const overviewView = document.getElementById('numberOverviewView');
+        const sortedBtn = document.getElementById('numberViewSortedBtn');
+        const overviewBtn = document.getElementById('numberViewOverviewBtn');
+        const mode = this.getNumberViewMode();
         const summary = this.getScopeSummary();
         const regionLabel = this.getViewRegionLabels().join('、');
-        if (currentUserElement) {
-            currentUserElement.textContent = `号码总览（${regionLabel}）：${summary.panelLabel}`;
+        const selectedData = this.getSelectedUserData();
+        const total = selectedData.totalCount || 0;
+        if (titleElement) {
+            if (mode === 'overview') {
+                titleElement.textContent = `生肖总览（${regionLabel}）：${summary.panelLabel}`;
+            } else if (selectedData.users.length > 0) {
+                titleElement.textContent = `${summary.titleLabel} 号码累计排行（${regionLabel}） (总: ${total})`;
+            } else {
+                titleElement.textContent = `当前范围暂无累计数据（${regionLabel}）`;
+            }
+        }
+        if (sortedView) sortedView.hidden = mode !== 'sorted';
+        if (overviewView) overviewView.hidden = mode !== 'overview';
+        if (sortedBtn) {
+            const active = mode === 'sorted';
+            sortedBtn.classList.toggle('active', active);
+            sortedBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+        }
+        if (overviewBtn) {
+            const active = mode === 'overview';
+            overviewBtn.classList.toggle('active', active);
+            overviewBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
         }
         this.renderScopeModeControls();
+        this.scheduleNumberRankingAutoFit();
     }
 
     // 更新标题
     updateTitles(count = 0) {
-        const sortedResultsTitle = document.getElementById('sortedResultsTitle');
         const originalDataTitle = document.getElementById('originalDataTitle');
         const regionLabel = this.getViewRegionLabels().join('、');
         const selectedData = this.getSelectedUserData();
         const scopeSummary = this.getScopeSummary();
-        const total = Number.isFinite(count) && count > 0 ? count : (selectedData.totalCount || 0);
         if (selectedData.users.length > 0) {
-            sortedResultsTitle.textContent = `${scopeSummary.titleLabel} 号码累计排行（${regionLabel}） (总: ${total})`;
             originalDataTitle.textContent = `${scopeSummary.titleLabel} 原始消息（${regionLabel}）`;
         } else {
-            sortedResultsTitle.textContent = `当前范围暂无客户（${regionLabel}）`;
             originalDataTitle.textContent = `当前范围暂无原始消息（${regionLabel}）`;
         }
     }
@@ -1899,17 +2103,23 @@ class UserManager {
         if (typeof window.refreshDashboardStatus === 'function') {
             window.refreshDashboardStatus();
         }
-        if (typeof window.handleAnchorRuleScopeChange === 'function') {
-            window.handleAnchorRuleScopeChange();
-        } else {
-            if (typeof window.renderAnchorAliasList === 'function') {
-                window.renderAnchorAliasList();
-            }
-            if (typeof window.renderAnchorParseModeState === 'function') {
-                window.renderAnchorParseModeState();
-            }
-            if (typeof window.renderAttributeCombinePolicyState === 'function') {
-                window.renderAttributeCombinePolicyState();
+        const recognizeModal = typeof document !== 'undefined'
+            ? document.getElementById('myModal')
+            : null;
+        const shouldRefreshRecognizePanels = !!(recognizeModal && recognizeModal.style.display === 'block');
+        if (shouldRefreshRecognizePanels) {
+            if (typeof window.handleAnchorRuleScopeChange === 'function') {
+                window.handleAnchorRuleScopeChange();
+            } else {
+                if (typeof window.renderAnchorAliasList === 'function') {
+                    window.renderAnchorAliasList();
+                }
+                if (typeof window.renderAnchorParseModeState === 'function') {
+                    window.renderAnchorParseModeState();
+                }
+                if (typeof window.renderAttributeCombinePolicyState === 'function') {
+                    window.renderAttributeCombinePolicyState();
+                }
             }
         }
     }
@@ -2359,6 +2569,7 @@ class UserManager {
     renderSortedResults() {
         const sortedResultsElement = document.getElementById('sortedResults');
         if (!sortedResultsElement) return;
+        this.deactivateVirtualList(sortedResultsElement);
 
         const scopeMode = this.getScopeMode();
         const scopeUsers = this.getScopeUsers();
@@ -2368,30 +2579,201 @@ class UserManager {
                 ? this.buildSummarySortedRows()
                 : this.buildUserSortedRows();
         }
+        rows = this.sortNumberRankingRows(rows);
 
-        this.renderVirtualRows(
-            sortedResultsElement,
-            rows,
-            (row) => this.createSortedResultRow(row),
-            {
-                estimateItemHeight: 66,
-                overscan: 6,
-                minRenderCount: 24,
-                maxRenderCount: 120,
-                emptyText: '暂无累计数据'
+        sortedResultsElement.innerHTML = '';
+        if (!rows.length) {
+            const empty = document.createElement('div');
+            empty.className = 'virtual-empty';
+            empty.textContent = '暂无累计数据';
+            sortedResultsElement.appendChild(empty);
+            return;
+        }
+
+        const table = document.createElement('table');
+        table.className = 'number-ranking-table';
+        const thead = document.createElement('thead');
+        const headRow = document.createElement('tr');
+        [
+            { key: 'number', label: '号码' },
+            { key: 'value', label: '累计' },
+            { key: 'pnl', label: '盈亏' },
+            { key: 'sequence', label: '序号' }
+        ].forEach((column) => {
+            const th = document.createElement('th');
+            const button = document.createElement('button');
+            const active = this.getNumberRankingSortKey() === column.key;
+            button.type = 'button';
+            button.className = `number-ranking-sort ${active ? 'active' : ''}`;
+            button.textContent = column.label;
+            button.setAttribute('aria-pressed', active ? 'true' : 'false');
+            button.onclick = () => {
+                this.setNumberRankingSortKey(column.key);
+            };
+            th.appendChild(button);
+            headRow.appendChild(th);
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+        const tbody = document.createElement('tbody');
+        rows.forEach((row, index) => {
+            tbody.appendChild(this.createSortedResultRow(row, index));
+        });
+        table.appendChild(tbody);
+        sortedResultsElement.appendChild(table);
+        this.scheduleNumberRankingAutoFit();
+    }
+
+    sortNumberRankingRows(rows = []) {
+        const list = Array.isArray(rows) ? rows.slice() : [];
+        const sortKey = this.getNumberRankingSortKey();
+        const zodiacOrder = this.getZodiacOrder();
+        const animalMap = this.getZodiacAnimalMap();
+        const zodiacIndexMap = new Map(zodiacOrder.map((animal, index) => [animal, index]));
+        const animalNumberIndexMap = new Map();
+
+        Object.entries(animalMap).forEach(([animal, numbers]) => {
+            (Array.isArray(numbers) ? numbers : []).forEach((num, index) => {
+                animalNumberIndexMap.set(this.formatNumber(num), {
+                    animal,
+                    animalIndex: zodiacIndexMap.has(animal) ? zodiacIndexMap.get(animal) : 999,
+                    numberIndex: index
+                });
+            });
+        });
+
+        const compareBySequence = (left, right) => {
+            const sequenceDiff = (Number(left.defaultSequence) || 0) - (Number(right.defaultSequence) || 0);
+            if (Math.abs(sequenceDiff) > 1e-9) {
+                return sequenceDiff;
             }
-        );
+            return (Number(left.number) || 0) - (Number(right.number) || 0);
+        };
+
+        return list.sort((left, right) => {
+            if (sortKey === 'number') {
+                const leftMeta = animalNumberIndexMap.get(String(left.number || '').padStart(2, '0')) || { animalIndex: 999, numberIndex: 999 };
+                const rightMeta = animalNumberIndexMap.get(String(right.number || '').padStart(2, '0')) || { animalIndex: 999, numberIndex: 999 };
+                if (leftMeta.animalIndex !== rightMeta.animalIndex) {
+                    return leftMeta.animalIndex - rightMeta.animalIndex;
+                }
+                if (leftMeta.numberIndex !== rightMeta.numberIndex) {
+                    return leftMeta.numberIndex - rightMeta.numberIndex;
+                }
+                return compareBySequence(left, right);
+            }
+
+            if (sortKey === 'value') {
+                const valueDiff = (Number(left.value) || 0) - (Number(right.value) || 0);
+                if (Math.abs(valueDiff) > 1e-9) {
+                    return valueDiff;
+                }
+                return compareBySequence(left, right);
+            }
+
+            if (sortKey === 'sequence') {
+                return compareBySequence(left, right);
+            }
+
+            const leftPnl = Number(left.pnl);
+            const rightPnl = Number(right.pnl);
+            const leftHasPnl = Number.isFinite(leftPnl);
+            const rightHasPnl = Number.isFinite(rightPnl);
+            if (leftHasPnl && rightHasPnl) {
+                const pnlDiff = leftPnl - rightPnl;
+                if (Math.abs(pnlDiff) > 1e-9) {
+                    return pnlDiff;
+                }
+            } else if (leftHasPnl !== rightHasPnl) {
+                return leftHasPnl ? -1 : 1;
+            }
+            return compareBySequence(left, right);
+        });
+    }
+
+    ensureNumberRankingResizeObserver() {
+        if (typeof ResizeObserver !== 'function') return;
+        const shell = document.getElementById('sortedResults');
+        if (!shell) return;
+        if (!this.numberRankingResizeObserver) {
+            this.numberRankingResizeObserver = new ResizeObserver(() => {
+                this.scheduleNumberRankingAutoFit();
+            });
+        }
+        if (this.numberRankingObservedElement === shell) return;
+        if (this.numberRankingObservedElement) {
+            try {
+                this.numberRankingResizeObserver.unobserve(this.numberRankingObservedElement);
+            } catch (error) {
+                // ignore
+            }
+        }
+        this.numberRankingObservedElement = shell;
+        this.numberRankingResizeObserver.observe(shell);
+    }
+
+    scheduleNumberRankingAutoFit() {
+        if (this.numberRankingFitRaf) {
+            cancelAnimationFrame(this.numberRankingFitRaf);
+        }
+        this.numberRankingFitRaf = requestAnimationFrame(() => {
+            this.numberRankingFitRaf = 0;
+            this.syncNumberRankingAutoFit();
+        });
+    }
+
+    syncNumberRankingAutoFit() {
+        this.ensureNumberRankingResizeObserver();
+        const shell = document.getElementById('sortedResults');
+        if (!shell) return;
+        if (this.getNumberViewMode() !== 'sorted' || shell.offsetParent === null) return;
+
+        const table = shell.querySelector('.number-ranking-table');
+        const header = table ? table.querySelector('thead') : null;
+        const rowCount = table ? table.querySelectorAll('tbody tr').length : 0;
+        if (!table || !header || !(rowCount > 0)) return;
+
+        const shellHeight = shell.clientHeight || 0;
+        if (!(shellHeight > 0)) return;
+
+        const headerHeight = Math.max(16, Math.ceil(header.getBoundingClientRect().height || 0));
+        const rawRowHeight = (shellHeight - headerHeight - 2) / rowCount;
+        const rowHeight = Math.max(10, Math.min(22, rawRowHeight));
+        const fontSize = Math.max(9, Math.min(12, rowHeight - 4));
+        const headerFontSize = Math.max(9, Math.min(11, fontSize));
+        const cellPadY = rawRowHeight <= 11.5 ? 0 : (rawRowHeight <= 14 ? 1 : 2);
+        const headPadY = rawRowHeight <= 11.5 ? 1 : 2;
+        const needsOverflow = (headerHeight + (rowHeight * rowCount)) > (shellHeight + 1);
+
+        shell.style.setProperty('--number-ranking-row-height', `${rowHeight.toFixed(2)}px`);
+        shell.style.setProperty('--number-ranking-font-size', `${fontSize.toFixed(2)}px`);
+        shell.style.setProperty('--number-ranking-head-font-size', `${headerFontSize.toFixed(2)}px`);
+        shell.style.setProperty('--number-ranking-cell-pad-y', `${cellPadY}px`);
+        shell.style.setProperty('--number-ranking-cell-pad-x', '6px');
+        shell.style.setProperty('--number-ranking-head-pad-y', `${headPadY}px`);
+        shell.style.setProperty('--number-ranking-head-pad-x', '6px');
+        shell.classList.toggle('is-overflowing', needsOverflow);
     }
 
     buildScopedSortedRows(scopedUsers = [], options = {}) {
         const users = Array.isArray(scopedUsers) ? scopedUsers.filter(userName => this.users[userName]) : [];
         if (!users.length) return [];
 
-        const summaryData = {};
+        const summaryData = new Map();
         const viewRegions = this.getViewRegions();
         const showPnl = (options && options.includePnl !== false) && viewRegions.length === 1;
         let totalStake = 0;
         let totalRebate = 0;
+
+        this.generateData().forEach((item) => {
+            const number = String(item && item.number ? item.number : '').padStart(2, '0');
+            if (!number) return;
+            summaryData.set(number, {
+                text: String((item && item.text) || ''),
+                value: 0,
+                payout: 0
+            });
+        });
 
         users.forEach(userName => {
             const settlement = this.getUserSettlementConfig(userName);
@@ -2411,23 +2793,53 @@ class UserManager {
                 totalRebate += safeRegionTotal * rebateRatio;
 
                 (regionData.data || []).forEach(item => {
-                    if (!summaryData[item.number]) {
-                        summaryData[item.number] = { text: item.text, value: 0, payout: 0 };
+                    const number = String(item && item.number ? item.number : '').padStart(2, '0');
+                    if (!number) return;
+                    if (!summaryData.has(number)) {
+                        summaryData.set(number, {
+                            text: String((item && item.text) || ''),
+                            value: 0,
+                            payout: 0
+                        });
                     }
                     const stake = Number(item && item.value) || 0;
-                    summaryData[item.number].value += stake;
-                    summaryData[item.number].payout += stake * odds;
+                    const summaryRow = summaryData.get(number);
+                    summaryRow.value += stake;
+                    summaryRow.payout += stake * odds;
                 });
             });
         });
 
-        return Object.entries(summaryData)
-            .sort((a, b) => b[1].value - a[1].value)
+        const baseRows = Array.from(summaryData.entries())
             .map(([number, data]) => ({
                 number,
                 text: data.text,
-                value: data.value,
-                pnl: showPnl ? (totalStake - totalRebate - (Number(data && data.payout) || 0)) : null,
+                value: Number(data && data.value) || 0,
+                payout: Number(data && data.payout) || 0
+            }))
+            .sort((a, b) => {
+                const pnlA = showPnl ? (totalStake - totalRebate - (Number(a && a.payout) || 0)) : Number.POSITIVE_INFINITY;
+                const pnlB = showPnl ? (totalStake - totalRebate - (Number(b && b.payout) || 0)) : Number.POSITIVE_INFINITY;
+                if (showPnl) {
+                    const pnlDiff = pnlA - pnlB;
+                    if (Math.abs(pnlDiff) > 1e-9) {
+                        return pnlDiff;
+                    }
+                }
+                const valueDiff = (Number(b.value) || 0) - (Number(a.value) || 0);
+                if (Math.abs(valueDiff) > 1e-9) {
+                    return valueDiff;
+                }
+                return (Number(a.number) || 0) - (Number(b.number) || 0);
+            });
+
+        return baseRows
+            .map((row, index) => ({
+                number: row.number,
+                text: row.text,
+                value: row.value,
+                pnl: showPnl ? (totalStake - totalRebate - row.payout) : null,
+                defaultSequence: index + 1,
                 clickable: options && options.clickable === true
             }));
     }
@@ -2446,43 +2858,48 @@ class UserManager {
         });
     }
 
-    createSortedResultRow(row) {
-        const li = document.createElement('li');
+    createSortedResultRow(row, rowIndex = 0) {
+        const tr = document.createElement('tr');
         const number = String(row.number || '').padStart(2, '0');
         const value = Number(row.value) || 0;
-        li.innerHTML = `
-            <span class="sorted-number-badge wave-${this.getNumberWave(number)}">${number}</span>
-            <span class="sorted-text">${row.text}: ${value}</span>
-        `;
-
-        if (Number.isFinite(row.pnl)) {
-            const pnlValue = Number(row.pnl);
-            const pnlClass = row.pnl > 0 ? 'profit' : (row.pnl < 0 ? 'loss' : 'even');
-            const formatPnl = (value) => {
-                if (!Number.isFinite(value)) return '0';
-                if (Math.abs(value) < 1e-9) return '0';
-                if (Number.isInteger(value)) return `${value}`;
-                return value.toFixed(4).replace(/\.?0+$/, '');
-            };
-            const pnlText = pnlValue > 0 ? `+${formatPnl(pnlValue)}` : `${formatPnl(pnlValue)}`;
-            const pnlSpan = document.createElement('span');
-            pnlSpan.className = `sorted-pnl ${pnlClass}`;
-            pnlSpan.textContent = pnlText;
-            li.appendChild(pnlSpan);
+        const serialNo = Number.isInteger(rowIndex) ? rowIndex + 1 : 0;
+        const wave = this.getNumberWave(number);
+        const waveClass = `rank-wave-${wave}`;
+        if (!(value > 0)) {
+            tr.classList.add('is-empty');
         }
 
+        const numberCell = document.createElement('td');
+        numberCell.className = `number-ranking-cell number-ranking-identity ${waveClass}`;
+        numberCell.textContent = `${number}${String(row.text || '').trim()}`;
+        tr.appendChild(numberCell);
+
+        const valueCell = document.createElement('td');
+        valueCell.className = `number-ranking-cell number-ranking-value ${waveClass}`;
+        valueCell.textContent = this.formatAmountValue(value);
+        tr.appendChild(valueCell);
+
+        const pnlCell = document.createElement('td');
+        pnlCell.className = `number-ranking-cell number-ranking-pnl ${waveClass}`;
+        pnlCell.textContent = Number.isFinite(row.pnl) ? this.formatAmountValue(row.pnl) : '-';
+        tr.appendChild(pnlCell);
+
+        const rankCell = document.createElement('td');
+        rankCell.className = `number-ranking-cell number-ranking-rank ${waveClass}`;
+        rankCell.textContent = String(Number(row.defaultSequence) || serialNo);
+        tr.appendChild(rankCell);
+
         if (row.clickable) {
-            li.title = '点击可编辑该号码数值';
-            li.onclick = () => {
+            tr.classList.add('is-clickable');
+            tr.title = '点击可编辑该号码数值';
+            tr.onclick = () => {
                 if (window.handleCellClick) {
                     window.handleCellClick(number);
                 }
             };
-        } else {
-            li.style.cursor = 'default';
         }
 
-        return li;
+        return tr;
     }
 
     // 渲染原始数据
@@ -2515,9 +2932,9 @@ class UserManager {
             {
                 estimateItemHeight: 110,
                 getItemEstimate: (row) => this.estimateOriginalRowHeight(row),
-                overscan: 6,
-                minRenderCount: 24,
-                maxRenderCount: 96,
+                overscan: 4,
+                minRenderCount: 12,
+                maxRenderCount: 48,
                 emptyText: '暂无原始消息'
             }
         );
@@ -2622,17 +3039,26 @@ class UserManager {
         const regionLabel = row.regionLabel || this.getRegionLabel(row.regionKey);
         const rawMessage = this.extractOriginalMessageText(row.message);
         const createdAtText = this.formatOriginalMessageCreatedAt(row.createdAt || (row.originalEntry && this.extractOriginalMessageCreatedAt(row.originalEntry)));
-        const parseSummary = this.getOriginalParseSummaryCached(row);
-        const issueText = (Array.isArray(parseSummary.focusIssues) ? parseSummary.focusIssues : [])
-            .map((issue) => this.formatOriginalParseIssue(issue))
-            .join('\n');
-        const text = `${row.userName || ''}（${regionLabel || ''}）\n添加时间：${createdAtText}\n${parseSummary.summaryText || ''}\n${issueText}\n${rawMessage}`.replace(/\r/g, '');
+        const cachedSummary = cacheKey && this.originalParseSummaryCache.has(cacheKey)
+            ? this.originalParseSummaryCache.get(cacheKey)
+            : null;
+        const issueText = cachedSummary
+            ? (Array.isArray(cachedSummary.focusIssues) ? cachedSummary.focusIssues : [])
+                .map((issue) => this.formatOriginalParseIssue(issue))
+                .join('\n')
+            : '';
+        const summaryText = cachedSummary && cachedSummary.summaryText
+            ? String(cachedSummary.summaryText)
+            : '';
+        const text = cachedSummary
+            ? `${row.userName || ''}（${regionLabel || ''}）\n添加时间：${createdAtText}\n${summaryText}\n${issueText}\n${rawMessage}`.replace(/\r/g, '')
+            : `${row.userName || ''}（${regionLabel || ''}）\n添加时间：${createdAtText}\n${rawMessage}`.replace(/\r/g, '');
         const logicalLines = text
             .split('\n')
             .reduce((sum, line) => sum + Math.max(1, Math.ceil(String(line || '').length / 32)), 0);
         const estimated = 64 + (logicalLines * 20);
         const height = Math.max(72, Math.min(1400, estimated));
-        if (cacheKey) {
+        if (cacheKey && cachedSummary) {
             this.originalRowHeightCache.set(cacheKey, height);
             if (this.originalRowHeightCache.size > 8000) {
                 const first = this.originalRowHeightCache.keys().next();
@@ -2650,11 +3076,11 @@ class UserManager {
         const regionLabel = row.regionLabel || this.getRegionLabel(row.regionKey);
         const rawMessage = this.extractOriginalMessageText(row.message);
         const serialNo = Number.isInteger(rowIndex) ? (rowIndex + 1) : 0;
+        const parseSummary = this.getOriginalParseSummaryCached(row);
         const orderTotal = this.getOriginalOrderTotalCached(row);
         const totalText = orderTotal == null ? '未识别' : this.formatAmountValue(orderTotal);
         const metaText = `${serialNo} ${row.userName}（${regionLabel}）总：${totalText}`;
         const createdAtText = this.formatOriginalMessageCreatedAt(row.createdAt || (row.originalEntry && this.extractOriginalMessageCreatedAt(row.originalEntry)));
-        const parseSummary = this.getOriginalParseSummaryCached(row);
         const issueTooltip = (Array.isArray(parseSummary.focusIssues) ? parseSummary.focusIssues : [])
             .map((issue) => this.formatOriginalParseIssue(issue))
             .join('\n');
@@ -2810,9 +3236,10 @@ class UserManager {
         }
 
         const totalAmount = this.calculateOriginalOrderTotal(message, userName, regionKey);
+        const parseSummary = this.buildOriginalParseSummaryFromPreview(validation.preview, regionKey, totalAmount);
         const createdAt = this.extractOriginalMessageCreatedAt(regionData.originalData[index]);
         const editedAt = new Date().toISOString();
-        regionData.originalData[index] = this.buildStoredOriginalDataEntry(message, totalAmount, createdAt, editedAt);
+        regionData.originalData[index] = this.buildStoredOriginalDataEntry(message, totalAmount, createdAt, editedAt, parseSummary);
         this.invalidateOriginalDataDerivedCaches();
         this.recalculateUserData(userName, regionKey);
         this.renderAllSections();
