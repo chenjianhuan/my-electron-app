@@ -141,9 +141,9 @@ const RECOGNIZE_MESSAGE_MIN_HEIGHT_DESKTOP = 150;
 const RECOGNIZE_MESSAGE_MIN_HEIGHT_COMPACT = 132;
 const RECOGNIZE_MESSAGE_MAX_VH_RATIO = 0.78;
 const REGION_WINNING_NUMBERS_KEY = 'regionWinningNumbers.v1';
-const TELEGRAM_SUPPORT_USERNAME = '@Wffftttp';
-const TELEGRAM_SUPPORT_LINK = 'https://t.me/Wffftttp';
-const TELEGRAM_SUPPORT_QR_PATH = './telegram-braydon-qr.svg?v=20260225';
+const TELEGRAM_SUPPORT_USERNAME = '@CANGJIE01';
+const TELEGRAM_SUPPORT_LINK = 'https://t.me/CANGJIE01';
+const TELEGRAM_SUPPORT_QR_PATH = './telegram-cangjie01-qr.svg?v=20260311';
 const SETTINGS_PASSWORD_MODULE_ID = 'lottery';
 const HEDGE_MAX_LOSS_KEY = 'hedgeMaxLoss.v1';
 const ANCHOR_MODE_LABELS = {
