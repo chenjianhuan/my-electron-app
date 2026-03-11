@@ -263,6 +263,7 @@ class MessageProcessor {
         return {
             version: 'v1.1',
             defaultOdds: this.SYSTEM_DEFAULT_ODDS,
+            tailShorthandAsSeparateGroups: true,
             amountUnits: this.getSystemAmountUnits(),
             anchorSemantics: {
                 '各': { amountDistribute: 'per_number', enabled: true },
@@ -5058,10 +5059,10 @@ class MessageProcessor {
             const intersection = mergeIntersection();
             const union = mergeUnion();
             if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
-                const chooseIntersection = window.confirm('该段同时命中多个属性词。点击“确定”按交集，点击“取消”按并集。');
+                const chooseIntersection = window.confirm('该段同时命中多个属性词。点击“确定”取共同号，点击“取消”按全部叠加。');
                 return chooseIntersection ? intersection : union;
             }
-            throw new Error('该网友“属性词叠加策略”为确认模式，请先确认本段按交集还是并集');
+            throw new Error('该网友“属性词叠加策略”为确认模式，请先确认本段是取共同号还是全部叠加');
         }
 
         const intersection = mergeIntersection();

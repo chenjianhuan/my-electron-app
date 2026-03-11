@@ -257,6 +257,7 @@ textarea {
   --main-middle-width: 420px;
   flex: 1 1 auto;
   min-height: 0;
+  position: relative;
   display: grid;
   grid-template-columns: minmax(240px, var(--main-user-width)) 12px minmax(560px, 1fr) 12px minmax(60px, var(--main-middle-width));
   gap: 0;
@@ -319,6 +320,13 @@ textarea {
   overflow: hidden;
 }
 
+.customer-list-area {
+  --customer-settings-dock-width: 440px;
+  min-height: 0;
+  position: relative;
+  overflow: visible;
+}
+
 .panel-head {
   display: flex;
   align-items: baseline;
@@ -352,6 +360,107 @@ textarea {
 
 .user-list {
   overflow: hidden;
+}
+
+.customer-settings-dock {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 12px);
+  bottom: 0;
+  width: var(--customer-settings-dock-width);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #d7e4f0;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(250, 253, 255, 0.98), rgba(240, 247, 253, 0.98));
+  box-shadow: 0 22px 44px rgba(20, 47, 79, 0.16);
+  opacity: 0;
+  transform: translateX(-28px);
+  pointer-events: none;
+  transition: opacity 0.22s ease, transform 0.22s ease, box-shadow 0.22s ease;
+  z-index: 12;
+}
+
+.customer-settings-dock.open {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.customer-settings-dock-overlay {
+  position: absolute;
+  top: var(--space-6);
+  right: var(--space-6);
+  bottom: var(--space-6);
+  left: calc(100% + 24px);
+  border-radius: 18px;
+  background: rgba(71, 85, 105, 0.14);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease, background-color 0.18s ease;
+  z-index: 10;
+}
+
+.customer-settings-dock-overlay.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.customer-settings-dock-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 2px 0;
+}
+
+.customer-settings-dock-title-wrap {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.customer-settings-dock-title-wrap h3 {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  color: #183b58;
+}
+
+.customer-settings-dock-close {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border: 1px solid #c9d9e8;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #42607c;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.customer-settings-dock-close:hover {
+  border-color: #8fb1cf;
+  color: #214d73;
+}
+
+.customer-settings-dock-resizer {
+  position: absolute;
+  top: 0;
+  right: -12px;
+  bottom: 0;
+  width: 12px;
+  background: transparent;
+  z-index: 13;
+}
+
+.customer-settings-dock.resizing .customer-settings-dock-resizer::before,
+.customer-settings-dock-resizer:hover::before {
+  background: #4d88b9;
+  box-shadow: 0 0 0 3px rgba(77, 136, 185, 0.18);
 }
 
 .user-list h3 {
@@ -971,6 +1080,11 @@ button:active {
 
 .user-list ul li .user-settlement-toggle:hover {
   background: linear-gradient(135deg, #33648e, #4c85b5);
+}
+
+.user-list ul li .user-settlement-toggle.active {
+  background: linear-gradient(135deg, #255f8f, #3e7cab);
+  box-shadow: 0 8px 16px rgba(37, 95, 143, 0.2);
 }
 
 .user-list ul li .user-settlement-save {
@@ -2456,6 +2570,13 @@ textarea#message:focus,
   flex: 0 0 auto;
 }
 
+.recognize-attr-toggle.is-active {
+  background: linear-gradient(180deg, #357fb5, #1f669e);
+  border-color: #1e5b8d;
+  color: #ffffff;
+  box-shadow: 0 8px 18px rgba(31, 102, 158, 0.22);
+}
+
 .recognize-voice-status {
   margin-top: 8px;
   padding: 8px 10px;
@@ -2496,17 +2617,21 @@ textarea#message:focus,
 .attribute-help {
   width: 100%;
   min-height: 0;
+  height: 100%;
   border: 1px solid #d8e5f1;
   border-radius: 14px;
   background: linear-gradient(180deg, #f5f9fd, #edf4fb);
   overflow: hidden;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  display: flex;
+  flex-direction: column;
 }
 
 .recognize-attribute-dock {
   min-width: 0;
   min-height: 0;
   height: 100%;
+  overflow: hidden;
   justify-self: stretch;
   align-self: stretch;
   /* Avoid sticky + nested overflow repaint artifacts while scrolling in Electron. */
@@ -2514,16 +2639,55 @@ textarea#message:focus,
 }
 
 .attribute-help-body {
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 12px;
   min-height: 0;
   max-height: none;
-  height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
+}
+
+.customer-settings-primary-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 4px;
+  scrollbar-gutter: stable both-edges;
+}
+
+.customer-settings-primary-tab {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid #c7d9ea;
+  background: #f4f8fc;
+  color: #4d6680;
+  font-size: var(--font-size-sm);
+  font-weight: 800;
+  cursor: pointer;
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+  white-space: nowrap;
+}
+
+.customer-settings-primary-tab:hover {
+  border-color: #99bad6;
+  color: #204d73;
+  background: #edf5fc;
+}
+
+.customer-settings-primary-tab.active {
+  border-color: #1f669e;
+  background: linear-gradient(180deg, #357fb5, #1f669e);
+  color: #ffffff;
+  box-shadow: 0 8px 18px rgba(31, 102, 158, 0.18);
 }
 
 .attribute-help h4 {
@@ -2605,6 +2769,35 @@ textarea#message:focus,
 .recognize-side-group.expanded-fill .recognize-side-group-body {
   flex: 1 1 auto;
   min-height: 0;
+}
+
+.attribute-help.is-tabbed .attribute-help-body {
+  overflow: hidden;
+}
+
+.attribute-help.is-tabbed .recognize-side-group {
+  flex: 1 1 auto;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.attribute-help.is-tabbed .recognize-side-group + .recognize-side-group {
+  margin-top: 0;
+}
+
+.attribute-help.is-tabbed .recognize-side-group-toggle {
+  display: none;
+}
+
+.attribute-help.is-tabbed .recognize-side-group-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0;
+}
+
+.attribute-help.is-tabbed .recognize-side-group[hidden] {
+  display: none !important;
 }
 
 .recognize-side-subgroups {
@@ -4639,6 +4832,141 @@ textarea#message:focus,
   gap: 8px;
 }
 
+.customer-settings-card-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.customer-settings-form-card {
+  border-color: #e1e8f0;
+  border-radius: 16px;
+  background: #ffffff;
+  padding: 16px;
+  gap: 14px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 0 0 1px rgba(255, 255, 255, 0.6) inset;
+}
+
+.customer-settings-card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.customer-settings-card-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.customer-settings-card-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border: 1px solid #dbe7f3;
+  border-radius: 999px;
+  background: #f8fbff;
+  color: #516a82;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.customer-settings-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.customer-settings-field-grid-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.customer-settings-field {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.customer-settings-field-label {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: #243b53;
+}
+
+.customer-settings-field-hint {
+  font-size: 12px;
+  line-height: 1.45;
+  color: #718399;
+}
+
+.customer-settings-inline-toggle {
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #f8fafc;
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.customer-settings-inline-toggle span {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.customer-settings-inline-toggle strong {
+  font-size: 13px;
+  line-height: 1.35;
+  color: #243b53;
+}
+
+.customer-settings-inline-toggle small {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #62748a;
+}
+
+.customer-settings-form-section {
+  border-top: 1px solid #edf2f7;
+  padding-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.customer-settings-section-heading {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: #243b53;
+}
+
+.customer-settings-section-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #62748a;
+}
+
+.customer-settings-card-footer {
+  margin-top: auto;
+  padding-top: 2px;
+}
+
+.customer-settings-card-status {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 #recognizeGroupAttributesBody .custom-attribute-editor {
   flex: 0 0 auto;
 }
@@ -4657,6 +4985,30 @@ textarea#message:focus,
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
+}
+
+#recognizeGroupSettlementBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  align-content: start;
+  gap: 16px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+
+#recognizeGroupSettlementBody .anchor-console-card {
+  min-width: 0;
+  align-self: start;
+}
+
+@media (max-width: 900px) {
+  .customer-settings-field-grid,
+  .customer-settings-field-grid-three {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 #recognizeGroupAnchorsBody {
@@ -4681,6 +5033,13 @@ textarea#message:focus,
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
+}
+
+#amountUnitsBusinessWorkspace {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
 }
 
 #recognizeGroupNoiseBody #noiseRuleList.anchor-alias-list {
@@ -4742,6 +5101,39 @@ textarea#message:focus,
 
 #recognizeGroupNoiseBody .anchor-impact-preview,
 #recognizeGroupAmountUnitsBody .anchor-impact-preview {
+  flex: 1 1 auto;
+  min-height: 86px;
+  max-height: none;
+}
+
+#recognizeGroupAnchorsBody #amountUnitsBusinessWorkspace .noise-rule-workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+#recognizeGroupAnchorsBody #amountUnitsBusinessWorkspace .anchor-rule-list-column {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#recognizeGroupAnchorsBody #amountUnitsBusinessWorkspace #amountUnitList.anchor-alias-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  overflow-x: auto;
+  scrollbar-gutter: stable both-edges;
+}
+
+#recognizeGroupAnchorsBody #amountUnitsBusinessWorkspace .anchor-impact-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+#recognizeGroupAnchorsBody #amountUnitsBusinessWorkspace .anchor-impact-preview {
   flex: 1 1 auto;
   min-height: 86px;
   max-height: none;
@@ -5552,6 +5944,33 @@ textarea#message:focus,
 
 .settings-modal .modal-content {
   max-width: 760px;
+}
+
+.customer-settings-drawer-subtitle {
+  color: #597189;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+.customer-settings-drawer-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.customer-settings-drawer-host .attribute-help {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+
+.customer-settings-drawer-host .attribute-help-body {
+  flex: 1 1 auto;
+}
+
+.customer-drawer-checkbox {
+  margin-top: 2px;
 }
 
 .hedge-report-modal-content {
@@ -6450,6 +6869,10 @@ textarea#message:focus,
   .anchor-console-split {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .customer-settings-drawer-host {
+    min-height: 0;
+  }
 }
 
 @media (max-width: 1200px) {
@@ -6481,6 +6904,10 @@ textarea#message:focus,
     gap: var(--space-5);
     grid-template-columns: repeat(2, minmax(280px, 1fr));
   }
+
+  .customer-settings-drawer-host {
+    min-height: 0;
+  }
 }
 
 @media (max-width: 1024px) {
@@ -6506,6 +6933,30 @@ textarea#message:focus,
   .main-content {
     grid-template-columns: 1fr;
     min-height: 0;
+  }
+
+  .customer-list-area {
+    min-height: 280px;
+  }
+
+  .customer-settings-dock {
+    top: 12px;
+    right: 12px;
+    left: auto;
+    bottom: 12px;
+    width: min(520px, calc(100vw - 40px));
+  }
+
+  .customer-settings-dock-overlay {
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    border-radius: 0;
+  }
+
+  .customer-settings-dock-resizer {
+    display: none;
   }
 
   .user-list,
@@ -6706,5 +7157,12 @@ textarea#message:focus,
 
   .anchor-impact-preview {
     max-height: 180px;
+  }
+}
+
+@media (max-width: 720px) {
+  .customer-settings-dock {
+    left: 12px;
+    width: auto;
   }
 }

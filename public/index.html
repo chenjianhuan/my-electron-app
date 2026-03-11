@@ -21,26 +21,40 @@
     </div>
 
     <div class="main-content">
-        <aside class="user-list panel-shell">
-            <div class="panel-head">
-                <h3>客户列表</h3>
-            </div>
-            <div class="panel-body">
-                <div class="user-add-row">
-                    <input type="text" id="newUserName" placeholder="输入新客户名称">
-                    <button onclick="addUser()">添加客户</button>
+        <div class="customer-list-area">
+            <aside class="user-list panel-shell">
+                <div class="panel-head">
+                    <h3>客户列表</h3>
                 </div>
-                <div class="user-search-row">
-                    <input
-                        id="userSearchInput"
-                        type="text"
-                        placeholder="搜索客户名称"
-                        oninput="handleUserSearchInput(this.value)"
-                    >
+                <div class="panel-body">
+                    <div class="user-add-row">
+                        <input type="text" id="newUserName" placeholder="输入新客户名称">
+                        <button onclick="addUser()">添加客户</button>
+                    </div>
+                    <div class="user-search-row">
+                        <input
+                            id="userSearchInput"
+                            type="text"
+                            placeholder="搜索客户名称"
+                            oninput="handleUserSearchInput(this.value)"
+                        >
+                    </div>
+                    <ul id="userList"></ul>
                 </div>
-                <ul id="userList"></ul>
-            </div>
-        </aside>
+            </aside>
+            <section id="customerSettingsDock" class="customer-settings-dock" aria-hidden="true">
+                <div class="customer-settings-dock-header">
+                    <div class="customer-settings-dock-title-wrap">
+                        <h3 id="customerSettingsDrawerTitle">客户设置</h3>
+                        <div id="customerSettingsDrawerSubtitle" class="customer-settings-drawer-subtitle">与消息识别页共用同一套客户设置抽屉。</div>
+                    </div>
+                    <button class="customer-settings-dock-close" type="button" onclick="closeCustomerSettingsModal()" aria-label="关闭客户设置抽屉">&times;</button>
+                </div>
+                <div id="customerSettingsDrawerHost" class="customer-settings-drawer-host"></div>
+                <div id="customerSettingsDockResizer" class="main-page-resizer customer-settings-dock-resizer" role="separator" aria-orientation="vertical" aria-label="调整客户设置抽屉宽度"></div>
+            </section>
+        </div>
+        <div id="customerSettingsDockOverlay" class="customer-settings-dock-overlay" aria-hidden="true" onclick="closeCustomerSettingsModal()"></div>
 
         <div id="mainResizerUser" class="main-page-resizer" role="separator" aria-orientation="vertical" aria-label="调整左侧列表宽度"></div>
 
@@ -141,7 +155,7 @@
                                     <button id="recognizeInputModeFormatted" class="recognize-input-mode-button" type="button" onclick="setRecognizeInputMode('formatted')">格式输入</button>
                                     <button id="recognizeInputModeFree" class="recognize-input-mode-button" type="button" onclick="setRecognizeInputMode('free')">自由输入</button>
                                 </div>
-                                <button id="toggleAttributePanelBtn" class="edit-button recognize-attr-toggle" type="button" onclick="toggleRecognizeAttributePanel()">隐藏属性面板</button>
+                                <button id="openRecognizeCustomerSettingsBtn" class="edit-button recognize-attr-toggle" type="button" onclick="openCustomerSettingsFromRecognize()" aria-pressed="false">客户设置</button>
                             </div>
                         </div>
 
@@ -206,32 +220,97 @@
 
                 <div id="recognizeAttrResizer" class="recognize-resizer recognize-attr-resizer" role="separator" aria-orientation="vertical" aria-label="调整核对区与属性面板宽度"></div>
 
-                <aside id="attributeHelpPanel" class="attribute-help recognize-attribute-dock">
+                <div id="recognizeAttributeDockHost" class="recognize-attribute-dock">
+                <aside id="attributeHelpPanel" class="attribute-help">
                     <div class="attribute-help-body">
-                        <input id="anchorRuleScope" type="hidden" value="global">
+                        <div class="customer-settings-primary-tabs" role="tablist" aria-label="客户设置主分组">
+                            <button id="recognizePrimaryTabSettlement" class="customer-settings-primary-tab" type="button" role="tab" aria-selected="false" onclick="selectRecognizeSettingsTab('settlement')">结算与区域</button>
+                            <button id="recognizePrimaryTabAttributes" class="customer-settings-primary-tab" type="button" role="tab" aria-selected="false" onclick="selectRecognizeSettingsTab('attributes')">号码与玩法</button>
+                            <button id="recognizePrimaryTabAnchors" class="customer-settings-primary-tab" type="button" role="tab" aria-selected="false" onclick="selectRecognizeSettingsTab('anchors')">金额识别</button>
+                            <button id="recognizePrimaryTabNoise" class="customer-settings-primary-tab" type="button" role="tab" aria-selected="false" onclick="selectRecognizeSettingsTab('noise')">清洗与边界</button>
+                        </div>
+
+                        <section id="recognizeGroupSettlement" class="recognize-side-group collapsed">
+                            <button id="recognizeGroupSettlementToggle" class="recognize-side-group-toggle" type="button" onclick="toggleRecognizeSideGroup('settlement')" aria-expanded="false">
+                                <span class="recognize-side-group-title">结算与区域</span>
+                                <span class="recognize-side-group-caret">▾</span>
+                            </button>
+                            <div id="recognizeGroupSettlementBody" class="recognize-side-group-body">
+                                <div id="sharedCustomerSettlementCard" class="anchor-console-card customer-settings-form-card">
+                                    <div class="customer-settings-card-header">
+                                        <div class="customer-settings-card-title-row">
+                                            <div class="anchor-alias-title">客户结算参数</div>
+                                            <span class="customer-settings-card-badge">唯一主入口</span>
+                                        </div>
+                                        <div class="anchor-alias-subtitle">这里修改的倍率会同步成为该客户默认识别倍率，主页和识别页不再分开维护。</div>
+                                    </div>
+                                    <div class="customer-settings-field-grid">
+                                        <label class="customer-settings-field">
+                                            <span class="customer-settings-field-label">倍率</span>
+                                            <span class="customer-settings-field-hint">例如 47</span>
+                                            <input id="sharedCustomerOddsInput" type="text" placeholder="倍率，例如：47">
+                                        </label>
+                                        <label class="customer-settings-field">
+                                            <span class="customer-settings-field-label">返利</span>
+                                            <span class="customer-settings-field-hint">百分比，例如 2.5</span>
+                                            <input id="sharedCustomerRebateInput" type="text" placeholder="返利%，例如：2.5">
+                                        </label>
+                                    </div>
+                                    <div class="customer-settings-card-footer anchor-alias-actions">
+                                        <button id="saveSharedCustomerSettlementBtn" class="confirm-button" type="button" onclick="saveSharedCustomerSettlementSettings()">保存结算设置</button>
+                                        <button id="reloadSharedCustomerSettlementBtn" class="cancel-button" type="button" onclick="renderSharedCustomerSettlementSettings()">重新加载</button>
+                                    </div>
+                                    <div class="customer-settings-card-status">
+                                        <div id="sharedCustomerSettlementState" class="anchor-policy-state"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
 
                         <section id="recognizeGroupAttributes" class="recognize-side-group expanded-fill">
                             <button id="recognizeGroupAttributesToggle" class="recognize-side-group-toggle" type="button" onclick="toggleRecognizeSideGroup('attributes')" aria-expanded="true">
-                                <span class="recognize-side-group-title">号码属性</span>
+                                <span class="recognize-side-group-title">号码与玩法</span>
                                 <span class="recognize-side-group-caret">▾</span>
                             </button>
                             <div id="recognizeGroupAttributesBody" class="recognize-side-group-body">
-                                <div class="custom-attribute-editor">
-                                    <input id="customAttrName" type="text" placeholder="自定义属性名，如：快码A">
-                                    <input id="customAttrNumbers" type="text" placeholder="对应号码，如：01,05,12,49">
-                                    <div class="custom-attribute-actions">
-                                        <button class="edit-button" onclick="addCustomAttribute()">添加属性</button>
-                                        <button id="toggleAttributeEditBtn" class="cancel-button" onclick="toggleAttributeEditMode()">编辑属性</button>
+                                <div id="customAttributeWorkspace" class="customer-settings-card-stack">
+                                    <div class="custom-attribute-editor">
+                                        <input id="customAttrName" type="text" placeholder="自定义属性名，如：快码A">
+                                        <input id="customAttrNumbers" type="text" placeholder="对应号码，如：01,05,12,49">
+                                        <div class="custom-attribute-actions">
+                                            <button class="edit-button" onclick="addCustomAttribute()">添加属性</button>
+                                            <button id="toggleAttributeEditBtn" class="cancel-button" onclick="toggleAttributeEditMode()">编辑属性</button>
+                                        </div>
+                                    </div>
+                                    <div id="attributePicker" class="attribute-picker"></div>
+                                </div>
+                                <div id="customerTailShorthandCard" class="anchor-console-card customer-settings-form-card">
+                                    <div class="customer-settings-card-header">
+                                        <div class="anchor-alias-title">尾数简写</div>
+                                        <div class="anchor-alias-subtitle">控制 `2468尾` 这类写法是按整体尾组处理，还是拆成 `2尾 / 4尾 / 6尾 / 8尾` 分组解析。</div>
+                                    </div>
+                                    <label class="user-settlement-checkbox customer-drawer-checkbox customer-settings-inline-toggle">
+                                        <input id="sharedCustomerTailShorthandInput" type="checkbox">
+                                        <span>
+                                            <strong>拆分尾数组</strong>
+                                            <small>开启后，把 `2468尾` 按多个尾数组分别参与解析；关闭则按原始整体尾组处理。</small>
+                                        </span>
+                                    </label>
+                                    <div class="customer-settings-card-footer anchor-alias-actions">
+                                        <button id="saveSharedCustomerTailShorthandBtn" class="confirm-button" type="button" onclick="saveSharedCustomerTailShorthandSettings()">保存尾数规则</button>
+                                        <button id="reloadSharedCustomerTailShorthandBtn" class="cancel-button" type="button" onclick="renderSharedCustomerTailShorthandSettings()">重新加载</button>
+                                    </div>
+                                    <div class="customer-settings-card-status">
+                                        <div id="sharedCustomerTailShorthandState" class="anchor-policy-state"></div>
                                     </div>
                                 </div>
-                                <div id="attributePicker" class="attribute-picker"></div>
-                                <div class="anchor-console-card">
+                                <div id="attributeCombinePolicyCard" class="anchor-console-card">
                                     <div class="anchor-alias-title">属性词叠加策略</div>
-                                    <div class="anchor-alias-subtitle">当一段里同时出现多个属性词时，决定按交集、并集还是每次确认。</div>
+                                    <div class="anchor-alias-subtitle">当一段里同时出现多个属性词时，决定先取共同号、直接叠加，还是每次确认。</div>
                                     <select id="attributeCombinePolicy">
-                                        <option value="intersection_then_union_fallback">先交集，空则并集</option>
-                                        <option value="intersection">仅交集</option>
-                                        <option value="union">仅并集</option>
+                                        <option value="intersection_then_union_fallback">先取共同号，空了再叠加</option>
+                                        <option value="intersection">只取共同号</option>
+                                        <option value="union">全部叠加</option>
                                         <option value="confirm">每次确认</option>
                                     </select>
                                     <div class="anchor-alias-actions">
@@ -241,30 +320,67 @@
                                     <div id="attributeCombinePolicyState" class="anchor-policy-state"></div>
                                     <div id="attributeCombinePolicyExplain" class="anchor-policy-explain"></div>
                                 </div>
-                                <div class="anchor-console-card">
-                                    <div class="anchor-alias-title">区域统计模式</div>
-                                    <div class="anchor-alias-subtitle">决定该客户是否按消息里的新奥/老奥/香港分别入账；关闭后统一记到默认区域。</div>
-                                    <select id="regionAccountingMode">
-                                        <option value="split">按区域区分统计</option>
-                                        <option value="merged">不分区域，统一入账</option>
-                                    </select>
-                                    <select id="regionAccountingDefaultRegion">
-                                        <option value="new_ao">默认区域：新奥</option>
-                                        <option value="old_ao">默认区域：老奥</option>
-                                        <option value="hongkong">默认区域：香港</option>
-                                    </select>
-                                    <div class="anchor-rule-inline-note">附加区域词映射：系统默认词会继续保留，这里只需要补充你常用的别名，多个用逗号分隔。</div>
-                                    <input id="regionAliasInput_new_ao" type="text" placeholder="新奥附加词，例如：新澳门,澳盘">
-                                    <input id="regionAliasInput_old_ao" type="text" placeholder="老奥附加词，例如：老澳门,旧澳">
-                                    <input id="regionAliasInput_hongkong" type="text" placeholder="香港附加词，例如：港盘,港澳">
-                                    <div class="anchor-alias-actions">
+                                <div id="regionAccountingPolicyCard" class="anchor-console-card customer-settings-form-card">
+                                    <div class="customer-settings-card-header">
+                                        <div class="anchor-alias-title">区域统计模式</div>
+                                        <div class="anchor-alias-subtitle">决定该客户是否按消息里的新奥 / 老奥 / 香港分别入账；关闭后统一记到默认区域。</div>
+                                    </div>
+                                    <input id="regionAccountingScope" type="hidden" value="client">
+                                    <div class="anchor-rule-scope-shell">
+                                        <div class="anchor-rule-scope-row">
+                                            <label>保存到</label>
+                                            <div class="anchor-rule-scope-segmented">
+                                                <button id="regionAccountingScopeGlobalBtn" type="button" class="anchor-scope-btn" onclick="setRegionAccountingScope('global')">全局</button>
+                                                <button id="regionAccountingScopeClientBtn" type="button" class="anchor-scope-btn" onclick="setRegionAccountingScope('client')">当前客户</button>
+                                            </div>
+                                        </div>
+                                        <div id="regionAccountingScopeExplain" class="anchor-scope-explain"></div>
+                                    </div>
+                                    <div class="customer-settings-field-grid">
+                                        <label class="customer-settings-field">
+                                            <span class="customer-settings-field-label">统计模式</span>
+                                            <select id="regionAccountingMode">
+                                                <option value="split">按区域区分统计</option>
+                                                <option value="merged">不分区域，统一入账</option>
+                                            </select>
+                                        </label>
+                                        <label class="customer-settings-field">
+                                            <span class="customer-settings-field-label">默认区域</span>
+                                            <select id="regionAccountingDefaultRegion">
+                                                <option value="new_ao">默认区域：新奥</option>
+                                                <option value="old_ao">默认区域：老奥</option>
+                                                <option value="hongkong">默认区域：香港</option>
+                                            </select>
+                                        </label>
+                                    </div>
+                                    <div class="customer-settings-form-section">
+                                        <div class="customer-settings-section-heading">附加区域词映射</div>
+                                        <div class="customer-settings-section-desc">系统默认区域词继续保留，这里只补充你们自己常用的别名。多个词用逗号分隔。</div>
+                                        <div class="customer-settings-field-grid customer-settings-field-grid-three">
+                                            <label class="customer-settings-field">
+                                                <span class="customer-settings-field-label">新奥附加词</span>
+                                                <input id="regionAliasInput_new_ao" type="text" placeholder="例如：新澳门,澳盘">
+                                            </label>
+                                            <label class="customer-settings-field">
+                                                <span class="customer-settings-field-label">老奥附加词</span>
+                                                <input id="regionAliasInput_old_ao" type="text" placeholder="例如：老澳门,旧澳">
+                                            </label>
+                                            <label class="customer-settings-field">
+                                                <span class="customer-settings-field-label">香港附加词</span>
+                                                <input id="regionAliasInput_hongkong" type="text" placeholder="例如：港盘,港澳">
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <div class="customer-settings-card-footer anchor-alias-actions">
                                         <button id="saveRegionAccountingPolicyBtn" class="confirm-button" type="button" onclick="saveRegionAccountingPolicyRule()">保存区域规则</button>
                                         <button id="resetRegionAccountingPolicyBtn" class="cancel-button" type="button" onclick="resetRegionAccountingPolicyRule()">恢复默认</button>
                                     </div>
-                                    <div id="regionAccountingPolicyState" class="anchor-policy-state"></div>
-                                    <div id="regionAccountingPolicyExplain" class="anchor-policy-explain"></div>
+                                    <div class="customer-settings-card-status">
+                                        <div id="regionAccountingPolicyState" class="anchor-policy-state"></div>
+                                        <div id="regionAccountingPolicyExplain" class="anchor-policy-explain"></div>
+                                    </div>
                                 </div>
-                                <div class="anchor-console-card">
+                                <div id="blockedPlayKeywordCard" class="anchor-console-card">
                                     <div class="anchor-alias-title">未开放玩法关键词</div>
                                     <div class="anchor-alias-subtitle">补充会被拦截为未开放玩法的关键词，避免被误统进普通号码统计。系统已内置“二连/二联/三连/三联/四连/五连/连肖/二肖连/三肖连/复式连肖/复式二连/复式三连/复式四连”等。</div>
                                     <div class="anchor-rule-inline-note">平特类附加词：命中后按“平特一肖”处理。多个用逗号分隔。</div>
@@ -278,7 +394,7 @@
                                     <div id="blockedPlayKeywordState" class="anchor-policy-state"></div>
                                     <div id="blockedPlayKeywordExplain" class="anchor-policy-explain"></div>
                                 </div>
-                                <div class="anchor-console-card">
+                                <div id="messageTypeWhitelistCard" class="anchor-console-card">
                                     <div class="anchor-alias-title">消息类型白名单</div>
                                     <div class="anchor-alias-subtitle">把系统当前默认支持的安全 shorthand 显式展示出来；你可以按全局或客户专属关闭某一类解析，减少误统风险。</div>
                                     <div class="message-type-whitelist-list">
@@ -330,7 +446,7 @@
 
                         <section id="recognizeGroupAnchors" class="recognize-side-group collapsed">
                             <button id="recognizeGroupAnchorsToggle" class="recognize-side-group-toggle" type="button" onclick="toggleRecognizeSideGroup('anchors')" aria-expanded="false">
-                                <span class="recognize-side-group-title">金额分配词</span>
+                                <span class="recognize-side-group-title">金额识别</span>
                                 <span class="recognize-side-group-caret">▾</span>
                             </button>
                             <div id="recognizeGroupAnchorsBody" class="recognize-side-group-body">
@@ -448,12 +564,12 @@
 
                         <section id="recognizeGroupNoise" class="recognize-side-group collapsed">
                             <button id="recognizeGroupNoiseToggle" class="recognize-side-group-toggle" type="button" onclick="toggleRecognizeSideGroup('noise')" aria-expanded="false">
-                                <span class="recognize-side-group-title">不入账规则</span>
+                                <span class="recognize-side-group-title">清洗与边界</span>
                                 <span class="recognize-side-group-caret">▾</span>
                             </button>
                             <div id="recognizeGroupNoiseBody" class="recognize-side-group-body">
                                 <input id="noiseRuleScope" type="hidden" value="global">
-                                <div class="anchor-console-card noise-shared-scope-card">
+                                <div id="noiseSharedScopeCard" class="anchor-console-card noise-shared-scope-card">
                                     <div class="anchor-alias-title">统一作用范围</div>
                                     <div class="anchor-alias-subtitle">下面两个子组共用同一套作用范围。切到“当前客户”后，噪音规则和解析前忽略字符/词都会只对当前客户生效。</div>
                                     <div class="anchor-rule-scope-shell">
@@ -583,67 +699,70 @@
                                 <span class="recognize-side-group-caret">▾</span>
                             </button>
                             <div id="recognizeGroupAmountUnitsBody" class="recognize-side-group-body">
-                                <input id="amountUnitScope" type="hidden" value="global">
-                                <div class="anchor-console-card">
-                                    <div class="anchor-alias-title">新增金额单位</div>
-                                    <div class="anchor-alias-subtitle">用于识别金额结尾词，帮助解析 `01*10块`、`01.10闷`、`各五毛` 这类写法。这里配置的是“金额单位”，不是锚点词。</div>
-                                    <div class="anchor-rule-scope-shell">
-                                        <div class="anchor-rule-scope-row">
-                                            <label>作用范围</label>
-                                            <div class="anchor-rule-scope-segmented">
-                                                <button id="amountUnitScopeGlobalBtn" type="button" class="anchor-scope-btn" onclick="setAmountUnitScope('global')">全部客户</button>
-                                                <button id="amountUnitScopeClientBtn" type="button" class="anchor-scope-btn" onclick="setAmountUnitScope('client')">当前客户</button>
+                                <div id="amountUnitsBusinessWorkspace" class="customer-settings-card-stack">
+                                    <input id="amountUnitScope" type="hidden" value="global">
+                                    <div class="anchor-console-card">
+                                        <div class="anchor-alias-title">新增金额单位</div>
+                                        <div class="anchor-alias-subtitle">用于识别金额结尾词，帮助解析 `01*10块`、`01.10闷`、`各五毛` 这类写法。这里配置的是“金额单位”，不是锚点词。</div>
+                                        <div class="anchor-rule-scope-shell">
+                                            <div class="anchor-rule-scope-row">
+                                                <label>作用范围</label>
+                                                <div class="anchor-rule-scope-segmented">
+                                                    <button id="amountUnitScopeGlobalBtn" type="button" class="anchor-scope-btn" onclick="setAmountUnitScope('global')">全部客户</button>
+                                                    <button id="amountUnitScopeClientBtn" type="button" class="anchor-scope-btn" onclick="setAmountUnitScope('client')">当前客户</button>
+                                                </div>
                                             </div>
+                                            <div id="amountUnitClientRow" class="anchor-rule-client-row" style="display: none;">
+                                                <label for="amountUnitClientSelect">客户</label>
+                                                <select id="amountUnitClientSelect" onchange="handleAmountUnitClientChange()"></select>
+                                            </div>
+                                            <div id="amountUnitScopeExplain" class="anchor-scope-explain"></div>
                                         </div>
-                                        <div id="amountUnitClientRow" class="anchor-rule-client-row" style="display: none;">
-                                            <label for="amountUnitClientSelect">客户</label>
-                                            <select id="amountUnitClientSelect" onchange="handleAmountUnitClientChange()"></select>
+                                        <input id="amountUnitTokenInput" type="text" placeholder="例如：元 / 块 / 毛 / 闷">
+                                        <div class="anchor-alias-actions">
+                                            <button id="saveAmountUnitBtn" class="confirm-button" type="button" onclick="saveAmountUnitToken()">保存金额单位</button>
+                                            <button id="resetAmountUnitBtn" class="cancel-button" type="button" onclick="resetAmountUnitTokenInput()">清空输入</button>
                                         </div>
-                                        <div id="amountUnitScopeExplain" class="anchor-scope-explain"></div>
-                                    </div>
-                                    <input id="amountUnitTokenInput" type="text" placeholder="例如：元 / 块 / 毛 / 闷">
-                                    <div class="anchor-alias-actions">
-                                        <button id="saveAmountUnitBtn" class="confirm-button" type="button" onclick="saveAmountUnitToken()">保存金额单位</button>
-                                        <button id="resetAmountUnitBtn" class="cancel-button" type="button" onclick="resetAmountUnitTokenInput()">清空输入</button>
-                                    </div>
-                                    <div id="amountUnitEditorState" class="anchor-policy-state"></div>
-                                    <div class="noise-rule-helper-list">
-                                        <button class="noise-rule-helper-chip" type="button" data-amount-unit-example="元">元</button>
-                                        <button class="noise-rule-helper-chip" type="button" data-amount-unit-example="块">块</button>
-                                        <button class="noise-rule-helper-chip" type="button" data-amount-unit-example="毛">毛</button>
-                                        <button class="noise-rule-helper-chip" type="button" data-amount-unit-example="闷">闷</button>
-                                    </div>
-                                </div>
-
-                                <div class="anchor-rule-workspace noise-rule-workspace">
-                                    <div class="anchor-rule-list-column">
-                                        <div class="anchor-alias-toolbar">
-                                            <input id="amountUnitSearch" type="text" placeholder="搜索金额单位">
-                                            <select id="amountUnitSourceFilter">
-                                                <option value="all">全部来源</option>
-                                                <option value="client">客户</option>
-                                                <option value="global">全局</option>
-                                                <option value="system">系统默认</option>
-                                            </select>
+                                        <div id="amountUnitEditorState" class="anchor-policy-state"></div>
+                                        <div class="noise-rule-helper-list">
+                                            <button class="noise-rule-helper-chip" type="button" data-amount-unit-example="元">元</button>
+                                            <button class="noise-rule-helper-chip" type="button" data-amount-unit-example="块">块</button>
+                                            <button class="noise-rule-helper-chip" type="button" data-amount-unit-example="毛">毛</button>
+                                            <button class="noise-rule-helper-chip" type="button" data-amount-unit-example="闷">闷</button>
                                         </div>
-                                        <div id="amountUnitList" class="anchor-alias-list"></div>
                                     </div>
 
-                                    <div class="anchor-impact-panel">
-                                        <div class="anchor-impact-title">金额单位预览</div>
-                                        <div class="anchor-impact-subtitle">点击左侧某个单位后，右侧会切到该单位的演示样例，实时查看是否能被当前解析器识别。</div>
-                                        <textarea id="amountUnitSampleInput" placeholder="例如：01*10块 23.24各5"></textarea>
-                                        <div class="anchor-impact-actions">
-                                            <button type="button" class="edit-button" onclick="applyAmountUnitExample()">套用示例</button>
-                                            <button type="button" class="recognize-button" onclick="renderAmountUnitPreview()">刷新预览</button>
+                                    <div class="anchor-rule-workspace noise-rule-workspace">
+                                        <div class="anchor-rule-list-column">
+                                            <div class="anchor-alias-toolbar">
+                                                <input id="amountUnitSearch" type="text" placeholder="搜索金额单位">
+                                                <select id="amountUnitSourceFilter">
+                                                    <option value="all">全部来源</option>
+                                                    <option value="client">客户</option>
+                                                    <option value="global">全局</option>
+                                                    <option value="system">系统默认</option>
+                                                </select>
+                                            </div>
+                                            <div id="amountUnitList" class="anchor-alias-list"></div>
                                         </div>
-                                        <div id="amountUnitPreview" class="anchor-impact-preview"></div>
+
+                                        <div class="anchor-impact-panel">
+                                            <div class="anchor-impact-title">金额单位预览</div>
+                                            <div class="anchor-impact-subtitle">点击左侧某个单位后，右侧会切到该单位的演示样例，实时查看是否能被当前解析器识别。</div>
+                                            <textarea id="amountUnitSampleInput" placeholder="例如：01*10块 23.24各5"></textarea>
+                                            <div class="anchor-impact-actions">
+                                                <button type="button" class="edit-button" onclick="applyAmountUnitExample()">套用示例</button>
+                                                <button type="button" class="recognize-button" onclick="renderAmountUnitPreview()">刷新预览</button>
+                                            </div>
+                                            <div id="amountUnitPreview" class="anchor-impact-preview"></div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
                         </section>
                     </div>
                 </aside>
+                </div>
             </div>
         </div>
     </div>

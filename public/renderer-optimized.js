@@ -68,12 +68,19 @@ let recognizeEditContext = null;
 let recognizeAttributePanelVisible = false;
 let hedgeReportAutoCalcTimer = null;
 let recognizeConfigRefreshTimer = null;
+let customerSettingsContext = {
+    userName: '',
+    source: 'list',
+    defaultTab: 'settlement'
+};
+let customerSettingsReturnSideGroupState = null;
+let customerSettingsReturnRuleContext = null;
 let recognizeDetectedRegionKeys = [];
 let recognizeSideGroupState = {
+    settlement: false,
     attributes: true,
     anchors: false,
-    noise: false,
-    amountUnits: false
+    noise: false
 };
 let noiseWorkspaceGroupState = {
     noiseRules: true,
@@ -113,6 +120,8 @@ const MAIN_SPLIT_USER_WIDTH_KEY = 'mainSplitUserWidth.v1';
 const MAIN_SPLIT_MIDDLE_WIDTH_KEY = 'mainSplitMiddleWidth.v1';
 const MAIN_SPLIT_ZODIAC_CURRENT_WIDTH_KEY = 'mainSplitZodiacCurrentWidth.v1';
 const MAIN_SPLIT_RIGHT_RANK_WIDTH_KEY = 'mainSplitRightRankWidth.v1';
+const CUSTOMER_SETTINGS_DOCK_WIDTH_KEY = 'customerSettingsDockWidth.v1';
+const CUSTOMER_SETTINGS_PRIMARY_GROUP_KEYS = ['settlement', 'attributes', 'anchors', 'noise'];
 const MAIN_SPLIT_BREAKPOINT = 1200;
 const HEDGE_REPORT_MODE_KEY = 'hedgeReportMode.v1';
 const ANCHOR_STRATEGY_GUIDE_STATE_KEY = 'anchorStrategyGuide.v1';
@@ -174,14 +183,14 @@ const MESSAGE_TYPE_WHITELIST_CONFIGS = [
     {
         key: 'composite_attribute_shorthand',
         title: '组合属性 shorthand',
-        summary: '红蓝波、0123头 这类组合属性先并组，再和其他属性交集。',
+        summary: '红蓝波、0123头 这类组合属性先并组，再和其他属性取共同号。',
         example: '例：红蓝波的小单 / 0123头的单数'
     }
 ];
 const ATTRIBUTE_COMBINE_POLICY_LABELS = {
-    intersection: '仅交集',
-    union: '仅并集',
-    intersection_then_union_fallback: '先交集，空则并集',
+    intersection: '只取共同号',
+    union: '全部叠加',
+    intersection_then_union_fallback: '先取共同号，空了再叠加',
     confirm: '每次确认'
 };
 const ANCHOR_PARSE_MODE_LABELS = {
@@ -363,6 +372,7 @@ document.addEventListener('DOMContentLoaded', function() {
     applySavedAttributeGroupOrder();
     initializeApplication();
     initMainLayoutResizers();
+    initCustomerSettingsDockResizer();
     renderRecognizeRegionButtons();
     renderViewRegionButtons();
     initRegionPnlPanel();
@@ -372,6 +382,7 @@ document.addEventListener('DOMContentLoaded', function() {
     initRecognizeLayoutResizer();
     initRecognizeAttributeDockResizer();
     initRecognizeAttributePanelToggle();
+    initCustomerSettingsCenter();
     initRecognizeSideGroups();
     initClipboardAssistPreference();
     renderAttributePicker();
@@ -393,6 +404,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 window.userManager.renderAllSections();
             }
             ensureMainLayoutWidths();
+            ensureCustomerSettingsDockWidth();
             ensureRecognizeSplitWidth();
             ensureRecognizeAttrWidth();
             syncRecognizeMessageAutoHeight();
@@ -1010,6 +1022,558 @@ function closeSettingsModal() {
     const modal = document.getElementById('settingsModal');
     if (!modal) return;
     modal.style.display = 'none';
+}
+
+function setCustomerSettingsSettlementState(message = '', type = 'info') {
+    const stateEl = document.getElementById('sharedCustomerSettlementState');
+    if (!stateEl) return;
+    stateEl.textContent = message || '';
+    stateEl.className = 'anchor-policy-state';
+    if (type === 'success') {
+        stateEl.classList.add('is-success');
+    } else if (type === 'error') {
+        stateEl.classList.add('is-warning');
+    }
+}
+
+function setCustomerSettingsTailShorthandState(message = '', type = 'info') {
+    const stateEl = document.getElementById('sharedCustomerTailShorthandState');
+    if (!stateEl) return;
+    stateEl.textContent = message || '';
+    stateEl.className = 'anchor-policy-state';
+    if (type === 'success') {
+        stateEl.classList.add('is-success');
+    } else if (type === 'error') {
+        stateEl.classList.add('is-warning');
+    }
+}
+
+function getCustomerSettingsActiveUserName() {
+    return String(customerSettingsContext && customerSettingsContext.userName || '').trim();
+}
+
+function isCustomerSettingsListDockOpenForUser(userName = '') {
+    const safeUserName = String(userName || '').trim();
+    const { dock } = getCustomerSettingsHosts();
+    if (!safeUserName || !dock || !dock.classList.contains('open')) {
+        return false;
+    }
+    return customerSettingsContext
+        && customerSettingsContext.source === 'list'
+        && getCustomerSettingsActiveUserName() === safeUserName;
+}
+
+function appendCustomerSettingsNode(parent, node) {
+    if (!parent || !node || node.parentElement === parent) return;
+    parent.appendChild(node);
+}
+
+function ensureCustomerSettingsBusinessLayout() {
+    const settlementBody = document.getElementById('recognizeGroupSettlementBody');
+    const attributesBody = document.getElementById('recognizeGroupAttributesBody');
+    const anchorsBody = document.getElementById('recognizeGroupAnchorsBody');
+    const noiseBody = document.getElementById('recognizeGroupNoiseBody');
+    const amountUnitsRoot = document.getElementById('recognizeGroupAmountUnits');
+
+    if (!settlementBody || !attributesBody || !anchorsBody || !noiseBody) {
+        return;
+    }
+
+    const settlementCard = document.getElementById('sharedCustomerSettlementCard');
+    const customAttributeWorkspace = document.getElementById('customAttributeWorkspace');
+    const customerTailShorthandCard = document.getElementById('customerTailShorthandCard');
+    const attributeCombinePolicyCard = document.getElementById('attributeCombinePolicyCard');
+    const regionAccountingPolicyCard = document.getElementById('regionAccountingPolicyCard');
+    const blockedPlayKeywordCard = document.getElementById('blockedPlayKeywordCard');
+    const messageTypeWhitelistCard = document.getElementById('messageTypeWhitelistCard');
+    const anchorLibraryWorkspace = document.getElementById('anchorLibraryWorkspace');
+    const amountUnitsBusinessWorkspace = document.getElementById('amountUnitsBusinessWorkspace');
+    const noiseSharedScopeCard = document.getElementById('noiseSharedScopeCard');
+    const noiseWorkspaceSubgroups = document.getElementById('noiseWorkspaceSubgroups');
+
+    appendCustomerSettingsNode(settlementBody, settlementCard);
+    appendCustomerSettingsNode(settlementBody, regionAccountingPolicyCard);
+
+    appendCustomerSettingsNode(attributesBody, customAttributeWorkspace);
+    appendCustomerSettingsNode(attributesBody, customerTailShorthandCard);
+    appendCustomerSettingsNode(attributesBody, attributeCombinePolicyCard);
+    appendCustomerSettingsNode(attributesBody, blockedPlayKeywordCard);
+
+    appendCustomerSettingsNode(anchorsBody, amountUnitsBusinessWorkspace);
+    appendCustomerSettingsNode(anchorsBody, anchorLibraryWorkspace);
+
+    appendCustomerSettingsNode(noiseBody, messageTypeWhitelistCard);
+    appendCustomerSettingsNode(noiseBody, noiseSharedScopeCard);
+    appendCustomerSettingsNode(noiseBody, noiseWorkspaceSubgroups);
+
+    if (amountUnitsRoot) {
+        amountUnitsRoot.hidden = true;
+        amountUnitsRoot.setAttribute('aria-hidden', 'true');
+    }
+}
+
+function cloneRecognizeSideGroupState(state = recognizeSideGroupState) {
+    const rawState = state && typeof state === 'object' ? state : {};
+    const normalized = {
+        settlement: rawState.settlement === true,
+        attributes: rawState.attributes === true,
+        anchors: rawState.anchors === true || rawState.amountUnits === true,
+        noise: rawState.noise === true
+    };
+    const expandedKeys = CUSTOMER_SETTINGS_PRIMARY_GROUP_KEYS.filter((key) => normalized[key] === true);
+    if (expandedKeys.length > 1) {
+        const keepKey = expandedKeys[0];
+        CUSTOMER_SETTINGS_PRIMARY_GROUP_KEYS.forEach((key) => {
+            normalized[key] = key === keepKey;
+        });
+        return normalized;
+    }
+    if (expandedKeys.length === 0) {
+        normalized.attributes = true;
+    }
+    return normalized;
+}
+
+function setRecognizeSideGroupState(nextState = null, options = {}) {
+    const persist = options && options.persist === true;
+    recognizeSideGroupState = cloneRecognizeSideGroupState(nextState);
+    applyRecognizeSideGroups();
+    if (persist) {
+        saveRecognizeSideGroupState();
+    }
+}
+
+function refreshRecognizeSideGroupContent(groupKey = '') {
+    ensureCustomerSettingsBusinessLayout();
+    if (groupKey === 'settlement') {
+        renderSharedCustomerSettlementSettings(getCustomerSettingsActiveUserName());
+        renderRegionAccountingPolicyState();
+        return;
+    }
+    if (groupKey === 'attributes') {
+        renderSharedCustomerTailShorthandSettings(getCustomerSettingsActiveUserName());
+        renderAttributeCombinePolicyState();
+        renderBlockedPlayKeywordState();
+        return;
+    }
+    if (groupKey === 'anchors') {
+        renderDefaultOddsState();
+        renderAnchorParseModeState();
+        renderAnchorAliasList();
+        renderAnchorImpactPreview();
+        handleAmountUnitScopeChange();
+        return;
+    }
+    if (groupKey === 'noise') {
+        renderMessageTypeWhitelistState();
+        handleNoiseRuleScopeChange();
+    }
+}
+
+function refreshExpandedRecognizeSideGroups() {
+    CUSTOMER_SETTINGS_PRIMARY_GROUP_KEYS.forEach((key) => {
+        if (recognizeSideGroupState[key] === true) {
+            refreshRecognizeSideGroupContent(key);
+        }
+    });
+}
+
+function expandRecognizeCustomerGroup(groupKey = 'attributes', options = {}) {
+    const validKeys = CUSTOMER_SETTINGS_PRIMARY_GROUP_KEYS;
+    const targetKey = validKeys.includes(groupKey) ? groupKey : 'attributes';
+    const nextState = {
+        settlement: false,
+        attributes: false,
+        anchors: false,
+        noise: false
+    };
+    nextState[targetKey] = true;
+    setRecognizeSideGroupState(nextState, { persist: options && options.persist === true });
+    refreshRecognizeSideGroupContent(targetKey);
+}
+
+function selectRecognizeSettingsTab(groupKey = 'attributes') {
+    expandRecognizeCustomerGroup(groupKey, { persist: true });
+}
+
+function snapshotCustomerSettingsRuleContext() {
+    const readValue = (id) => {
+        const el = document.getElementById(id);
+        return el ? String(el.value || '').trim() : '';
+    };
+    return {
+        anchorScope: readValue('anchorRuleScope'),
+        noiseScope: readValue('noiseRuleScope'),
+        amountUnitScope: readValue('amountUnitScope'),
+        anchorClientId: String(anchorRuleTargetClientId || '').trim(),
+        noiseClientId: String(noiseRuleTargetClientId || '').trim(),
+        amountUnitClientId: String(amountUnitTargetClientId || '').trim(),
+        anchorSelectValue: readValue('anchorRuleClientSelect'),
+        noiseSelectValue: readValue('noiseRuleClientSelect'),
+        amountUnitSelectValue: readValue('amountUnitClientSelect')
+    };
+}
+
+function restoreCustomerSettingsRuleContext(snapshot = null) {
+    if (!snapshot || typeof snapshot !== 'object') return;
+    const writeValue = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.value = value;
+        }
+    };
+    writeValue('anchorRuleScope', snapshot.anchorScope === 'client' ? 'client' : 'global');
+    writeValue('noiseRuleScope', snapshot.noiseScope === 'client' ? 'client' : 'global');
+    writeValue('amountUnitScope', snapshot.amountUnitScope === 'client' ? 'client' : 'global');
+
+    anchorRuleTargetClientId = String(snapshot.anchorClientId || '').trim();
+    noiseRuleTargetClientId = String(snapshot.noiseClientId || '').trim();
+    amountUnitTargetClientId = String(snapshot.amountUnitClientId || '').trim();
+
+    ['anchorRuleClientSelect', 'noiseRuleClientSelect', 'amountUnitClientSelect'].forEach((id, index) => {
+        const select = document.getElementById(id);
+        if (!select) return;
+        const desiredValue = index === 0
+            ? String(snapshot.anchorSelectValue || '').trim()
+            : (index === 1
+                ? String(snapshot.noiseSelectValue || '').trim()
+                : String(snapshot.amountUnitSelectValue || '').trim());
+        const hasOption = Array.from(select.options || []).some((option) => option.value === desiredValue);
+        if (hasOption) {
+            select.value = desiredValue;
+        }
+    });
+
+    handleAnchorRuleScopeChange();
+    handleNoiseRuleScopeChange();
+    handleAmountUnitScopeChange();
+}
+
+function getCustomerSettingsHosts() {
+    const recognizeHost = document.getElementById('recognizeAttributeDockHost');
+    const dockHost = document.getElementById('customerSettingsDrawerHost');
+    const panel = document.getElementById('attributeHelpPanel');
+    const dock = document.getElementById('customerSettingsDock');
+    return { recognizeHost, dockHost, panel, dock };
+}
+
+function mountCustomerSettingsPanel(target = 'recognize') {
+    const { recognizeHost, dockHost, panel } = getCustomerSettingsHosts();
+    if (!panel) return;
+    const host = target === 'dock' ? dockHost : recognizeHost;
+    if (!host || panel.parentElement === host) return;
+    host.appendChild(panel);
+}
+
+function bindCustomerSettingsSettlementInputs() {
+    const bindNumeric = (id) => {
+        const input = document.getElementById(id);
+        if (!input || input.dataset.bound === '1') return;
+        input.dataset.bound = '1';
+        if (window.userManager && typeof window.userManager.bindSettlementNumericInput === 'function') {
+            window.userManager.bindSettlementNumericInput(input);
+        }
+    };
+    bindNumeric('sharedCustomerOddsInput');
+    bindNumeric('sharedCustomerRebateInput');
+}
+
+function renderSharedCustomerDrawerMeta(userName = '') {
+    const safeUserName = String(userName || '').trim();
+    const titleEl = document.getElementById('customerSettingsDrawerTitle');
+    const subtitleEl = document.getElementById('customerSettingsDrawerSubtitle');
+    if (!titleEl || !subtitleEl || !window.userManager) return;
+    const settlement = window.userManager.getUserSettlementConfig
+        ? window.userManager.getUserSettlementConfig(safeUserName)
+        : { odds: 0, rebateRate: 0 };
+    const regionSummary = window.userManager.getUserRegionModeSummary
+        ? window.userManager.getUserRegionModeSummary(safeUserName)
+        : '按区域分别统计';
+    const parsePreference = window.userManager.getUserParsePreference
+        ? window.userManager.getUserParsePreference(safeUserName)
+        : { tailShorthandAsSeparateGroups: true };
+    titleEl.textContent = safeUserName ? `${safeUserName} · 客户设置` : '客户设置';
+    subtitleEl.textContent = `倍率 ${formatNumericAmount(settlement.odds || 0)} | 返利 ${formatNumericAmount(settlement.rebateRate || 0)}% | ${regionSummary} | 尾数简写${parsePreference && parsePreference.tailShorthandAsSeparateGroups ? '开' : '关'}`;
+}
+
+function renderSharedCustomerSettlementSettings(userName = '') {
+    const safeUserName = String(userName || '').trim();
+    if (!safeUserName || !window.userManager) return;
+    const oddsInput = document.getElementById('sharedCustomerOddsInput');
+    const rebateInput = document.getElementById('sharedCustomerRebateInput');
+    const settlement = window.userManager.getUserSettlementConfig
+        ? window.userManager.getUserSettlementConfig(safeUserName)
+        : { odds: '', rebateRate: '' };
+    if (oddsInput) {
+        oddsInput.value = formatNumericAmount(settlement.odds || 0);
+    }
+    if (rebateInput) {
+        rebateInput.value = formatNumericAmount(settlement.rebateRate || 0);
+    }
+    setCustomerSettingsSettlementState('倍率保存后会同步为该客户默认识别倍率；保存后会立即刷新当前统计和识别预览。');
+    renderSharedCustomerDrawerMeta(safeUserName);
+}
+
+function renderSharedCustomerTailShorthandSettings(userName = '') {
+    const safeUserName = String(userName || getCustomerSettingsActiveUserName() || '').trim();
+    if (!safeUserName || !window.userManager) return;
+    const tailInput = document.getElementById('sharedCustomerTailShorthandInput');
+    const parsePreference = window.userManager.getUserParsePreference
+        ? window.userManager.getUserParsePreference(safeUserName)
+        : { tailShorthandAsSeparateGroups: true };
+    if (tailInput) {
+        tailInput.checked = !!(parsePreference && parsePreference.tailShorthandAsSeparateGroups);
+    }
+    setCustomerSettingsTailShorthandState(`当前：尾数简写${parsePreference && parsePreference.tailShorthandAsSeparateGroups ? '开启' : '关闭'}。保存后会立即刷新当前统计和识别预览。`);
+    renderSharedCustomerDrawerMeta(safeUserName);
+}
+
+function setCustomerSettingsRuleContext(userName = '') {
+    const safeUserName = String(userName || '').trim();
+    if (!safeUserName) return;
+    anchorRuleTargetClientId = safeUserName;
+    noiseRuleTargetClientId = safeUserName;
+    amountUnitTargetClientId = safeUserName;
+
+    const hiddenScopes = ['anchorRuleScope', 'noiseRuleScope', 'amountUnitScope'];
+    hiddenScopes.forEach((id) => {
+        const input = document.getElementById(id);
+        if (input) {
+            input.value = 'client';
+        }
+    });
+
+    const selectIds = ['anchorRuleClientSelect', 'noiseRuleClientSelect', 'amountUnitClientSelect'];
+    selectIds.forEach((id) => {
+        const select = document.getElementById(id);
+        if (!select) return;
+        const hasOption = Array.from(select.options || []).some((option) => option.value === safeUserName);
+        if (hasOption) {
+            select.value = safeUserName;
+        }
+    });
+
+    handleAnchorRuleScopeChange();
+    handleNoiseRuleScopeChange();
+    handleAmountUnitScopeChange();
+    const regionScopeInput = document.getElementById('regionAccountingScope');
+    if (regionScopeInput) {
+        regionScopeInput.value = 'client';
+    }
+    handleRegionAccountingScopeChange();
+}
+
+function resolveCustomerSettingsUserName(userName = '') {
+    const explicit = String(userName || '').trim();
+    if (explicit && window.userManager && window.userManager.users && window.userManager.users[explicit]) {
+        return explicit;
+    }
+    if (window.userManager && typeof window.userManager.resolveActionUserName === 'function') {
+        const resolved = String(window.userManager.resolveActionUserName() || '').trim();
+        if (resolved) return resolved;
+    }
+    return '';
+}
+
+function openCustomerSettings(userName = '', options = {}) {
+    const safeUserName = resolveCustomerSettingsUserName(userName);
+    if (!safeUserName) {
+        showError('打开客户设置失败', '请先选择客户');
+        return;
+    }
+
+    const source = options && options.source === 'recognize' ? 'recognize' : 'list';
+    const { dock } = getCustomerSettingsHosts();
+    const dockOpen = !!(dock && dock.classList.contains('open'));
+    const previousSource = customerSettingsContext && customerSettingsContext.source ? customerSettingsContext.source : '';
+    if (source === 'list'
+        && dockOpen
+        && customerSettingsContext
+        && customerSettingsContext.source === 'list'
+        && getCustomerSettingsActiveUserName() === safeUserName) {
+        closeCustomerSettingsModal();
+        return;
+    }
+
+    customerSettingsContext = {
+        userName: safeUserName,
+        source,
+        defaultTab: source === 'list' ? 'settlement' : 'rules'
+    };
+
+    if (source === 'list') {
+        if (!dockOpen || previousSource !== 'list') {
+            customerSettingsReturnSideGroupState = cloneRecognizeSideGroupState(recognizeSideGroupState);
+            customerSettingsReturnRuleContext = snapshotCustomerSettingsRuleContext();
+        }
+    } else {
+        customerSettingsReturnSideGroupState = null;
+        customerSettingsReturnRuleContext = null;
+    }
+
+    bindCustomerSettingsSettlementInputs();
+    setCustomerSettingsRuleContext(safeUserName);
+    renderSharedCustomerSettlementSettings(safeUserName);
+    renderSharedCustomerTailShorthandSettings(safeUserName);
+
+    if (source === 'recognize') {
+        if (dock) {
+            dock.classList.remove('open');
+            dock.setAttribute('aria-hidden', 'true');
+            updateCustomerSettingsDockOverlay();
+        }
+        mountCustomerSettingsPanel('recognize');
+        applyRecognizeAttributePanelVisible(true, { persist: true });
+        const expandedKeys = Object.keys(cloneRecognizeSideGroupState(recognizeSideGroupState))
+            .filter((key) => recognizeSideGroupState[key] === true);
+        if (expandedKeys.length === 0) {
+            expandRecognizeCustomerGroup('attributes', { persist: false });
+        } else {
+            applyRecognizeSideGroups();
+            refreshExpandedRecognizeSideGroups();
+        }
+        return;
+    }
+
+    if (!dock) return;
+    mountCustomerSettingsPanel('dock');
+    ensureCustomerSettingsDockWidth();
+    dock.classList.add('open');
+    dock.setAttribute('aria-hidden', 'false');
+    updateCustomerSettingsDockOverlay();
+    expandRecognizeCustomerGroup('settlement', { persist: false });
+    if (window.userManager && typeof window.userManager.renderUserList === 'function') {
+        window.userManager.renderUserList();
+    }
+    requestAnimationFrame(() => {
+        const focusEl = document.getElementById('sharedCustomerOddsInput');
+        if (focusEl && typeof focusEl.focus === 'function') {
+            focusEl.focus();
+        }
+    });
+}
+
+function openCustomerSettingsFromRecognize() {
+    if (recognizeAttributePanelVisible) {
+        applyRecognizeAttributePanelVisible(false, { persist: true });
+        return;
+    }
+    const selectedUsers = getEditableUsersForCurrentSelection();
+    if (selectedUsers.length !== 1) {
+        showError('打开客户设置失败', '请先在左侧选中单个客户，再打开客户设置');
+        return;
+    }
+    openCustomerSettings(selectedUsers[0], {
+        source: 'recognize',
+        defaultTab: 'rules'
+    });
+}
+
+function closeCustomerSettingsModal() {
+    const { dock } = getCustomerSettingsHosts();
+    if (dock) {
+        dock.classList.remove('open');
+        dock.setAttribute('aria-hidden', 'true');
+    }
+    updateCustomerSettingsDockOverlay();
+    mountCustomerSettingsPanel('recognize');
+    if (customerSettingsContext && customerSettingsContext.source === 'list') {
+        if (customerSettingsReturnSideGroupState) {
+            setRecognizeSideGroupState(customerSettingsReturnSideGroupState, { persist: false });
+        }
+        if (customerSettingsReturnRuleContext) {
+            restoreCustomerSettingsRuleContext(customerSettingsReturnRuleContext);
+        }
+    }
+    customerSettingsReturnSideGroupState = null;
+    customerSettingsReturnRuleContext = null;
+    if (window.userManager && typeof window.userManager.renderUserList === 'function') {
+        window.userManager.renderUserList();
+    }
+}
+
+function saveSharedCustomerSettlementSettings() {
+    const userName = getCustomerSettingsActiveUserName();
+    if (!userName || !window.userManager) {
+        showError('保存设置失败', '当前客户不存在');
+        return;
+    }
+
+    const oddsInput = document.getElementById('sharedCustomerOddsInput');
+    const rebateInput = document.getElementById('sharedCustomerRebateInput');
+    const oddsParsed = parsePositiveNumericInput(oddsInput ? oddsInput.value : '');
+    const rebateParsed = parsePositiveNumericInput(rebateInput ? rebateInput.value : '');
+
+    if (oddsParsed.empty || !Number.isFinite(oddsParsed.value) || oddsParsed.value <= 0) {
+        setCustomerSettingsSettlementState('倍率请输入大于 0 的数字。', 'error');
+        showError('保存设置失败', '倍率请输入大于 0 的数字');
+        return;
+    }
+    if (rebateParsed.empty || !Number.isFinite(rebateParsed.value) || rebateParsed.value < 0) {
+        setCustomerSettingsSettlementState('返利请输入大于等于 0 的数字。', 'error');
+        showError('保存设置失败', '返利请输入大于等于 0 的数字');
+        return;
+    }
+
+    try {
+        const settlementResult = window.userManager.updateUserSettlementConfig(userName, {
+            odds: oddsParsed.value,
+            rebateRate: rebateParsed.value
+        }, {
+            render: false,
+            save: false
+        });
+        window.userManager.renderAllSections();
+        window.userManager.saveUserData();
+        renderSharedCustomerSettlementSettings(userName);
+        setCustomerSettingsRuleContext(userName);
+        setCustomerSettingsSettlementState(`已保存：倍率 ${formatNumericAmount(settlementResult.odds)}，返利 ${formatNumericAmount(settlementResult.rebateRate)}%`, 'success');
+        if (isRecognizeModalVisible()) {
+            scheduleRecognizePreviewRefreshAfterConfigChange({ immediate: true });
+        }
+        showSuccess(`已保存 ${userName} 的结算设置`);
+    } catch (error) {
+        const message = error && error.message ? error.message : '未知错误';
+        setCustomerSettingsSettlementState(message, 'error');
+        showError('保存设置失败', message);
+    }
+}
+
+function saveSharedCustomerTailShorthandSettings() {
+    const userName = getCustomerSettingsActiveUserName();
+    if (!userName || !window.userManager) {
+        showError('保存规则失败', '当前客户不存在');
+        return;
+    }
+
+    const tailInput = document.getElementById('sharedCustomerTailShorthandInput');
+    try {
+        const parseResult = window.userManager.updateUserParsePreference(userName, {
+            tailShorthandAsSeparateGroups: !!(tailInput && tailInput.checked)
+        }, {
+            render: false,
+            save: false
+        });
+        window.userManager.renderAllSections();
+        window.userManager.saveUserData();
+        renderSharedCustomerTailShorthandSettings(userName);
+        setCustomerSettingsRuleContext(userName);
+        setCustomerSettingsTailShorthandState(`已保存：尾数简写${parseResult.tailShorthandAsSeparateGroups ? '开启' : '关闭'}`, 'success');
+        if (isRecognizeModalVisible()) {
+            scheduleRecognizePreviewRefreshAfterConfigChange({ immediate: true });
+        }
+        showSuccess(`已保存 ${userName} 的尾数规则`);
+    } catch (error) {
+        const message = error && error.message ? error.message : '未知错误';
+        setCustomerSettingsTailShorthandState(message, 'error');
+        showError('保存规则失败', message);
+    }
+}
+
+function initCustomerSettingsCenter() {
+    bindCustomerSettingsSettlementInputs();
+    mountCustomerSettingsPanel('recognize');
+    ensureCustomerSettingsBusinessLayout();
 }
 
 function openPlanModalFromSettings() {
@@ -2423,14 +2987,14 @@ function getAnchorGuideStepConfig(step) {
             ? '本步已完成。你已具备“锚点词 + 属性叠加策略”的完整配置。'
             : '当同段出现多个属性词时，先定义叠加策略，避免误判。',
         examples: [
-            '先交集，空则并集：稳健默认，优先减少误识别。',
-            '仅交集：最严格，命中少但准确。',
-            '仅并集：召回高，适合宁可多收后复核的场景。'
+            '先取共同号，空了再叠加：稳健默认，优先减少误识别。',
+            '只取共同号：最严格，命中少但准确。',
+            '全部叠加：范围更大，适合宁可多收后复核的场景。'
         ],
         focusIds: ['attributeCombinePolicy', 'saveAttributeCombinePolicyBtn'],
         actions: [
-            { label: '一键保存：先交集，空则并集（推荐）', action: 'set_attribute_policy', policy: 'intersection_then_union_fallback', primary: true },
-            { label: '一键保存：仅并集', action: 'set_attribute_policy', policy: 'union' }
+            { label: '一键保存：先取共同号，空了再叠加（推荐）', action: 'set_attribute_policy', policy: 'intersection_then_union_fallback', primary: true },
+            { label: '一键保存：全部叠加', action: 'set_attribute_policy', policy: 'union' }
         ]
     };
 }
@@ -2524,11 +3088,7 @@ function handleAnchorGuideAction(action, payload = {}) {
         return;
     }
     if (action === 'set_attribute_policy') {
-        Object.keys(recognizeSideGroupState).forEach((key) => {
-            recognizeSideGroupState[key] = key === 'attributes';
-        });
-        applyRecognizeSideGroups();
-        saveRecognizeSideGroupState();
+        expandRecognizeCustomerGroup('attributes', { persist: true });
         if (typeof setAnchorRuleScope === 'function') {
             setAnchorRuleScope('global');
         }
@@ -2547,21 +3107,6 @@ function handleAnchorGuideAction(action, payload = {}) {
 
 function ensureAnchorGuideVisibleWhenRecognizeOpen() {
     renderAnchorStrategyGuide();
-    if (!shouldShowAnchorStrategyGuide()) return;
-    if (anchorGuideAutoExpanded) return;
-    anchorGuideAutoExpanded = true;
-
-    if (!recognizeAttributePanelVisible) {
-        applyRecognizeAttributePanelVisible(true, { persist: true });
-    }
-    recognizeSideGroupState = {
-        attributes: false,
-        anchors: true,
-        noise: false,
-        amountUnits: false
-    };
-    applyRecognizeSideGroups();
-    saveRecognizeSideGroupState();
 }
 
 function snoozeAnchorStrategyGuide() {
@@ -3249,6 +3794,33 @@ function getAmountUnitScope() {
     return scopeInput && scopeInput.value === 'client' ? 'client' : 'global';
 }
 
+function getRegionAccountingScope() {
+    const scopeInput = document.getElementById('regionAccountingScope');
+    return scopeInput && scopeInput.value === 'global' ? 'global' : 'client';
+}
+
+function resolveRegionAccountingClientId() {
+    const activeUserName = String(getCustomerSettingsActiveUserName() || '').trim();
+    if (activeUserName) {
+        return activeUserName;
+    }
+    const selectedUsers = getEditableUsersForCurrentSelection();
+    return selectedUsers.length === 1 ? String(selectedUsers[0] || '').trim() : '';
+}
+
+function getRegionAccountingContext(options = {}) {
+    const scope = getRegionAccountingScope();
+    const requireClient = !!(options && options.requireClientForClientScope);
+    let clientId = '';
+    if (scope === 'client') {
+        clientId = resolveRegionAccountingClientId();
+        if (requireClient && !clientId) {
+            throw new Error('请先选择客户后再设置客户专属区域规则');
+        }
+    }
+    return { scope, clientId };
+}
+
 function resolveAmountUnitClientId(options = {}) {
     const clientCandidates = Array.isArray(options.clientCandidates)
         ? options.clientCandidates
@@ -3278,6 +3850,22 @@ function syncAmountUnitScopeButtons() {
     const scope = getAmountUnitScope();
     const globalBtn = document.getElementById('amountUnitScopeGlobalBtn');
     const clientBtn = document.getElementById('amountUnitScopeClientBtn');
+    if (globalBtn) {
+        const isActive = scope === 'global';
+        globalBtn.classList.toggle('active', isActive);
+        globalBtn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    }
+    if (clientBtn) {
+        const isActive = scope === 'client';
+        clientBtn.classList.toggle('active', isActive);
+        clientBtn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    }
+}
+
+function syncRegionAccountingScopeButtons() {
+    const scope = getRegionAccountingScope();
+    const globalBtn = document.getElementById('regionAccountingScopeGlobalBtn');
+    const clientBtn = document.getElementById('regionAccountingScopeClientBtn');
     if (globalBtn) {
         const isActive = scope === 'global';
         globalBtn.classList.toggle('active', isActive);
@@ -3338,6 +3926,15 @@ function handleAmountUnitClientChange() {
     const selectInput = document.getElementById('amountUnitClientSelect');
     amountUnitTargetClientId = selectInput ? String(selectInput.value || '').trim() : '';
     handleAmountUnitScopeChange();
+}
+
+function setRegionAccountingScope(scope) {
+    const nextScope = scope === 'global' ? 'global' : 'client';
+    const scopeInput = document.getElementById('regionAccountingScope');
+    if (scopeInput) {
+        scopeInput.value = nextScope;
+    }
+    handleRegionAccountingScopeChange();
 }
 
 function setAnchorRuleControlsEnabled(enabled) {
@@ -3561,6 +4158,8 @@ function initAnchorRuleControls() {
     syncAmountUnitScopeButtons();
     renderAmountUnitClientSelect();
     handleAmountUnitScopeChange();
+    syncRegionAccountingScopeButtons();
+    handleRegionAccountingScopeChange();
 }
 
 function handleAnchorRuleScopeChange() {
@@ -3622,6 +4221,13 @@ function handleAmountUnitScopeChange() {
     renderAmountUnitList();
     renderAmountUnitPreview();
     scheduleRecognizePreviewRefreshAfterConfigChange();
+}
+
+function handleRegionAccountingScopeChange() {
+    syncRegionAccountingScopeButtons();
+    const { scope, clientId } = getRegionAccountingContext();
+    renderRegionAccountingScopeExplain(scope, clientId);
+    renderRegionAccountingPolicyState();
 }
 
 function getAnchorRuleSourceLabel(source) {
@@ -3690,6 +4296,26 @@ function renderAmountUnitScopeExplain(scope, clientId) {
     explainEl.textContent = '当前选择：修改全部客户范围。保存后对所有客户生效；若某客户有专属金额单位，会以客户规则优先。';
 }
 
+function renderRegionAccountingScopeExplain(scope, clientId) {
+    const explainEl = document.getElementById('regionAccountingScopeExplain');
+    if (!explainEl) return;
+    const currentScope = scope === 'global' ? 'global' : 'client';
+    const currentClientId = String(clientId || '').trim();
+    explainEl.className = 'anchor-scope-explain';
+    if (currentScope === 'client') {
+        if (!currentClientId) {
+            explainEl.classList.add('is-warning');
+            explainEl.textContent = '当前选择：仅修改客户层。请先选择客户后再保存；这里的统计模式、默认区域和附加区域词只对该客户生效。';
+            return;
+        }
+        explainEl.classList.add('is-client');
+        explainEl.textContent = `当前选择：仅修改客户「${currentClientId}」。保存后只对该客户生效，并优先于全局与系统默认区域规则。`;
+        return;
+    }
+    explainEl.classList.add('is-global');
+    explainEl.textContent = '当前选择：修改全局层。保存后对所有客户生效；若某客户有专属区域规则，会以客户规则优先。';
+}
+
 function getAnchorParseModeExplainMeta(mode) {
     if (mode === 'loose') {
         return {
@@ -3748,9 +4374,9 @@ function buildRedOddCombineExampleDetails() {
         details: [
             `红波（${redSet.length}个）：${formatExplainNumberList(redSet)}`,
             `单数（${oddSet.length}个）：${formatExplainNumberList(oddSet)}`,
-            `交集（${intersection.length}个）：${intersection.length > 0 ? formatExplainNumberList(intersection) : '（空）'}`,
-            `并集（${union.length}个）：${formatExplainNumberList(union)}`,
-            `按“各数5”计算：交集结果是 ${intersectionCanonical}（总额 ${formatNumericAmount(intersection.length * amountPerNumber)}）；并集结果是 ${unionCanonical}（总额 ${formatNumericAmount(union.length * amountPerNumber)}）。`
+            `共同号（${intersection.length}个）：${intersection.length > 0 ? formatExplainNumberList(intersection) : '（空）'}`,
+            `全部叠加后（${union.length}个）：${formatExplainNumberList(union)}`,
+            `按“各数5”计算：共同号结果是 ${intersectionCanonical}（总额 ${formatNumericAmount(intersection.length * amountPerNumber)}）；全部叠加结果是 ${unionCanonical}（总额 ${formatNumericAmount(union.length * amountPerNumber)}）。`
         ]
     };
 }
@@ -3759,40 +4385,40 @@ function getAttributeCombinePolicyExplainMeta(policy) {
     const example = buildRedOddCombineExampleDetails();
     if (policy === 'intersection') {
         return {
-            effect: '仅交集：多个属性词必须同时满足，结果最严格。',
-            example: '例：红波单各数5（只取交集）',
+            effect: '只取共同号：多个属性词必须同时命中同一批号码，结果最严格。',
+            example: '例：红波单各数5（只取共同号）',
             details: [
                 ...example.details,
-                `当前策略结论：取交集，共 ${example.intersection.length} 个号码。`
+                `当前策略结论：只取共同号，共 ${example.intersection.length} 个号码。`
             ]
         };
     }
     if (policy === 'union') {
         return {
-            effect: '仅并集：满足任一属性词都算，范围更大。',
-            example: '例：红波单各数5（只取并集）',
+            effect: '全部叠加：各属性命中的号码都会算进去，范围更大。',
+            example: '例：红波单各数5（全部叠加）',
             details: [
                 ...example.details,
-                `当前策略结论：取并集，共 ${example.union.length} 个号码。`
+                `当前策略结论：全部叠加，共 ${example.union.length} 个号码。`
             ]
         };
     }
     if (policy === 'confirm') {
         return {
-            effect: '每次确认：遇到多属性组合时，让你手动选择交集或并集。',
-            example: '例：红波单各数5（每次让你选交集或并集）',
+            effect: '每次确认：遇到多属性组合时，让你手动选择取共同号还是全部叠加。',
+            example: '例：红波单各数5（每次让你选共同号或全部叠加）',
             details: [
                 ...example.details,
-                `当前策略结论：不自动决定，弹窗让你选“交集（${example.intersection.length}个）”或“并集（${example.union.length}个）”。`
+                `当前策略结论：不自动决定，弹窗让你选“共同号（${example.intersection.length}个）”或“全部叠加（${example.union.length}个）”。`
             ]
         };
     }
     return {
-        effect: '先交集，空则并集：先求精确命中，若无交集再回退并集（推荐）。',
-        example: '例：红波单各数5（先看交集，空才并集）',
+        effect: '先取共同号，空了再叠加：优先缩到共同命中的号码；如果一个共同号都没有，再退回全部叠加（推荐）。',
+        example: '例：红波单各数5（先看共同号，空了才叠加）',
         details: [
             ...example.details,
-            `当前策略结论：本例交集不为空（${example.intersection.length}个），所以最终使用交集，不会走并集回退。`
+            `当前策略结论：本例共同号不为空（${example.intersection.length}个），所以最终使用共同号，不会走叠加回退。`
         ]
     };
 }
@@ -7232,6 +7858,21 @@ function resetClientRuleProfile() {
         }
         const ok = confirm(`确定将客户 ${clientId} 的专属规则恢复为全局规则吗？`);
         if (!ok) return;
+        if (window.userManager && window.userManager.users && window.userManager.users[clientId]) {
+            const userRecord = window.userManager.users[clientId];
+            if (Object.prototype.hasOwnProperty.call(userRecord, 'tailShorthandAsSeparateGroups')) {
+                delete userRecord.tailShorthandAsSeparateGroups;
+                if (typeof window.userManager.invalidateOriginalDataDerivedCaches === 'function') {
+                    window.userManager.invalidateOriginalDataDerivedCaches();
+                }
+                if (typeof window.userManager.invalidateUserListDerivedCaches === 'function') {
+                    window.userManager.invalidateUserListDerivedCaches();
+                }
+                if (typeof window.userManager.saveUserData === 'function') {
+                    window.userManager.saveUserData();
+                }
+            }
+        }
         window.messageProcessor.resetClientRules(clientId);
         if (window.userManager && typeof window.userManager.syncStoredUserParsePreferencesToRules === 'function') {
             window.userManager.syncStoredUserParsePreferencesToRules();
@@ -7252,6 +7893,7 @@ function resetClientRuleProfile() {
             refreshRegionPnlPanel();
         }
         previewMessage({ silent: true });
+        renderSharedCustomerSettlementSettings(clientId);
         showSuccess(`已恢复 ${clientId} 的专属规则到全局`);
     } catch (error) {
         showError('恢复客户规则失败', error.message || '未知错误');
@@ -7348,7 +7990,7 @@ function renderRegionAccountingPolicyState() {
         return;
     }
 
-    const { scope, clientId } = getRuleContext();
+    const { scope, clientId } = getRegionAccountingContext();
     if (scope === 'client' && !clientId) {
         stateEl.textContent = '请选择目标客户后再设置客户专属区域规则';
         modeInput.disabled = true;
@@ -7367,10 +8009,11 @@ function renderRegionAccountingPolicyState() {
     const globalProfile = window.messageProcessor.getGlobalRuleProfile
         ? window.messageProcessor.getGlobalRuleProfile()
         : {};
-    const clientProfile = clientId && window.messageProcessor.getClientRuleProfile
-        ? window.messageProcessor.getClientRuleProfile(clientId)
+    const previewClientId = String(getCustomerSettingsActiveUserName() || clientId || '').trim();
+    const clientProfile = previewClientId && window.messageProcessor.getClientRuleProfile
+        ? window.messageProcessor.getClientRuleProfile(previewClientId)
         : {};
-    const effectiveInfo = window.messageProcessor.getEffectiveRegionAccountingInfo(clientId || '');
+    const effectiveInfo = window.messageProcessor.getEffectiveRegionAccountingInfo(previewClientId || '');
 
     const systemRegionPolicy = systemProfile && systemProfile.regionPolicy ? systemProfile.regionPolicy : {};
     const globalRegionPolicy = globalProfile && globalProfile.regionPolicy ? globalProfile.regionPolicy : {};
@@ -7654,7 +8297,7 @@ function saveRegionAccountingPolicyRule() {
         if (!window.messageProcessor || typeof window.messageProcessor.setRegionAccountingPolicy !== 'function') {
             throw new Error('当前版本不支持区域统计模式');
         }
-        const { scope, clientId } = getRuleContext({ requireClientForClientScope: true });
+        const { scope, clientId } = getRegionAccountingContext({ requireClientForClientScope: true });
         const modeInput = document.getElementById('regionAccountingMode');
         const defaultRegionInput = document.getElementById('regionAccountingDefaultRegion');
         const mode = modeInput ? String(modeInput.value || '').trim() : '';
@@ -7703,7 +8346,7 @@ function resetRegionAccountingPolicyRule() {
         if (!window.messageProcessor || typeof window.messageProcessor.clearRegionAccountingPolicy !== 'function') {
             throw new Error('当前版本不支持恢复区域规则');
         }
-        const { scope, clientId } = getRuleContext({ requireClientForClientScope: true });
+        const { scope, clientId } = getRegionAccountingContext({ requireClientForClientScope: true });
         const ok = confirm(`确定恢复${getScopeDisplayName(scope)}层的区域规则为上层默认吗？`);
         if (!ok) return;
         window.messageProcessor.clearRegionAccountingPolicy({ scope, clientId });
@@ -9059,7 +9702,7 @@ async function requestRealtimePreviewFromWorker(message, options = {}) {
 function shouldFallbackToMainThreadPreview(preview) {
     if (!preview || preview.success) return false;
     const errorMessage = String(preview.error || '').trim();
-    return /确认模式|交集还是并集/.test(errorMessage);
+    return /确认模式|共同号还是全部叠加|取共同号还是全部叠加/.test(errorMessage);
 }
 
 async function requestRecognizePreview(message, clientId, options = {}) {
@@ -12033,6 +12676,19 @@ function getMainLayoutElements() {
     };
 }
 
+function getCustomerSettingsDockElements() {
+    const area = document.querySelector('.customer-list-area');
+    const mainContent = document.querySelector('.main-content');
+    const dock = document.getElementById('customerSettingsDock');
+    const resizer = document.getElementById('customerSettingsDockResizer');
+    const overlay = document.getElementById('customerSettingsDockOverlay');
+    return { area, mainContent, dock, resizer, overlay };
+}
+
+function isCustomerSettingsDockResizable() {
+    return window.innerWidth > RECOGNIZE_SPLIT_MOBILE_BREAKPOINT;
+}
+
 function isMainSplitEnabled() {
     return window.innerWidth > MAIN_SPLIT_BREAKPOINT;
 }
@@ -12121,6 +12777,18 @@ function clampRightRankWidth(width) {
     return Math.min(Math.max(width, minEach), maxWidth);
 }
 
+function clampCustomerSettingsDockWidth(width) {
+    const { area } = getCustomerSettingsDockElements();
+    if (!area || !Number.isFinite(width)) return null;
+    if (!isCustomerSettingsDockResizable()) return null;
+    const areaRect = area.getBoundingClientRect();
+    const leftOffset = areaRect.right + 12;
+    const minWidth = window.innerWidth <= 1280 ? 360 : 380;
+    const available = window.innerWidth - leftOffset - 20;
+    const maxWidth = Math.max(minWidth, Math.min(760, available));
+    return Math.min(Math.max(width, minWidth), maxWidth);
+}
+
 function applyMainUserWidth(width, options = {}) {
     const { mainContent } = getMainLayoutElements();
     if (!mainContent) return;
@@ -12178,6 +12846,23 @@ function applyRightRankWidth(width, options = {}) {
     rightColumns.style.setProperty('--main-right-rank-width', `${Math.round(clamped)}px`);
     if (options.save === true) {
         saveMainStoredWidth(MAIN_SPLIT_RIGHT_RANK_WIDTH_KEY, clamped);
+    }
+}
+
+function applyCustomerSettingsDockWidth(width, options = {}) {
+    const { area } = getCustomerSettingsDockElements();
+    if (!area) return;
+    if (!isCustomerSettingsDockResizable()) {
+        area.style.removeProperty('--customer-settings-dock-width');
+        updateCustomerSettingsDockOverlay();
+        return;
+    }
+    const clamped = clampCustomerSettingsDockWidth(width);
+    if (!Number.isFinite(clamped)) return;
+    area.style.setProperty('--customer-settings-dock-width', `${Math.round(clamped)}px`);
+    updateCustomerSettingsDockOverlay();
+    if (options.save === true) {
+        saveMainStoredWidth(CUSTOMER_SETTINGS_DOCK_WIDTH_KEY, clamped);
     }
 }
 
@@ -12241,6 +12926,51 @@ function ensureMainLayoutWidths() {
     }
 }
 
+function ensureCustomerSettingsDockWidth() {
+    const { dock } = getCustomerSettingsDockElements();
+    if (!dock) return;
+    if (!isCustomerSettingsDockResizable()) {
+        const { area } = getCustomerSettingsDockElements();
+        if (area) {
+            area.style.removeProperty('--customer-settings-dock-width');
+        }
+        updateCustomerSettingsDockOverlay();
+        return;
+    }
+    const storedWidth = readMainStoredWidth(CUSTOMER_SETTINGS_DOCK_WIDTH_KEY);
+    if (Number.isFinite(storedWidth)) {
+        applyCustomerSettingsDockWidth(storedWidth);
+        return;
+    }
+    applyCustomerSettingsDockWidth(440);
+}
+
+function updateCustomerSettingsDockOverlay() {
+    const { mainContent, dock, resizer, overlay } = getCustomerSettingsDockElements();
+    if (!mainContent || !dock || !overlay) return;
+    const shouldShow = dock.classList.contains('open')
+        && customerSettingsContext
+        && customerSettingsContext.source === 'list';
+    overlay.classList.toggle('open', shouldShow);
+    overlay.setAttribute('aria-hidden', shouldShow ? 'false' : 'true');
+    if (!shouldShow) {
+        overlay.style.left = '';
+        return;
+    }
+    if (!isCustomerSettingsDockResizable()) {
+        overlay.style.left = '0px';
+        return;
+    }
+    const mainRect = mainContent.getBoundingClientRect();
+    const dockRect = dock.getBoundingClientRect();
+    const resizerRect = resizer ? resizer.getBoundingClientRect() : null;
+    const overlayLeft = Math.max(
+        0,
+        Math.round(((resizerRect && resizerRect.width > 0 ? resizerRect.right : dockRect.right) - mainRect.left) + 1)
+    );
+    overlay.style.left = `${overlayLeft}px`;
+}
+
 function bindMainSplitResizer(config = {}) {
     const resizer = config.resizer;
     const container = config.container;
@@ -12249,6 +12979,7 @@ function bindMainSplitResizer(config = {}) {
     const storageKey = String(config.storageKey || '').trim();
     const reset = typeof config.reset === 'function' ? config.reset : null;
     const deltaDirection = Number(config.deltaDirection) === -1 ? -1 : 1;
+    const isEnabled = typeof config.isEnabled === 'function' ? config.isEnabled : isMainSplitEnabled;
     if (!resizer || !container || !getWidth || !applyWidth || !storageKey) return;
     if (resizer.dataset.bound === '1') return;
     resizer.dataset.bound = '1';
@@ -12275,7 +13006,7 @@ function bindMainSplitResizer(config = {}) {
     };
 
     resizer.addEventListener('pointerdown', (event) => {
-        if (event.button !== 0 || !isMainSplitEnabled()) return;
+        if (event.button !== 0 || !isEnabled()) return;
         event.preventDefault();
         const width = getWidth();
         if (!(width > 0)) return;
@@ -12375,6 +13106,28 @@ function initMainLayoutResizers() {
 
     requestAnimationFrame(() => {
         ensureMainLayoutWidths();
+    });
+}
+
+function initCustomerSettingsDockResizer() {
+    const { dock, resizer } = getCustomerSettingsDockElements();
+    if (!dock || !resizer) return;
+    bindMainSplitResizer({
+        resizer,
+        container: dock,
+        getWidth: () => dock.getBoundingClientRect().width,
+        applyWidth: applyCustomerSettingsDockWidth,
+        storageKey: CUSTOMER_SETTINGS_DOCK_WIDTH_KEY,
+        isEnabled: isCustomerSettingsDockResizable,
+        reset: () => {
+            const { area } = getCustomerSettingsDockElements();
+            if (area) {
+                area.style.removeProperty('--customer-settings-dock-width');
+            }
+        }
+    });
+    requestAnimationFrame(() => {
+        ensureCustomerSettingsDockWidth();
     });
 }
 
@@ -12759,6 +13512,11 @@ function applyRecognizeAttributePanelVisible(visible, options = {}) {
     if (toggleBtn) {
         toggleBtn.textContent = recognizeAttributePanelVisible ? '隐藏属性面板' : '显示属性面板';
     }
+    const customerSettingsBtn = document.getElementById('openRecognizeCustomerSettingsBtn');
+    if (customerSettingsBtn) {
+        customerSettingsBtn.classList.toggle('is-active', recognizeAttributePanelVisible);
+        customerSettingsBtn.setAttribute('aria-pressed', recognizeAttributePanelVisible ? 'true' : 'false');
+    }
     if (persist) {
         try {
             window.localStorage.setItem(RECOGNIZE_ATTRIBUTE_PANEL_VISIBLE_KEY, recognizeAttributePanelVisible ? '1' : '0');
@@ -12787,24 +13545,23 @@ function toggleRecognizeAttributePanel() {
 function loadRecognizeSideGroupState() {
     try {
         const raw = window.localStorage.getItem(RECOGNIZE_SIDE_GROUP_STATE_KEY);
-        if (!raw) return { attributes: true, anchors: false, noise: false, amountUnits: false };
-        const parsed = JSON.parse(raw);
-        const normalized = {
-            attributes: parsed && parsed.attributes !== false,
-            anchors: parsed && parsed.anchors === true,
-            noise: parsed && parsed.noise === true,
-            amountUnits: parsed && parsed.amountUnits === true
-        };
-        const expandedKeys = Object.keys(normalized).filter((key) => normalized[key]);
-        if (expandedKeys.length > 1) {
-            const keepKey = expandedKeys[0];
-            Object.keys(normalized).forEach((key) => {
-                normalized[key] = key === keepKey;
-            });
+        if (!raw) {
+            return {
+                settlement: false,
+                attributes: true,
+                anchors: false,
+                noise: false
+            };
         }
-        return normalized;
+        const parsed = JSON.parse(raw);
+        return cloneRecognizeSideGroupState({
+            settlement: parsed && parsed.settlement === true,
+            attributes: parsed && parsed.attributes !== false,
+            anchors: (parsed && parsed.anchors === true) || (parsed && parsed.amountUnits === true),
+            noise: parsed && parsed.noise === true
+        });
     } catch (error) {
-        return { attributes: true, anchors: false, noise: false, amountUnits: false };
+        return { settlement: false, attributes: true, anchors: false, noise: false };
     }
 }
 
@@ -12905,24 +13662,42 @@ function toggleNoiseWorkspaceGroup(groupKey) {
 }
 
 function applyRecognizeSideGroups() {
+    ensureCustomerSettingsBusinessLayout();
     const mappings = [
-        { key: 'attributes', rootId: 'recognizeGroupAttributes', toggleId: 'recognizeGroupAttributesToggle' },
-        { key: 'anchors', rootId: 'recognizeGroupAnchors', toggleId: 'recognizeGroupAnchorsToggle' },
-        { key: 'noise', rootId: 'recognizeGroupNoise', toggleId: 'recognizeGroupNoiseToggle' },
-        { key: 'amountUnits', rootId: 'recognizeGroupAmountUnits', toggleId: 'recognizeGroupAmountUnitsToggle' }
+        { key: 'settlement', rootId: 'recognizeGroupSettlement', toggleId: 'recognizeGroupSettlementToggle', tabId: 'recognizePrimaryTabSettlement' },
+        { key: 'attributes', rootId: 'recognizeGroupAttributes', toggleId: 'recognizeGroupAttributesToggle', tabId: 'recognizePrimaryTabAttributes' },
+        { key: 'anchors', rootId: 'recognizeGroupAnchors', toggleId: 'recognizeGroupAnchorsToggle', tabId: 'recognizePrimaryTabAnchors' },
+        { key: 'noise', rootId: 'recognizeGroupNoise', toggleId: 'recognizeGroupNoiseToggle', tabId: 'recognizePrimaryTabNoise' }
     ];
-    const expandedKeys = mappings
-        .filter(({ key }) => recognizeSideGroupState[key] !== false)
-        .map(({ key }) => key);
-    const hasSingleExpanded = expandedKeys.length === 1;
-    mappings.forEach(({ key, rootId, toggleId }) => {
+    const normalizedState = cloneRecognizeSideGroupState(recognizeSideGroupState);
+    recognizeSideGroupState = normalizedState;
+    const panel = document.getElementById('attributeHelpPanel');
+    if (panel) {
+        panel.classList.add('is-tabbed');
+    }
+    const mergedRoot = document.getElementById('recognizeGroupAmountUnits');
+    if (mergedRoot) {
+        mergedRoot.hidden = true;
+        mergedRoot.setAttribute('aria-hidden', 'true');
+    }
+    mappings.forEach(({ key, rootId, toggleId, tabId }) => {
         const root = document.getElementById(rootId);
         const toggle = document.getElementById(toggleId);
-        if (!root || !toggle) return;
-        const expanded = recognizeSideGroupState[key] !== false;
-        root.classList.toggle('collapsed', !expanded);
-        root.classList.toggle('expanded-fill', expanded && hasSingleExpanded);
-        toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        const tab = document.getElementById(tabId);
+        const expanded = normalizedState[key] === true;
+        if (root) {
+            root.hidden = !expanded;
+            root.classList.toggle('collapsed', !expanded);
+            root.classList.toggle('expanded-fill', expanded);
+            root.classList.toggle('primary-active', expanded);
+        }
+        if (toggle) {
+            toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        }
+        if (tab) {
+            tab.classList.toggle('active', expanded);
+            tab.setAttribute('aria-selected', expanded ? 'true' : 'false');
+        }
     });
 }
 
@@ -12932,32 +13707,9 @@ function initRecognizeSideGroups() {
 }
 
 function toggleRecognizeSideGroup(groupKey) {
-    if (!['attributes', 'anchors', 'noise', 'amountUnits'].includes(groupKey)) return;
-    const currentlyExpanded = recognizeSideGroupState[groupKey] !== false;
-    if (currentlyExpanded) {
-        recognizeSideGroupState[groupKey] = false;
-    } else {
-        Object.keys(recognizeSideGroupState).forEach((key) => {
-            recognizeSideGroupState[key] = key === groupKey;
-        });
-        if (groupKey === 'attributes') {
-            renderAttributeCombinePolicyState();
-            renderRegionAccountingPolicyState();
-            renderBlockedPlayKeywordState();
-            renderMessageTypeWhitelistState();
-        } else if (groupKey === 'anchors') {
-            renderDefaultOddsState();
-            renderAnchorParseModeState();
-            renderAnchorAliasList();
-            renderAnchorImpactPreview();
-        } else if (groupKey === 'noise') {
-            handleNoiseRuleScopeChange();
-        } else if (groupKey === 'amountUnits') {
-            handleAmountUnitScopeChange();
-        }
-    }
-    applyRecognizeSideGroups();
-    saveRecognizeSideGroupState();
+    if (!CUSTOMER_SETTINGS_PRIMARY_GROUP_KEYS.includes(groupKey)) return;
+    if (recognizeSideGroupState[groupKey] === true) return;
+    expandRecognizeCustomerGroup(groupKey, { persist: true });
 }
 
 function syncRecognizeModalActionMode() {
@@ -13033,6 +13785,7 @@ function openModal(modalType, options = {}) {
     const resultElement = document.getElementById('result');
     if (modalType === 'recognize') {
         clearRecognizeEditContext();
+        mountCustomerSettingsPanel('recognize');
         const selectedUsers = window.userManager && typeof window.userManager.getSelectedUsers === 'function'
             ? window.userManager.getSelectedUsers()
             : [];
@@ -15895,6 +16648,14 @@ window.previewMessage = previewMessage;
 window.confirmEdit = confirmEdit;
 window.copyClientData = copyClientData;
 window.exportClientDataDocument = exportClientDataDocument;
+window.openCustomerSettings = openCustomerSettings;
+window.isCustomerSettingsListDockOpenForUser = isCustomerSettingsListDockOpenForUser;
+window.openCustomerSettingsFromRecognize = openCustomerSettingsFromRecognize;
+window.closeCustomerSettingsModal = closeCustomerSettingsModal;
+window.renderSharedCustomerSettlementSettings = renderSharedCustomerSettlementSettings;
+window.saveSharedCustomerSettlementSettings = saveSharedCustomerSettlementSettings;
+window.renderSharedCustomerTailShorthandSettings = renderSharedCustomerTailShorthandSettings;
+window.saveSharedCustomerTailShorthandSettings = saveSharedCustomerTailShorthandSettings;
 window.openAboutModal = openAboutModal;
 window.closeAboutModal = closeAboutModal;
 window.handleCellClick = handleCellClick;
@@ -15903,6 +16664,7 @@ window.closeEditModal = closeEditModal;
 window.clearAttributeSelection = clearAttributeSelection;
 window.toggleRecognizeAttributePanel = toggleRecognizeAttributePanel;
 window.toggleRecognizeSideGroup = toggleRecognizeSideGroup;
+window.selectRecognizeSettingsTab = selectRecognizeSettingsTab;
 window.addCustomAttribute = addCustomAttribute;
 window.removeCustomAttribute = removeCustomAttribute;
 window.setAnchorRuleScope = setAnchorRuleScope;
@@ -15941,6 +16703,7 @@ window.removeAnchorAliasRule = removeAnchorAliasRule;
 window.resetAnchorAliasRules = resetAnchorAliasRules;
 window.saveAnchorParseModeRule = saveAnchorParseModeRule;
 window.resetAnchorParseModeRule = resetAnchorParseModeRule;
+window.setRegionAccountingScope = setRegionAccountingScope;
 window.saveRegionAccountingPolicyRule = saveRegionAccountingPolicyRule;
 window.resetRegionAccountingPolicyRule = resetRegionAccountingPolicyRule;
 window.saveBlockedPlayKeywordRule = saveBlockedPlayKeywordRule;

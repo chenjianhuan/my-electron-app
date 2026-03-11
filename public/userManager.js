@@ -570,7 +570,9 @@ class UserManager {
             && typeof window.messageProcessor.getEffectiveTailShorthandAsSeparateGroups === 'function'
             && window.messageProcessor.getEffectiveTailShorthandAsSeparateGroups(userName)
         );
-        return { tailShorthandAsSeparateGroups };
+        return {
+            tailShorthandAsSeparateGroups: tailShorthandAsSeparateGroups || !userName || !window.messageProcessor
+        };
     }
 
     getUserParsePreference(userName = '') {
@@ -2348,146 +2350,53 @@ class UserManager {
         parseSummary.textContent = summary.parsePreferenceText || '解析习惯：默认';
         info.appendChild(parseSummary);
 
-        if (this.expandedSettlementUser === userName) {
-            const editor = document.createElement('div');
-            editor.className = 'user-settlement-editor';
-            editor.onclick = (event) => {
-                event.stopPropagation();
-            };
-
-            const oddsField = document.createElement('label');
-            oddsField.className = 'user-settlement-field';
-            const oddsLabel = document.createElement('span');
-            oddsLabel.className = 'user-settlement-field-label';
-            oddsLabel.textContent = '倍率';
-            const oddsInput = document.createElement('input');
-            oddsInput.value = this.formatAmountValue(settlementConfig.odds);
-            oddsInput.placeholder = '请输入倍率';
-            this.bindSettlementNumericInput(oddsInput);
-            oddsField.appendChild(oddsLabel);
-            oddsField.appendChild(oddsInput);
-
-            const rebateField = document.createElement('label');
-            rebateField.className = 'user-settlement-field';
-            const rebateLabel = document.createElement('span');
-            rebateLabel.className = 'user-settlement-field-label';
-            rebateLabel.textContent = '返利%';
-            const rebateInput = document.createElement('input');
-            rebateInput.value = this.formatAmountValue(settlementConfig.rebateRate);
-            rebateInput.placeholder = '请输入返利';
-            this.bindSettlementNumericInput(rebateInput);
-            rebateField.appendChild(rebateLabel);
-            rebateField.appendChild(rebateInput);
-
-            const parseField = document.createElement('label');
-            parseField.className = 'user-settlement-field user-settlement-check-field';
-            const parseLabel = document.createElement('span');
-            parseLabel.className = 'user-settlement-field-label';
-            parseLabel.textContent = '尾数简写';
-            const parseControl = document.createElement('span');
-            parseControl.className = 'user-settlement-checkbox';
-            const parseInput = document.createElement('input');
-            parseInput.type = 'checkbox';
-            parseInput.checked = parsePreference.tailShorthandAsSeparateGroups === true;
-            const parseText = document.createElement('span');
-            parseText.textContent = '2468尾按 2尾/4尾/6尾/8尾 解析';
-            parseControl.appendChild(parseInput);
-            parseControl.appendChild(parseText);
-            parseField.appendChild(parseLabel);
-            parseField.appendChild(parseControl);
-
-            const saveButton = document.createElement('button');
-            saveButton.className = 'user-settlement-save';
-            saveButton.textContent = '保存设置';
-            saveButton.onclick = (event) => {
-                event.stopPropagation();
-                const nextOdds = Number(oddsInput.value);
-                const nextRebateRate = Number(rebateInput.value);
-                const nextTailShorthand = parseInput.checked === true;
-                if (!Number.isFinite(nextOdds) || nextOdds <= 0) {
-                    if (window.showError) {
-                        window.showError('保存设置失败', '倍率请输入大于 0 的数字');
-                    }
-                    return;
-                }
-                if (!Number.isFinite(nextRebateRate) || nextRebateRate < 0) {
-                    if (window.showError) {
-                        window.showError('保存设置失败', '返利请输入大于等于 0 的数字');
-                    }
-                    return;
-                }
-                try {
-                    const result = this.updateUserSettlementConfig(userName, {
-                        odds: nextOdds,
-                        rebateRate: nextRebateRate
-                    }, {
-                        keepExpanded: true,
-                        render: false,
-                        save: false
-                    });
-                    const parseResult = this.updateUserParsePreference(userName, {
-                        tailShorthandAsSeparateGroups: nextTailShorthand
-                    }, {
-                        render: false,
-                        save: false
-                    });
-                    this.expandedSettlementUser = '';
-                    this.renderAllSections();
-                    this.saveUserData();
-                    if (window.showSuccess) {
-                        window.showSuccess(`已保存 ${userName}：倍率 ${this.formatAmountValue(result.odds)}，返利 ${this.formatAmountValue(result.rebateRate)}%，尾数简写${parseResult.tailShorthandAsSeparateGroups ? '开' : '关'}`);
-                    }
-                } catch (error) {
-                    if (window.showError) {
-                        window.showError('保存设置失败', error && error.message ? error.message : '未知错误');
-                    }
-                }
-            };
-
-            const clearButton = document.createElement('button');
-            clearButton.className = 'user-settlement-clear';
-            clearButton.textContent = '清空录入条目数据';
-            clearButton.onclick = (event) => {
-                event.stopPropagation();
-                try {
-                    const result = this.clearUserBetData(userName);
-                    if (result && result.cleared && window.showSuccess) {
-                        window.showSuccess(`已清空 ${userName} 的录入条目数据`);
-                    }
-                } catch (error) {
-                    if (window.showError) {
-                        window.showError('清空录入条目数据失败', error && error.message ? error.message : '未知错误');
-                    }
-                }
-            };
-
-            editor.appendChild(oddsField);
-            editor.appendChild(rebateField);
-            editor.appendChild(parseField);
-            editor.appendChild(saveButton);
-            editor.appendChild(clearButton);
-            info.appendChild(editor);
-        }
-
         const actions = document.createElement('div');
         actions.className = 'user-item-actions';
 
         const settlementButton = document.createElement('button');
         settlementButton.className = 'user-settlement-toggle';
-        settlementButton.textContent = this.expandedSettlementUser === userName ? '收起' : '客户设置';
+        settlementButton.textContent = '客户设置';
+        const isSettingsOpen = typeof window.isCustomerSettingsListDockOpenForUser === 'function'
+            && window.isCustomerSettingsListDockOpenForUser(userName);
+        if (isSettingsOpen) {
+            settlementButton.classList.add('active');
+            settlementButton.setAttribute('aria-expanded', 'true');
+        } else {
+            settlementButton.setAttribute('aria-expanded', 'false');
+        }
         settlementButton.onclick = (event) => {
             event.stopPropagation();
-            this.toggleSettlementEditor(userName);
+            if (typeof window.openCustomerSettings === 'function') {
+                window.openCustomerSettings(userName, {
+                    source: 'list',
+                    defaultTab: 'settlement'
+                });
+            }
+        };
+
+        const clearBetDataButton = document.createElement('button');
+        clearBetDataButton.className = 'cancel-button';
+        clearBetDataButton.textContent = '清空数据';
+        clearBetDataButton.onclick = (event) => {
+            event.stopPropagation();
+            try {
+                this.clearUserBetData(userName);
+            } catch (error) {
+                if (window.showError) {
+                    window.showError('清空失败', error && error.message ? error.message : '未知错误');
+                }
+            }
         };
 
         const deleteButton = document.createElement('button');
-        deleteButton.textContent = '删除';
+        deleteButton.textContent = '删除客户';
         deleteButton.onclick = (event) => {
             event.stopPropagation();
             this.deleteUser(userName);
         };
 
         actions.appendChild(settlementButton);
+        actions.appendChild(clearBetDataButton);
         actions.appendChild(deleteButton);
         li.appendChild(info);
         li.appendChild(actions);
