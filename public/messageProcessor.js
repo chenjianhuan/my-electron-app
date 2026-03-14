@@ -5029,11 +5029,8 @@ class MessageProcessor {
 
         const mergeUnion = () => {
             const merged = [];
-            const mergedSet = new Set();
             components.forEach(component => {
                 component.forEach(num => {
-                    if (mergedSet.has(num)) return;
-                    mergedSet.add(num);
                     merged.push(num);
                 });
             });

@@ -5024,6 +5024,32 @@ textarea#message:focus,
   overscroll-behavior: contain;
 }
 
+#recognizeGroupAnchorsBody > #anchorLibraryWorkspace {
+  flex: 0 0 auto;
+  height: auto;
+  overflow: visible;
+}
+
+#recognizeGroupAnchorsBody > #anchorLibraryWorkspace .anchor-rule-workspace {
+  flex: 0 0 auto;
+}
+
+#recognizeGroupAnchorsBody > #anchorLibraryWorkspace .anchor-rule-list-column {
+  overflow: visible;
+}
+
+#recognizeGroupAnchorsBody > #anchorLibraryWorkspace .anchor-alias-list {
+  max-height: clamp(280px, 36vh, 460px);
+}
+
+#recognizeGroupAnchorsBody > #anchorLibraryWorkspace .anchor-impact-panel {
+  height: auto;
+}
+
+#recognizeGroupAnchorsBody > #anchorLibraryWorkspace .anchor-impact-preview {
+  max-height: clamp(160px, 26vh, 320px);
+}
+
 #recognizeGroupNoiseBody {
   flex: 1 1 auto;
   min-height: 0;
@@ -5972,6 +5998,42 @@ textarea#message:focus,
 
 .customer-settings-drawer-host .attribute-help-body {
   flex: 1 1 auto;
+  min-height: 0;
+}
+
+.customer-settings-drawer-host .attribute-help.is-tabbed #recognizeGroupNoiseBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.customer-settings-drawer-host .attribute-help.is-tabbed #recognizeGroupNoiseBody #noiseWorkspaceSubgroups,
+.customer-settings-drawer-host .attribute-help.is-tabbed #recognizeGroupNoiseBody .recognize-side-subgroup-body,
+.customer-settings-drawer-host .attribute-help.is-tabbed #recognizeGroupNoiseBody #noiseRuleList.anchor-alias-list,
+.customer-settings-drawer-host .attribute-help.is-tabbed #recognizeGroupNoiseBody #ignoreTokenList.anchor-alias-list {
+  overflow: visible;
+  max-height: none;
+}
+
+.customer-settings-drawer-host .attribute-help.is-tabbed #recognizeGroupNoiseBody #noiseWorkspaceSubgroups {
+  flex: 0 0 auto;
+  min-height: auto;
+}
+
+.customer-settings-drawer-host .attribute-help.is-tabbed #recognizeGroupNoiseBody .recognize-side-subgroup,
+.customer-settings-drawer-host .attribute-help.is-tabbed #recognizeGroupNoiseBody .recognize-side-subgroup.expanded-fill {
+  flex: 0 0 auto;
+}
+
+.customer-settings-drawer-host .attribute-help.is-tabbed #recognizeGroupNoiseBody .anchor-impact-panel {
+  height: auto;
+}
+
+.customer-settings-drawer-host .attribute-help.is-tabbed #recognizeGroupNoiseBody .anchor-impact-preview {
+  flex: 0 0 auto;
+  min-height: 120px;
+  max-height: none;
 }
 
 .customer-drawer-checkbox {

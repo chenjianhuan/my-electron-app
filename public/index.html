@@ -226,7 +226,7 @@
                         <div class="customer-settings-primary-tabs" role="tablist" aria-label="客户设置主分组">
                             <button id="recognizePrimaryTabSettlement" class="customer-settings-primary-tab" type="button" role="tab" aria-selected="false" onclick="selectRecognizeSettingsTab('settlement')">结算与区域</button>
                             <button id="recognizePrimaryTabAttributes" class="customer-settings-primary-tab" type="button" role="tab" aria-selected="false" onclick="selectRecognizeSettingsTab('attributes')">号码与玩法</button>
-                            <button id="recognizePrimaryTabAnchors" class="customer-settings-primary-tab" type="button" role="tab" aria-selected="false" onclick="selectRecognizeSettingsTab('anchors')">金额识别</button>
+                            <button id="recognizePrimaryTabAnchors" class="customer-settings-primary-tab" type="button" role="tab" aria-selected="false" onclick="selectRecognizeSettingsTab('anchors')">锚点与金额识别</button>
                             <button id="recognizePrimaryTabNoise" class="customer-settings-primary-tab" type="button" role="tab" aria-selected="false" onclick="selectRecognizeSettingsTab('noise')">清洗与边界</button>
                         </div>
 
@@ -306,7 +306,7 @@
                                 </div>
                                 <div id="attributeCombinePolicyCard" class="anchor-console-card">
                                     <div class="anchor-alias-title">属性词叠加策略</div>
-                                    <div class="anchor-alias-subtitle">当一段里同时出现多个属性词时，决定先取共同号、直接叠加，还是每次确认。</div>
+                                    <div class="anchor-alias-subtitle">当一段里同时出现多个属性词时，决定先取共同号，还是把各属性命中的号码原样叠加（叠加时不去重）。</div>
                                     <select id="attributeCombinePolicy">
                                         <option value="intersection_then_union_fallback">先取共同号，空了再叠加</option>
                                         <option value="intersection">只取共同号</option>
@@ -446,7 +446,7 @@
 
                         <section id="recognizeGroupAnchors" class="recognize-side-group collapsed">
                             <button id="recognizeGroupAnchorsToggle" class="recognize-side-group-toggle" type="button" onclick="toggleRecognizeSideGroup('anchors')" aria-expanded="false">
-                                <span class="recognize-side-group-title">金额识别</span>
+                                <span class="recognize-side-group-title">锚点与金额识别</span>
                                 <span class="recognize-side-group-caret">▾</span>
                             </button>
                             <div id="recognizeGroupAnchorsBody" class="recognize-side-group-body">

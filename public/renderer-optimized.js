@@ -1064,7 +1064,8 @@ function isCustomerSettingsListDockOpenForUser(userName = '') {
 }
 
 function appendCustomerSettingsNode(parent, node) {
-    if (!parent || !node || node.parentElement === parent) return;
+    if (!parent || !node) return;
+    if (node.parentElement === parent && parent.lastElementChild === node) return;
     parent.appendChild(node);
 }
 
@@ -1099,8 +1100,8 @@ function ensureCustomerSettingsBusinessLayout() {
     appendCustomerSettingsNode(attributesBody, attributeCombinePolicyCard);
     appendCustomerSettingsNode(attributesBody, blockedPlayKeywordCard);
 
-    appendCustomerSettingsNode(anchorsBody, amountUnitsBusinessWorkspace);
     appendCustomerSettingsNode(anchorsBody, anchorLibraryWorkspace);
+    appendCustomerSettingsNode(anchorsBody, amountUnitsBusinessWorkspace);
 
     appendCustomerSettingsNode(noiseBody, messageTypeWhitelistCard);
     appendCustomerSettingsNode(noiseBody, noiseSharedScopeCard);
@@ -1178,6 +1179,18 @@ function refreshExpandedRecognizeSideGroups() {
     });
 }
 
+function resetRecognizeSideGroupScroll(groupKey = '') {
+    const bodyIdMap = {
+        settlement: 'recognizeGroupSettlementBody',
+        attributes: 'recognizeGroupAttributesBody',
+        anchors: 'recognizeGroupAnchorsBody',
+        noise: 'recognizeGroupNoiseBody'
+    };
+    const body = document.getElementById(bodyIdMap[groupKey] || '');
+    if (!body) return;
+    body.scrollTop = 0;
+}
+
 function expandRecognizeCustomerGroup(groupKey = 'attributes', options = {}) {
     const validKeys = CUSTOMER_SETTINGS_PRIMARY_GROUP_KEYS;
     const targetKey = validKeys.includes(groupKey) ? groupKey : 'attributes';
@@ -1190,6 +1203,9 @@ function expandRecognizeCustomerGroup(groupKey = 'attributes', options = {}) {
     nextState[targetKey] = true;
     setRecognizeSideGroupState(nextState, { persist: options && options.persist === true });
     refreshRecognizeSideGroupContent(targetKey);
+    requestAnimationFrame(() => {
+        resetRecognizeSideGroupScroll(targetKey);
+    });
 }
 
 function selectRecognizeSettingsTab(groupKey = 'attributes') {
@@ -1431,6 +1447,10 @@ function openCustomerSettings(userName = '', options = {}) {
         } else {
             applyRecognizeSideGroups();
             refreshExpandedRecognizeSideGroups();
+            requestAnimationFrame(() => {
+                const activeKey = expandedKeys[0];
+                resetRecognizeSideGroupScroll(activeKey);
+            });
         }
         return;
     }
@@ -2989,7 +3009,7 @@ function getAnchorGuideStepConfig(step) {
         examples: [
             '先取共同号，空了再叠加：稳健默认，优先减少误识别。',
             '只取共同号：最严格，命中少但准确。',
-            '全部叠加：范围更大，适合宁可多收后复核的场景。'
+            '全部叠加：把各属性命中的号码原样叠加，重复号会重复保留。'
         ],
         focusIds: ['attributeCombinePolicy', 'saveAttributeCombinePolicyBtn'],
         actions: [
@@ -4375,8 +4395,8 @@ function buildRedOddCombineExampleDetails() {
             `红波（${redSet.length}个）：${formatExplainNumberList(redSet)}`,
             `单数（${oddSet.length}个）：${formatExplainNumberList(oddSet)}`,
             `共同号（${intersection.length}个）：${intersection.length > 0 ? formatExplainNumberList(intersection) : '（空）'}`,
-            `全部叠加后（${union.length}个）：${formatExplainNumberList(union)}`,
-            `按“各数5”计算：共同号结果是 ${intersectionCanonical}（总额 ${formatNumericAmount(intersection.length * amountPerNumber)}）；全部叠加结果是 ${unionCanonical}（总额 ${formatNumericAmount(union.length * amountPerNumber)}）。`
+            `全部叠加后（${union.length}个，重复号保留）：${formatExplainNumberList(union)}`,
+            `按“各数5”计算：共同号结果是 ${intersectionCanonical}（总额 ${formatNumericAmount(intersection.length * amountPerNumber)}）；全部叠加结果是 ${unionCanonical}（总额 ${formatNumericAmount(union.length * amountPerNumber)}，重复号按重复次数计）。`
         ]
     };
 }
@@ -4395,17 +4415,17 @@ function getAttributeCombinePolicyExplainMeta(policy) {
     }
     if (policy === 'union') {
         return {
-            effect: '全部叠加：各属性命中的号码都会算进去，范围更大。',
+            effect: '全部叠加：各属性命中的号码都会算进去，并且重复号会重复保留。',
             example: '例：红波单各数5（全部叠加）',
             details: [
                 ...example.details,
-                `当前策略结论：全部叠加，共 ${example.union.length} 个号码。`
+                `当前策略结论：全部叠加，共 ${example.union.length} 个号码（重复号按重复次数计）。`
             ]
         };
     }
     if (policy === 'confirm') {
         return {
-            effect: '每次确认：遇到多属性组合时，让你手动选择取共同号还是全部叠加。',
+            effect: '每次确认：遇到多属性组合时，让你手动选择取共同号还是全部叠加（叠加时不去重）。',
             example: '例：红波单各数5（每次让你选共同号或全部叠加）',
             details: [
                 ...example.details,
@@ -4414,7 +4434,7 @@ function getAttributeCombinePolicyExplainMeta(policy) {
         };
     }
     return {
-        effect: '先取共同号，空了再叠加：优先缩到共同命中的号码；如果一个共同号都没有，再退回全部叠加（推荐）。',
+            effect: '先取共同号，空了再叠加：优先缩到共同命中的号码；如果一个共同号都没有，再退回全部叠加（叠加时不去重，推荐）。',
         example: '例：红波单各数5（先看共同号，空了才叠加）',
         details: [
             ...example.details,
