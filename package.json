@@ -18,6 +18,17 @@
   "engines": {
     "node": "18.x"
   },
+  "overrides": {
+    "cross-spawn": "7.0.6",
+    "form-data": "4.0.5",
+    "js-yaml": "4.1.1",
+    "config-file-ts": {
+      "glob": "10.5.0"
+    },
+    "onnxruntime-node": {
+      "tar": "7.5.11"
+    }
+  },
   "scripts": {
     "start": "electron .",
     "dist": "npm run dist:mac && npm run dist:win",
