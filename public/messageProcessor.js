@@ -67,12 +67,14 @@ class MessageProcessor {
             '绿双': [6, 16, 22, 28, 32, 38, 44],
             '天肖': [2, 3, 5, 7, 10, 12, 14, 15, 17, 19, 22, 24, 26, 27, 29, 31, 34, 36, 38, 39, 41, 43, 46, 48],
             '左肖': [1, 2, 5, 6, 9, 10, 13, 14, 17, 18, 21, 22, 25, 26, 29, 30, 33, 34, 37, 38, 41, 42, 45, 46, 49],
-            '前肖': [1, 2, 3, 4, 5, 6, 13, 14, 15, 16, 17, 18, 25, 26, 27, 28, 29, 30, 37, 38, 39, 40, 41, 42, 49],
+            '前肖': [2, 3, 4, 5, 6, 7, 14, 15, 16, 17, 18, 19, 26, 27, 28, 29, 30, 31, 38, 39, 40, 41, 42, 43],
             '独字肖': [3, 4, 5, 6, 11, 12, 15, 16, 17, 18, 23, 24, 27, 28, 29, 30, 35, 36, 39, 40, 41, 42, 47, 48],
             '阴肖': [1, 2, 6, 7, 8, 12, 13, 14, 18, 19, 20, 24, 25, 26, 30, 31, 32, 36, 37, 38, 42, 43, 44, 48, 49],
+            '男肖': [1, 3, 5, 6, 7, 9, 11, 13, 15, 17, 18, 19, 21, 23, 25, 27, 29, 30, 31, 33, 35, 37, 39, 41, 42, 43, 45, 47, 49],
             '地肖': [1, 4, 6, 8, 9, 11, 13, 16, 18, 20, 21, 23, 25, 28, 30, 32, 33, 35, 37, 40, 42, 44, 45, 47, 49],
+            '女肖': [2, 4, 8, 10, 12, 14, 16, 20, 22, 24, 26, 28, 32, 34, 36, 38, 40, 44, 46, 48],
             '右肖': [3, 4, 7, 8, 11, 12, 15, 16, 19, 20, 23, 24, 27, 28, 31, 32, 35, 36, 39, 40, 43, 44, 47, 48],
-            '后肖': [7, 8, 9, 10, 11, 12, 19, 20, 21, 22, 23, 24, 31, 32, 33, 34, 35, 36, 43, 44, 45, 46, 47, 48],
+            '后肖': [1, 8, 9, 10, 11, 12, 13, 20, 21, 22, 23, 24, 25, 32, 33, 34, 35, 36, 37, 44, 45, 46, 47, 48, 49],
             '合字肖': [1, 2, 7, 8, 9, 10, 13, 14, 19, 20, 21, 22, 25, 26, 31, 32, 33, 34, 37, 38, 43, 44, 45, 46, 49],
             '阳肖': [3, 4, 5, 9, 10, 11, 15, 16, 17, 21, 22, 23, 27, 28, 29, 33, 34, 35, 39, 40, 41, 45, 46, 47],
             '0尾': [10, 20, 30, 40],
@@ -5426,12 +5428,69 @@ class MessageProcessor {
             .join('\n');
     }
 
+    normalizePreviewResultForProcessing(previewResult, options = {}) {
+        if (!previewResult || !previewResult.success || !previewResult.result) {
+            return null;
+        }
+
+        const result = previewResult.result;
+        const fallbackMessage = String(options && options.message ? options.message : '')
+            .replace(/\r\n/g, '\n')
+            .replace(/\r/g, '\n');
+        const normalizedEntries = (Array.isArray(result.entries) ? result.entries : [])
+            .map((entry) => {
+                const normalizedNumbers = (Array.isArray(entry && entry.numbers) ? entry.numbers : [])
+                    .map((item) => {
+                        if (item && typeof item === 'object') {
+                            return Number.parseInt(item.number, 10);
+                        }
+                        return Number.parseInt(item, 10);
+                    })
+                    .filter((value) => Number.isFinite(value));
+                const amount = Number(entry && entry.amount);
+                if (!normalizedNumbers.length || !Number.isFinite(amount) || amount <= 0) {
+                    return null;
+                }
+                return {
+                    numbers: normalizedNumbers,
+                    regionKey: this.normalizeRegionKey(entry && entry.regionKey ? entry.regionKey : this.getDefaultRegionKey(), this.getDefaultRegionKey()),
+                    amount,
+                    odds: entry && Object.prototype.hasOwnProperty.call(entry, 'odds') ? entry.odds : undefined,
+                    parseOrder: Number.isFinite(Number(entry && entry.parseOrder)) ? Number(entry.parseOrder) : null,
+                    lineNo: Number.isFinite(Number(entry && entry.lineNo)) ? Number(entry.lineNo) : null,
+                    segmentNo: Number.isFinite(Number(entry && entry.segmentNo)) ? Number(entry.segmentNo) : null,
+                    anchorToken: String(entry && entry.anchorToken ? entry.anchorToken : '').trim(),
+                    anchorMode: String(entry && entry.anchorMode ? entry.anchorMode : '').trim(),
+                    canonical: String(entry && entry.canonical ? entry.canonical : '').trim()
+                };
+            })
+            .filter(Boolean);
+
+        return {
+            parsedMessage: {
+                entries: normalizedEntries,
+                playEntries: Array.isArray(result.playEntries) ? result.playEntries.filter(Boolean) : [],
+                unresolvedLines: Array.isArray(result.unresolvedLines) ? result.unresolvedLines.filter(Boolean) : [],
+                partial: !!result.partial,
+                original: typeof result.original === 'string' ? result.original : fallbackMessage,
+                raw: fallbackMessage
+            },
+            blockingUnresolvedLines: Array.isArray(result.blockingUnresolvedLines) ? result.blockingUnresolvedLines.filter(Boolean) : [],
+            ignoredUnresolvedLines: Array.isArray(result.ignoredUnresolvedLines) ? result.ignoredUnresolvedLines.filter(Boolean) : []
+        };
+    }
+
     // 处理消息并更新用户数据
     processMessageForUser(message, userName, options = {}) {
         try {
             const clientId = this.normalizeRuleClientId(options && options.clientId ? options.clientId : userName);
             const allowPartial = !options || options.allowPartial !== false;
-            const parsedMessage = this.parseMessage(message, { clientId, allowPartial });
+            const normalizedPreview = this.normalizePreviewResultForProcessing(options && options.previewResult, {
+                message
+            });
+            const parsedMessage = normalizedPreview
+                ? normalizedPreview.parsedMessage
+                : this.parseMessage(message, { clientId, allowPartial });
             const regionAccountingInfo = this.getEffectiveRegionAccountingInfo(clientId);
             const providedOriginalMessage = options && Object.prototype.hasOwnProperty.call(options, 'originalMessage')
                 ? String(options.originalMessage == null ? '' : options.originalMessage)
@@ -5472,12 +5531,20 @@ class MessageProcessor {
             const blockingPlayIssues = blockedPlayEntries
                 .filter(entry => this.isBlockingPlayEntry(entry))
                 .map(entry => this.buildBlockingIssueFromPlayEntry(entry));
-            const blockingUnresolvedLines = [
-                ...blockingPlayIssues,
-                ...this.getBlockingUnresolvedLines(unresolvedLines)
-            ];
+            const blockingUnresolvedLines = normalizedPreview
+                ? (Array.isArray(normalizedPreview.blockingUnresolvedLines)
+                    ? normalizedPreview.blockingUnresolvedLines
+                    : [])
+                : [
+                    ...blockingPlayIssues,
+                    ...this.getBlockingUnresolvedLines(unresolvedLines)
+                ];
             const blockingIssueKeys = new Set(blockingUnresolvedLines.map((issue) => this.buildPreviewIssueKey(issue)));
-            const ignoredUnresolvedLines = unresolvedLines.filter((issue) => !blockingIssueKeys.has(this.buildPreviewIssueKey(issue)));
+            const ignoredUnresolvedLines = normalizedPreview
+                ? (Array.isArray(normalizedPreview.ignoredUnresolvedLines)
+                    ? normalizedPreview.ignoredUnresolvedLines
+                    : unresolvedLines.filter((issue) => !blockingIssueKeys.has(this.buildPreviewIssueKey(issue))))
+                : unresolvedLines.filter((issue) => !blockingIssueKeys.has(this.buildPreviewIssueKey(issue)));
             if (blockingPlayIssues.length > 0) {
                 const previewText = blockedPlayEntries
                     .slice(0, 2)

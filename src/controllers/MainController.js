@@ -20,6 +20,7 @@ function sanitizeExportBaseName(rawName, fallbackName) {
 
 class MainController {
   constructor(app, options = {}) {
+    this.app = app;
     this.userModel = new UserModel(app);
     this.ocrService = new OcrService(app);
     this.aiSemanticService = new AiSemanticService(app);
@@ -27,17 +28,15 @@ class MainController {
     this.wechatModel = new WechatModel(app, {
       getSecret: typeof options.getWechatSecret === 'function' ? options.getWechatSecret : () => '',
     });
+    this.pendingUserDataSave = null;
+    this.pendingUserDataSaveSenders = new Set();
+    this.userDataSaveTimer = null;
+    this.userDataSaveInFlight = false;
+    this.userDataSaveDelayMs = 80;
 
     // 监听从渲染进程发来的数据保存请求
     ipcMain.on('save-user-data', (event, userData) => {
-      try {
-        console.log('Saving user data...', userData);
-        this.userModel.saveUserData(userData);
-        event.reply('save-success');
-      } catch (error) {
-        console.error('Failed to save user data:', error);
-        event.reply('save-error', { message: error.message });
-      }
+      this.enqueueUserDataSave(event.sender, userData);
     });
 
     // 监听从渲染进程发来的数据加载请求
@@ -422,6 +421,102 @@ class MainController {
         return { ok: false, reason: 'failed' };
       }
     });
+
+    if (this.app && typeof this.app.on === 'function') {
+      this.app.on('before-quit', () => {
+        this.flushPendingUserDataSaveSync();
+      });
+    }
+  }
+
+  enqueueUserDataSave(sender, userData) {
+    this.pendingUserDataSave = userData;
+    if (sender) {
+      this.pendingUserDataSaveSenders.add(sender);
+    }
+    this.scheduleUserDataSaveFlush();
+  }
+
+  scheduleUserDataSaveFlush() {
+    if (!this.pendingUserDataSave || this.userDataSaveInFlight || this.userDataSaveTimer) {
+      return;
+    }
+    this.userDataSaveTimer = setTimeout(() => {
+      this.userDataSaveTimer = null;
+      this.flushUserDataSaveQueue();
+    }, this.userDataSaveDelayMs);
+  }
+
+  notifyUserDataSaveSenders(channel, payload, senders) {
+    (Array.isArray(senders) ? senders : []).forEach((sender) => {
+      if (!sender || typeof sender.send !== 'function') {
+        return;
+      }
+      if (typeof sender.isDestroyed === 'function' && sender.isDestroyed()) {
+        return;
+      }
+      try {
+        sender.send(channel, payload);
+      } catch (error) {
+        console.warn(`通知渲染进程 ${channel} 失败:`, error && error.message ? error.message : error);
+      }
+    });
+  }
+
+  async flushUserDataSaveQueue() {
+    if (this.userDataSaveInFlight || !this.pendingUserDataSave) {
+      return;
+    }
+    if (this.userDataSaveTimer) {
+      clearTimeout(this.userDataSaveTimer);
+      this.userDataSaveTimer = null;
+    }
+
+    const nextUserData = this.pendingUserDataSave;
+    const targetSenders = Array.from(this.pendingUserDataSaveSenders);
+    this.pendingUserDataSave = null;
+    this.pendingUserDataSaveSenders.clear();
+    this.userDataSaveInFlight = true;
+
+    try {
+      await this.userModel.saveUserDataAsync(nextUserData);
+      this.notifyUserDataSaveSenders('save-success', undefined, targetSenders);
+    } catch (error) {
+      console.error('Failed to save user data:', error);
+      this.notifyUserDataSaveSenders('save-error', {
+        message: error && error.message ? error.message : '保存失败'
+      }, targetSenders);
+    } finally {
+      this.userDataSaveInFlight = false;
+      if (this.pendingUserDataSave) {
+        this.scheduleUserDataSaveFlush();
+      }
+    }
+  }
+
+  flushPendingUserDataSaveSync() {
+    if (this.userDataSaveTimer) {
+      clearTimeout(this.userDataSaveTimer);
+      this.userDataSaveTimer = null;
+    }
+    if (this.userDataSaveInFlight || !this.pendingUserDataSave) {
+      return;
+    }
+
+    const nextUserData = this.pendingUserDataSave;
+    const targetSenders = Array.from(this.pendingUserDataSaveSenders);
+    this.pendingUserDataSave = null;
+    this.pendingUserDataSaveSenders.clear();
+
+    try {
+      this.userModel.saveUserData(nextUserData);
+      this.notifyUserDataSaveSenders('save-success', undefined, targetSenders);
+    } catch (error) {
+      console.error('Failed to save user data before quit:', error);
+      this.notifyUserDataSaveSenders('save-error', {
+        message: error && error.message ? error.message : '保存失败'
+      }, targetSenders);
+    }
   }
 }
 

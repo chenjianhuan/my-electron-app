@@ -4,7 +4,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-const TRIAL_DAYS = 3;
+const TRIAL_DAYS = 7;
 const CLOCK_ROLLBACK_TOLERANCE_MS = 5 * 60 * 1000;
 const CHECKSUM_PEPPER = 'messagecounter-trial-anchor-v1';
 

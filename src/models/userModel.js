@@ -170,6 +170,21 @@ class UserModel {
     }
   }
 
+  async createBackupAsync() {
+    try {
+      await fs.promises.access(this.userDataPath, fs.constants.F_OK);
+      await fs.promises.copyFile(this.userDataPath, this.backupPath);
+      console.log('数据备份已创建');
+      return true;
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        return false;
+      }
+      console.error('创建备份失败:', error);
+      return false;
+    }
+  }
+
   // 从备份恢复数据
   restoreFromBackup() {
     try {
@@ -249,6 +264,34 @@ class UserModel {
       console.log('用户数据保存成功');
       return true;
     } catch (error) {
+      console.error('保存用户数据失败:', error);
+      throw error;
+    }
+  }
+
+  async saveUserDataAsync(data) {
+    try {
+      if (!this.validateUserData(data)) {
+        throw new Error('数据格式无效');
+      }
+
+      await this.createBackupAsync();
+
+      const jsonData = JSON.stringify(data, null, 2);
+      const tempPath = `${this.userDataPath}.tmp`;
+      await fs.promises.writeFile(tempPath, jsonData, 'utf8');
+      await fs.promises.rename(tempPath, this.userDataPath);
+
+      console.log('用户数据保存成功');
+      return true;
+    } catch (error) {
+      try {
+        await fs.promises.unlink(`${this.userDataPath}.tmp`);
+      } catch (cleanupError) {
+        if (!cleanupError || cleanupError.code !== 'ENOENT') {
+          // ignore temp cleanup failures
+        }
+      }
       console.error('保存用户数据失败:', error);
       throw error;
     }

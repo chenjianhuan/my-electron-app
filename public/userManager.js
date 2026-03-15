@@ -22,6 +22,12 @@ class UserManager {
         this.originalRowsSnapshotVersion = 0;
         this.originalDataSearchTimer = null;
         this.originalDataSearchKeyword = '';
+        this.originalDataSortMode = 'serial_asc';
+        this.selectedScopeSnapshotVersion = 0;
+        this.selectedScopeSnapshotCache = {
+            key: '',
+            data: null
+        };
         this.userSearchTimer = null;
         this.userListDerivedVersion = 0;
         this.sortedUsersCache = {
@@ -32,6 +38,7 @@ class UserManager {
         this.numberViewMode = 'sorted';
         this.numberRankingSortKey = 'pnl';
         this.userSearchKeyword = '';
+        this.userListSortMode = 'amount_desc';
         this.numberRankingFitRaf = 0;
         this.numberRankingResizeObserver = null;
         this.numberRankingObservedElement = null;
@@ -937,6 +944,7 @@ class UserManager {
             key: '',
             rows: []
         };
+        this.invalidateSelectedScopeSnapshot();
     }
 
     invalidateUserListDerivedCaches() {
@@ -947,10 +955,64 @@ class UserManager {
             users: []
         };
         this.userListSummaryCache.clear();
+        this.invalidateSelectedScopeSnapshot();
+    }
+
+    invalidateSelectedScopeSnapshot() {
+        this.selectedScopeSnapshotVersion += 1;
+        this.selectedScopeSnapshotCache = {
+            key: '',
+            data: null
+        };
     }
 
     getUserListDerivedBaseKey() {
         return `${this.userListDerivedVersion}|${this.getViewRegions().join(',')}`;
+    }
+
+    normalizeUserListSortMode(mode = 'amount_desc') {
+        const normalized = String(mode || '').trim();
+        return ['serial_asc', 'serial_desc', 'amount_asc', 'amount_desc'].includes(normalized) ? normalized : 'amount_desc';
+    }
+
+    getUserListSortMode() {
+        return this.normalizeUserListSortMode(this.userListSortMode);
+    }
+
+    setUserListSortMode(mode = 'amount_desc') {
+        const nextMode = this.normalizeUserListSortMode(mode);
+        if (nextMode === this.userListSortMode) {
+            this.syncUserListSortControls();
+            return;
+        }
+        this.userListSortMode = nextMode;
+        this.renderUserList();
+    }
+
+    syncUserListSortControls() {
+        const mode = this.getUserListSortMode();
+        const mappings = [
+            { mode: 'serial_asc', id: 'userSortSerialAscBtn' },
+            { mode: 'serial_desc', id: 'userSortSerialDescBtn' },
+            { mode: 'amount_asc', id: 'userSortAmountAscBtn' },
+            { mode: 'amount_desc', id: 'userSortAmountDescBtn' }
+        ];
+        mappings.forEach(({ mode: key, id }) => {
+            const button = document.getElementById(id);
+            if (!button) return;
+            const active = mode === key;
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-selected', active ? 'true' : 'false');
+            button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+    }
+
+    getUserSerialMap() {
+        const serialMap = new Map();
+        Object.keys(this.users).forEach((userName, index) => {
+            serialMap.set(userName, index + 1);
+        });
+        return serialMap;
     }
 
     getOriginalRowDerivedCacheKey(row) {
@@ -971,6 +1033,131 @@ class UserManager {
 
     getOriginalDataSearchKeyword() {
         return this.originalDataSearchKeyword;
+    }
+
+    normalizeOriginalDataSortMode(mode = 'serial_asc') {
+        const normalized = String(mode || '').trim();
+        return ['serial_asc', 'serial_desc', 'amount_asc', 'amount_desc'].includes(normalized) ? normalized : 'serial_asc';
+    }
+
+    getOriginalDataSortMode() {
+        return this.normalizeOriginalDataSortMode(this.originalDataSortMode);
+    }
+
+    setOriginalDataSortMode(mode = 'serial_asc') {
+        const nextMode = this.normalizeOriginalDataSortMode(mode);
+        if (nextMode === this.originalDataSortMode) {
+            this.syncOriginalDataSortControls();
+            return;
+        }
+        this.originalDataSortMode = nextMode;
+        this.renderOriginalData();
+    }
+
+    syncOriginalDataSortControls() {
+        const mode = this.getOriginalDataSortMode();
+        const mappings = [
+            { mode: 'serial_asc', id: 'originalDataSortSerialAscBtn' },
+            { mode: 'serial_desc', id: 'originalDataSortSerialDescBtn' },
+            { mode: 'amount_asc', id: 'originalDataSortAmountAscBtn' },
+            { mode: 'amount_desc', id: 'originalDataSortAmountDescBtn' }
+        ];
+        mappings.forEach(({ mode: key, id }) => {
+            const button = document.getElementById(id);
+            if (!button) return;
+            const active = mode === key;
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-selected', active ? 'true' : 'false');
+            button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+    }
+
+    attachOriginalRowSerial(rows = []) {
+        if (!Array.isArray(rows) || rows.length === 0) return [];
+        return rows.map((row, index) => ({
+            ...row,
+            sourceSerial: Number.isInteger(row && row.sourceSerial) ? row.sourceSerial : (index + 1)
+        }));
+    }
+
+    sortOriginalRows(rows = []) {
+        if (!Array.isArray(rows) || rows.length <= 1) {
+            return Array.isArray(rows) ? rows.slice() : [];
+        }
+        const mode = this.getOriginalDataSortMode();
+        if (mode === 'serial_asc') {
+            return rows
+                .slice()
+                .sort((left, right) => (Number(left && left.sourceSerial) || 0) - (Number(right && right.sourceSerial) || 0));
+        }
+        if (mode === 'serial_desc') {
+            return rows
+                .slice()
+                .sort((left, right) => (Number(right && right.sourceSerial) || 0) - (Number(left && left.sourceSerial) || 0));
+        }
+
+        const factor = mode === 'amount_asc' ? 1 : -1;
+        return rows
+            .map((row, index) => ({
+                row,
+                index,
+                total: this.getOriginalOrderTotalCached(row),
+                sourceSerial: Number(row && row.sourceSerial) || (index + 1)
+            }))
+            .sort((left, right) => {
+                const leftHasTotal = Number.isFinite(Number(left.total));
+                const rightHasTotal = Number.isFinite(Number(right.total));
+                if (leftHasTotal !== rightHasTotal) {
+                    return leftHasTotal ? -1 : 1;
+                }
+                const leftTotal = leftHasTotal ? Number(left.total) : 0;
+                const rightTotal = rightHasTotal ? Number(right.total) : 0;
+                if (leftTotal !== rightTotal) {
+                    return (leftTotal - rightTotal) * factor;
+                }
+                if (left.sourceSerial !== right.sourceSerial) {
+                    return left.sourceSerial - right.sourceSerial;
+                }
+                return left.index - right.index;
+            })
+            .map((entry) => entry.row);
+    }
+
+    shouldPrewarmOriginalRowHeights() {
+        return false;
+    }
+
+    shouldUseOriginalDataVirtualList() {
+        return false;
+    }
+
+    prewarmOriginalRowHeights(rows = []) {
+        if (!Array.isArray(rows) || rows.length === 0) return;
+        rows.forEach((row) => {
+            this.getOriginalParseSummaryCached(row);
+            this.estimateOriginalRowHeight(row);
+        });
+    }
+
+    renderOriginalDataStaticRows(container, rows = []) {
+        if (!container) return;
+        this.deactivateVirtualList(container);
+        container.innerHTML = '';
+        if (!Array.isArray(rows) || rows.length === 0) {
+            const emptyNode = document.createElement('li');
+            emptyNode.className = 'virtual-empty';
+            emptyNode.textContent = '暂无原始消息';
+            container.appendChild(emptyNode);
+            return;
+        }
+
+        const fragment = document.createDocumentFragment();
+        rows.forEach((row, index) => {
+            const rowNode = this.createOriginalDataRow(row, index);
+            if (!rowNode) return;
+            fragment.appendChild(rowNode);
+        });
+        container.appendChild(fragment);
     }
 
     isOriginalMessageMatched(message, keyword = this.originalDataSearchKeyword) {
@@ -1578,6 +1765,28 @@ class UserManager {
         return user.regions[regionKey];
     }
 
+    getLatestOriginalMessageRow(userName = '', regionKey = this.activeRegion) {
+        const targetUser = String(userName || '').trim() || this.resolveActionUserName();
+        const targetRegion = String(regionKey || this.activeRegion || 'new_ao').trim() || 'new_ao';
+        if (!targetUser) return null;
+        const regionData = this.getUserRegionData(targetUser, targetRegion);
+        if (!regionData || !Array.isArray(regionData.originalData) || regionData.originalData.length <= 0) {
+            return null;
+        }
+        const index = regionData.originalData.length - 1;
+        const originalEntry = regionData.originalData[index];
+        return {
+            index,
+            userName: targetUser,
+            regionKey: targetRegion,
+            regionLabel: this.getRegionLabel(targetRegion),
+            message: this.extractOriginalMessageText(originalEntry),
+            createdAt: this.extractOriginalMessageCreatedAt(originalEntry),
+            editedAt: this.extractOriginalMessageEditedAt(originalEntry),
+            originalEntry
+        };
+    }
+
     getUserTotalInRegion(userName, regionKey = this.activeRegion) {
         const regionData = this.getUserRegionData(userName, regionKey);
         return regionData ? (regionData.totalCount || 0) : 0;
@@ -1640,8 +1849,15 @@ class UserManager {
                     wave: this.getNumberWave(number)
                 };
             });
+            const totalValue = numbers.reduce((sum, item) => sum + (Number(item.value) || 0), 0);
 
-            return { animal, numbers, wave: this.getAnimalWave(animal) };
+            return {
+                animal,
+                numbers,
+                totalValue,
+                totalText: this.formatAmountValue(totalValue),
+                wave: this.getAnimalWave(animal)
+            };
         });
     }
 
@@ -1664,7 +1880,13 @@ class UserManager {
             const animalCell = document.createElement('div');
             animalCell.classList.add('zodiac-row-animal');
             animalCell.classList.add(`wave-${column.wave}`);
-            animalCell.textContent = column.animal;
+            animalCell.innerHTML = `
+                <span class="number-stack-layout zodiac-stack-layout">
+                    <span class="number-stack-top number-stack-chip zodiac-stack-top">${column.animal}</span>
+                    <span class="number-stack-bottom zodiac-stack-bottom">${column.totalText}</span>
+                </span>
+            `;
+            this.fitValueText(animalCell);
             row.appendChild(animalCell);
 
             const numbersContainer = document.createElement('div');
@@ -1758,18 +1980,32 @@ class UserManager {
 
     // 获取排序后的用户列表
     getSortedUsers() {
-        const cacheKey = this.getUserListDerivedBaseKey();
+        const cacheKey = `${this.getUserListDerivedBaseKey()}|sort:${this.getUserListSortMode()}`;
         if (this.sortedUsersCache.key === cacheKey) {
             return this.sortedUsersCache.users.slice();
         }
 
-        const users = Object.keys(this.users).map((userName) => ({
+        const users = Object.keys(this.users).map((userName, index) => ({
             userName,
+            serialNo: index + 1,
             totalInView: this.getUserTotalInViewRegions(userName)
         }));
+        const mode = this.getUserListSortMode();
         users.sort((left, right) => {
-            if (right.totalInView !== left.totalInView) {
-                return right.totalInView - left.totalInView;
+            if (mode === 'serial_asc') {
+                return left.serialNo - right.serialNo;
+            }
+            if (mode === 'serial_desc') {
+                return right.serialNo - left.serialNo;
+            }
+
+            if (left.totalInView !== right.totalInView) {
+                return mode === 'amount_asc'
+                    ? (left.totalInView - right.totalInView)
+                    : (right.totalInView - left.totalInView);
+            }
+            if (left.serialNo !== right.serialNo) {
+                return left.serialNo - right.serialNo;
             }
             return String(left.userName || '').localeCompare(String(right.userName || ''), 'zh-Hans-CN');
         });
@@ -1893,6 +2129,81 @@ class UserManager {
         };
     }
 
+    buildEmptySelectedScopeSnapshot(users = []) {
+        const baseData = this.generateData();
+        return {
+            users: Array.isArray(users) ? users.slice() : [],
+            data: baseData,
+            payoutData: this.createPayoutDataFromStakeData(baseData, this.getDefaultPayoutOdds()),
+            totalCount: 0
+        };
+    }
+
+    getSelectedScopeSnapshotKey() {
+        return [
+            this.selectedScopeSnapshotVersion,
+            this.getScopeMode(),
+            this.getViewRegions().join(','),
+            this.getScopeUsers().join(',')
+        ].join('|');
+    }
+
+    getSelectedScopeSnapshot() {
+        const cacheKey = this.getSelectedScopeSnapshotKey();
+        if (this.selectedScopeSnapshotCache.key === cacheKey && this.selectedScopeSnapshotCache.data) {
+            return this.selectedScopeSnapshotCache.data;
+        }
+
+        const scopeUsers = this.getScopeUsers();
+        if (scopeUsers.length === 0) {
+            const emptySnapshot = this.buildEmptySelectedScopeSnapshot([]);
+            this.selectedScopeSnapshotCache = {
+                key: cacheKey,
+                data: emptySnapshot
+            };
+            return emptySnapshot;
+        }
+
+        const baseData = this.generateData();
+        const mergedMap = new Map(baseData.map(item => [item.number, { ...item, value: 0 }]));
+        const mergedPayoutMap = new Map(baseData.map(item => [item.number, { ...item, value: 0 }]));
+        let totalCount = 0;
+        const viewRegions = this.getViewRegions();
+
+        scopeUsers.forEach((userName) => {
+            viewRegions.forEach((regionKey) => {
+                const regionData = this.getUserRegionData(userName, regionKey);
+                if (!regionData) return;
+                this.ensureRegionPayoutData(regionData);
+                totalCount += Number(regionData.totalCount) || 0;
+                regionData.data.forEach((item) => {
+                    const merged = mergedMap.get(item.number);
+                    if (merged) {
+                        merged.value += item.value || 0;
+                    }
+                });
+                (regionData.payoutData || []).forEach((item) => {
+                    const merged = mergedPayoutMap.get(item.number);
+                    if (merged) {
+                        merged.value += item.value || 0;
+                    }
+                });
+            });
+        });
+
+        const snapshot = {
+            users: scopeUsers.slice(),
+            data: Array.from(mergedMap.values()),
+            payoutData: Array.from(mergedPayoutMap.values()),
+            totalCount
+        };
+        this.selectedScopeSnapshotCache = {
+            key: cacheKey,
+            data: snapshot
+        };
+        return snapshot;
+    }
+
     renderScopeModeControls() {
         const mode = this.getScopeMode();
         const summary = this.getScopeSummary();
@@ -1919,62 +2230,15 @@ class UserManager {
         return selected;
     }
 
-    getSelectedUserData() {
-        const selected = this.getSelectedUsers();
-        if (selected.length === 0) {
-            return {
-                users: [],
-                data: this.generateData(),
-                totalCount: 0,
-                originalData: []
-            };
-        }
-
-        const mergedMap = new Map(this.generateData().map(item => [item.number, { ...item, value: 0 }]));
-        const mergedPayoutMap = new Map(this.generateData().map(item => [item.number, { ...item, value: 0 }]));
-        const originalData = [];
-        let totalCount = 0;
-        const viewRegions = this.getViewRegions();
-
-        selected.forEach(userName => {
-            viewRegions.forEach(regionKey => {
-                const regionData = this.getUserRegionData(userName, regionKey);
-                if (!regionData) return;
-                this.ensureRegionPayoutData(regionData);
-                totalCount += regionData.totalCount || 0;
-                regionData.data.forEach(item => {
-                    const merged = mergedMap.get(item.number);
-                    if (merged) {
-                        merged.value += item.value || 0;
-                    }
-                });
-                (regionData.payoutData || []).forEach(item => {
-                    const merged = mergedPayoutMap.get(item.number);
-                    if (merged) {
-                        merged.value += item.value || 0;
-                    }
-                });
-                regionData.originalData.forEach((message, index) => {
-                    originalData.push({
-                        userName,
-                        index,
-                        originalEntry: message,
-                        message: this.extractOriginalMessageText(message),
-                        createdAt: this.extractOriginalMessageCreatedAt(message),
-                        editedAt: this.extractOriginalMessageEditedAt(message),
-                        regionKey,
-                        regionLabel: this.getUserRegionDisplayLabel(userName, regionKey)
-                    });
-                });
-            });
-        });
-
+    getSelectedUserData(options = {}) {
+        const snapshot = this.getSelectedScopeSnapshot();
+        const includeOriginalData = !options || options.includeOriginalData !== false;
         return {
-            users: selected,
-            data: Array.from(mergedMap.values()),
-            payoutData: Array.from(mergedPayoutMap.values()),
-            totalCount,
-            originalData
+            users: snapshot.users,
+            data: snapshot.data,
+            payoutData: snapshot.payoutData,
+            totalCount: snapshot.totalCount,
+            originalData: includeOriginalData ? this.collectSelectedOriginalRows() : []
         };
     }
 
@@ -2048,12 +2312,12 @@ class UserManager {
         const mode = this.getNumberViewMode();
         const summary = this.getScopeSummary();
         const regionLabel = this.getViewRegionLabels().join('、');
-        const selectedData = this.getSelectedUserData();
-        const total = selectedData.totalCount || 0;
+        const scopeSnapshot = this.getSelectedScopeSnapshot();
+        const total = scopeSnapshot.totalCount || 0;
         if (titleElement) {
             if (mode === 'overview') {
                 titleElement.textContent = `生肖总览（${regionLabel}）：${summary.panelLabel}`;
-            } else if (selectedData.users.length > 0) {
+            } else if (summary.count > 0) {
                 titleElement.textContent = `${summary.titleLabel} 号码累计排行（${regionLabel}） (总: ${total})`;
             } else {
                 titleElement.textContent = `当前范围暂无累计数据（${regionLabel}）`;
@@ -2079,9 +2343,8 @@ class UserManager {
     updateTitles(count = 0) {
         const originalDataTitle = document.getElementById('originalDataTitle');
         const regionLabel = this.getViewRegionLabels().join('、');
-        const selectedData = this.getSelectedUserData();
         const scopeSummary = this.getScopeSummary();
-        if (selectedData.users.length > 0) {
+        if (scopeSummary.count > 0) {
             originalDataTitle.textContent = `${scopeSummary.titleLabel} 原始消息（${regionLabel}）`;
         } else {
             originalDataTitle.textContent = `当前范围暂无原始消息（${regionLabel}）`;
@@ -2104,6 +2367,9 @@ class UserManager {
         }
         if (typeof window.refreshDashboardStatus === 'function') {
             window.refreshDashboardStatus();
+        }
+        if (typeof window.refreshRecognizePreviousMessagePreview === 'function') {
+            window.refreshRecognizePreviousMessagePreview();
         }
         const recognizeModal = typeof document !== 'undefined'
             ? document.getElementById('myModal')
@@ -2307,10 +2573,11 @@ class UserManager {
         return summary;
     }
 
-    createUserListRow(userName = '') {
+    createUserListRow(userName = '', options = {}) {
         const summary = this.getUserListSummary(userName);
         const settlementConfig = summary.settlementConfig || this.getUserSettlementConfig(userName);
         const parsePreference = summary.parsePreference || this.getUserParsePreference(userName);
+        const serialNo = Number.isInteger(options && options.serialNo) ? options.serialNo : (this.getUserSerialMap().get(userName) || 0);
         const li = document.createElement('li');
         li.onclick = () => this.switchUser(userName);
         if (this.selectedUsers.has(userName)) {
@@ -2322,7 +2589,7 @@ class UserManager {
 
         const nameRow = document.createElement('div');
         nameRow.className = 'user-item-name';
-        nameRow.textContent = `${userName} (总: ${summary.totalInView || 0})`;
+        nameRow.textContent = `${serialNo} ${userName} (总: ${this.formatAmountValue(summary.totalInView || 0)})`;
         info.appendChild(nameRow);
 
         const regionRow = document.createElement('div');
@@ -2408,6 +2675,7 @@ class UserManager {
         const userListElement = document.getElementById('userList');
         if (!userListElement) return;
         this.cancelPendingUserListRender();
+        this.syncUserListSortControls();
         const userSearchInput = document.getElementById('userSearchInput');
         if (userSearchInput && userSearchInput.value !== this.userSearchKeyword) {
             userSearchInput.value = this.userSearchKeyword;
@@ -2426,8 +2694,11 @@ class UserManager {
         }
 
         const fragment = document.createDocumentFragment();
+        const serialMap = this.getUserSerialMap();
         sortedUsers.forEach(user => {
-            fragment.appendChild(this.createUserListRow(user));
+            fragment.appendChild(this.createUserListRow(user, {
+                serialNo: serialMap.get(user) || 0
+            }));
         });
         userListElement.appendChild(fragment);
     }
@@ -2446,8 +2717,8 @@ class UserManager {
 
     // 渲染当前用户区域
     renderCurrentUserSection(section) {
-        const selectedData = this.getSelectedUserData();
-        this.renderZodiacBoard(section, selectedData.data || []);
+        const scopeSnapshot = this.getSelectedScopeSnapshot();
+        this.renderZodiacBoard(section, scopeSnapshot.data || []);
     }
 
     // 渲染汇总区域
@@ -2816,7 +3087,8 @@ class UserManager {
         const originalDataListElement = document.getElementById('originalDataList');
         if (!originalDataListElement) return;
         this.cancelPendingOriginalDataSearchRender();
-        let rows = this.getOriginalRowsForCurrentScope();
+        this.syncOriginalDataSortControls();
+        let rows = this.attachOriginalRowSerial(this.getOriginalRowsForCurrentScope());
 
         const keyword = String(this.originalDataSearchKeyword || '').trim();
         if (keyword) {
@@ -2829,10 +3101,15 @@ class UserManager {
                     unmatchedRows.push(row);
                 }
             });
-            rows = matchedRows.concat(unmatchedRows);
+            rows = this.sortOriginalRows(matchedRows).concat(this.sortOriginalRows(unmatchedRows));
+        } else {
+            rows = this.sortOriginalRows(rows);
         }
 
-        rows = this.sortOriginalRowsByEditedStatus(rows);
+        if (!this.shouldUseOriginalDataVirtualList()) {
+            this.renderOriginalDataStaticRows(originalDataListElement, rows);
+            return;
+        }
 
         this.renderVirtualRows(
             originalDataListElement,
@@ -2884,18 +3161,30 @@ class UserManager {
     }
 
     collectSelectedOriginalRows() {
-        const selectedData = this.getSelectedUserData();
-        if (!selectedData.users.length) return [];
-        return selectedData.originalData.map(({ userName, index, originalEntry, message, createdAt, editedAt, regionKey, regionLabel }) => ({
-            userName,
-            index,
-            originalEntry,
-            message: this.extractOriginalMessageText(message),
-            createdAt: createdAt || this.extractOriginalMessageCreatedAt(originalEntry),
-            editedAt: editedAt || this.extractOriginalMessageEditedAt(originalEntry),
-            regionKey,
-            regionLabel: regionLabel || this.getRegionLabel(regionKey)
-        }));
+        const selectedUsers = this.getSelectedUsers();
+        if (!selectedUsers.length) return [];
+        const rows = [];
+        const viewRegions = this.getViewRegions();
+        selectedUsers.forEach((userName) => {
+            viewRegions.forEach((regionKey) => {
+                const regionData = this.getUserRegionData(userName, regionKey);
+                if (!regionData || !Array.isArray(regionData.originalData)) return;
+                const regionLabel = this.getUserRegionDisplayLabel(userName, regionKey);
+                regionData.originalData.forEach((originalEntry, index) => {
+                    rows.push({
+                        userName,
+                        index,
+                        originalEntry,
+                        message: this.extractOriginalMessageText(originalEntry),
+                        createdAt: this.extractOriginalMessageCreatedAt(originalEntry),
+                        editedAt: this.extractOriginalMessageEditedAt(originalEntry),
+                        regionKey,
+                        regionLabel
+                    });
+                });
+            });
+        });
+        return rows;
     }
 
     collectAllOriginalRows() {
@@ -2905,6 +3194,7 @@ class UserManager {
             viewRegions.forEach(regionKey => {
                 const regionData = this.getUserRegionData(userName, regionKey);
                 if (!regionData) return;
+                const regionLabel = this.getUserRegionDisplayLabel(userName, regionKey);
                 regionData.originalData.forEach((data, index) => {
                     rows.push({
                         userName,
@@ -2914,29 +3204,12 @@ class UserManager {
                         createdAt: this.extractOriginalMessageCreatedAt(data),
                         editedAt: this.extractOriginalMessageEditedAt(data),
                         regionKey,
-                        regionLabel: this.getUserRegionDisplayLabel(userName, regionKey)
+                        regionLabel
                     });
                 });
             });
         });
         return rows;
-    }
-
-    sortOriginalRowsByEditedStatus(rows = []) {
-        if (!Array.isArray(rows) || rows.length <= 1) return Array.isArray(rows) ? rows : [];
-        const normalRows = [];
-        const editedRows = [];
-        rows.forEach((row) => {
-            const editedAt = row && row.editedAt
-                ? row.editedAt
-                : this.extractOriginalMessageEditedAt(row && row.originalEntry);
-            if (this.normalizeOriginalMessageCreatedAt(editedAt)) {
-                editedRows.push(row);
-            } else {
-                normalRows.push(row);
-            }
-        });
-        return normalRows.concat(editedRows);
     }
 
     estimateOriginalRowHeight(row) {
@@ -2984,11 +3257,10 @@ class UserManager {
         li.classList.add('original-data-list');
         const regionLabel = row.regionLabel || this.getRegionLabel(row.regionKey);
         const rawMessage = this.extractOriginalMessageText(row.message);
-        const serialNo = Number.isInteger(rowIndex) ? (rowIndex + 1) : 0;
+        const serialNo = Number.isInteger(row && row.sourceSerial) ? row.sourceSerial : (Number.isInteger(rowIndex) ? (rowIndex + 1) : 0);
         const parseSummary = this.getOriginalParseSummaryCached(row);
         const orderTotal = this.getOriginalOrderTotalCached(row);
         const totalText = orderTotal == null ? '未识别' : this.formatAmountValue(orderTotal);
-        const metaText = `${serialNo} ${row.userName}（${regionLabel}）总：${totalText}`;
         const createdAtText = this.formatOriginalMessageCreatedAt(row.createdAt || (row.originalEntry && this.extractOriginalMessageCreatedAt(row.originalEntry)));
         const issueTooltip = (Array.isArray(parseSummary.focusIssues) ? parseSummary.focusIssues : [])
             .map((issue) => this.formatOriginalParseIssue(issue))
@@ -3000,9 +3272,19 @@ class UserManager {
         const contentWrap = document.createElement('div');
         contentWrap.classList.add('message-main');
 
+        const metaRow = document.createElement('div');
+        metaRow.classList.add('message-meta-row');
+
         const metaSpan = document.createElement('span');
         metaSpan.classList.add('message-meta');
-        metaSpan.textContent = metaText;
+        metaSpan.textContent = `${serialNo} ${row.userName}（${regionLabel}）`;
+
+        const totalInline = document.createElement('span');
+        totalInline.classList.add('message-meta-total');
+        if (orderTotal == null) {
+            totalInline.classList.add('is-unresolved');
+        }
+        totalInline.textContent = `总：${totalText}`;
 
         const timeSpan = document.createElement('span');
         timeSpan.classList.add('message-time');
@@ -3035,7 +3317,10 @@ class UserManager {
         textSpan.classList.add('message-text');
         textSpan.innerHTML = this.renderOriginalMessageHighlightHtml(rawMessage);
 
-        contentWrap.appendChild(metaSpan);
+        metaRow.appendChild(metaSpan);
+        metaRow.appendChild(totalInline);
+
+        contentWrap.appendChild(metaRow);
         contentWrap.appendChild(timeSpan);
         contentWrap.appendChild(summaryWrap);
 
@@ -3118,7 +3403,7 @@ class UserManager {
         input.setSelectionRange(input.value.length, input.value.length);
     }
 
-    applyEditedOriginalData(userName, index, regionKey = this.activeRegion, nextValue = '') {
+    applyEditedOriginalData(userName, index, regionKey = this.activeRegion, nextValue = '', options = {}) {
         const regionData = this.getUserRegionData(userName, regionKey);
         if (!regionData || !Array.isArray(regionData.originalData)) {
             throw new Error('原始消息不存在或区域无效');
@@ -3132,7 +3417,20 @@ class UserManager {
             throw new Error('消息不能为空');
         }
 
-        const validation = this.validateOriginalMessageBeforeSave(message, userName);
+        const providedPreview = options && options.preview && options.preview.success ? options.preview : null;
+        const blockingUnresolvedLines = Array.isArray(providedPreview && providedPreview.result && providedPreview.result.blockingUnresolvedLines)
+            ? providedPreview.result.blockingUnresolvedLines.filter(Boolean)
+            : [];
+        const validation = providedPreview
+            ? (blockingUnresolvedLines.length > 0
+                ? {
+                    ok: false,
+                    code: 'BLOCKING_UNRESOLVED_LINES',
+                    message: `仍有 ${blockingUnresolvedLines.length} 行疑似录入条目内容未识别，已阻止保存`,
+                    blockingUnresolvedLines
+                }
+                : { ok: true, preview: providedPreview })
+            : this.validateOriginalMessageBeforeSave(message, userName);
         if (!validation.ok) {
             const error = new Error(validation.message || '消息校验失败');
             if (validation.code) {
@@ -3144,7 +3442,28 @@ class UserManager {
             throw error;
         }
 
-        const totalAmount = this.calculateOriginalOrderTotal(message, userName, regionKey);
+        let totalAmount = null;
+        if (validation.preview && validation.preview.success && validation.preview.result) {
+            const previewEntries = Array.isArray(validation.preview.result.entries)
+                ? validation.preview.result.entries.filter(Boolean)
+                : [];
+            const regionEntries = previewEntries.filter((entry) => {
+                const entryRegion = String(entry && entry.regionKey ? entry.regionKey : regionKey).trim() || regionKey;
+                return entryRegion === regionKey;
+            });
+            const regionTotal = regionEntries.reduce((sum, entry) => sum + (Number(entry && entry.totalAmount) || 0), 0);
+            if (regionTotal > 0) {
+                totalAmount = regionTotal;
+            } else {
+                const previewTotal = Number(validation.preview.result.totalAmount);
+                if (previewEntries.length > 0 && Number.isFinite(previewTotal) && previewTotal > 0) {
+                    totalAmount = previewTotal;
+                }
+            }
+        }
+        if (!Number.isFinite(totalAmount)) {
+            totalAmount = this.calculateOriginalOrderTotal(message, userName, regionKey);
+        }
         const parseSummary = this.buildOriginalParseSummaryFromPreview(validation.preview, regionKey, totalAmount);
         const createdAt = this.extractOriginalMessageCreatedAt(regionData.originalData[index]);
         const editedAt = new Date().toISOString();
@@ -3466,7 +3785,6 @@ class UserManager {
         if (userSearchInput) {
             userSearchInput.value = '';
         }
-        this.updateCurrentUserDisplay();
         this.clearSections();
         this.renderAllSections();
         this.saveUserData();
@@ -3546,8 +3864,6 @@ class UserManager {
         const validKeys = this.getRegionOptions().map(item => item.key);
         const normalized = (regionKeys || []).filter(key => validKeys.includes(key));
         this.viewRegions = new Set(normalized.length > 0 ? normalized : ['new_ao']);
-        this.updateCurrentUserDisplay();
-        this.updateTitles();
         this.renderAllSections();
     }
 
@@ -3564,8 +3880,6 @@ class UserManager {
         if (this.viewRegions.size === 0) {
             this.viewRegions.add('new_ao');
         }
-        this.updateCurrentUserDisplay();
-        this.updateTitles();
         this.renderAllSections();
     }
 

@@ -66,6 +66,7 @@ const realtimePreviewWorkerPending = new Map();
 let clipboardMonitorStartedAt = 0;
 let recognizeEditContext = null;
 let recognizeAttributePanelVisible = false;
+let recognizePreviousMessagePreviewVisible = false;
 let hedgeReportAutoCalcTimer = null;
 let recognizeConfigRefreshTimer = null;
 let customerSettingsContext = {
@@ -339,7 +340,7 @@ const ATTRIBUTE_GROUPS = [
     ['合单', '大单', '小单', '合大', '尾大'],
     ['合双', '大双', '小双', '合小', '尾小'],
     ['天肖', '地肖', '前肖', '后肖', '左肖', '右肖'],
-    ['阴肖', '阳肖', '独字肖', '合字肖'],
+    ['阴肖', '阳肖', '男肖', '女肖', '独字肖', '合字肖'],
     ['金', '木', '水', '火', '土'],
     ['红波', '蓝波', '绿波', '家禽', '野兽'],
     ['红单', '红双', '蓝单', '蓝双', '绿单', '绿双'],
@@ -656,9 +657,11 @@ function refreshDashboardStatus() {
     } else {
         const users = typeof manager.getAllUsers === 'function' ? (manager.getAllUsers() || {}) : {};
         const userCount = Object.keys(users).length;
-        const selectedData = typeof manager.getSelectedUserData === 'function'
-            ? manager.getSelectedUserData()
-            : { totalCount: 0, originalData: [] };
+        const selectedData = typeof manager.getSelectedScopeSnapshot === 'function'
+            ? manager.getSelectedScopeSnapshot()
+            : (typeof manager.getSelectedUserData === 'function'
+                ? manager.getSelectedUserData({ includeOriginalData: false })
+                : { totalCount: 0, originalData: [] });
         const viewRegions = typeof manager.getViewRegions === 'function' ? manager.getViewRegions() : ['new_ao'];
         const viewRegionLabels = typeof manager.getViewRegionLabels === 'function' ? manager.getViewRegionLabels() : viewRegions;
         const inSummary = typeof manager.isInSummaryMode === 'function' ? manager.isInSummaryMode() : false;
@@ -1487,6 +1490,127 @@ function openCustomerSettingsFromRecognize() {
         source: 'recognize',
         defaultTab: 'rules'
     });
+}
+
+function resolveRecognizePreviousMessageTargetUserName() {
+    if (recognizeEditContext && recognizeEditContext.userName) {
+        return String(recognizeEditContext.userName || '').trim();
+    }
+    const selectedUsers = getEditableUsersForCurrentSelection();
+    return selectedUsers.length === 1 ? String(selectedUsers[0] || '').trim() : '';
+}
+
+function buildRecognizePreviousMessageBodyHtml({ userName = '', regionKey = 'new_ao' } = {}) {
+    const manager = window.userManager;
+    const safeUserName = String(userName || '').trim();
+    const safeRegionKey = String(regionKey || 'new_ao').trim() || 'new_ao';
+    const regionLabel = manager && typeof manager.getRegionLabel === 'function'
+        ? manager.getRegionLabel(safeRegionKey)
+        : safeRegionKey;
+
+    if (!manager) {
+        return '<div class="recognize-previous-message-empty">用户管理器未就绪，请稍后再试。</div>';
+    }
+    if (!safeUserName) {
+        return '<div class="recognize-previous-message-empty">请先在左侧选中单个客户后，再查看上一条消息。</div>';
+    }
+    if (typeof manager.getLatestOriginalMessageRow !== 'function') {
+        return '<div class="recognize-previous-message-empty">当前版本暂不支持读取上一条消息。</div>';
+    }
+
+    const row = manager.getLatestOriginalMessageRow(safeUserName, safeRegionKey);
+    if (!row) {
+        return `<div class="recognize-previous-message-empty">当前客户在 ${escapeHtml(regionLabel)} 还没有已录入消息。</div>`;
+    }
+
+    const createdAtRaw = row.createdAt || (row.originalEntry && typeof manager.extractOriginalMessageCreatedAt === 'function'
+        ? manager.extractOriginalMessageCreatedAt(row.originalEntry)
+        : '');
+    const createdAtText = typeof manager.formatOriginalMessageCreatedAt === 'function'
+        ? manager.formatOriginalMessageCreatedAt(createdAtRaw)
+        : (createdAtRaw || '未记录');
+    const rawMessage = typeof manager.extractOriginalMessageText === 'function'
+        ? manager.extractOriginalMessageText(row.message)
+        : String(row.message || '');
+    const parseSummary = typeof manager.getOriginalParseSummaryCached === 'function'
+        ? manager.getOriginalParseSummaryCached(row)
+        : null;
+    const orderTotal = typeof manager.getOriginalOrderTotalCached === 'function'
+        ? manager.getOriginalOrderTotalCached(row)
+        : null;
+    const totalText = orderTotal == null
+        ? '未识别'
+        : (typeof manager.formatAmountValue === 'function' ? manager.formatAmountValue(orderTotal) : String(orderTotal));
+    const statusKey = String(parseSummary && parseSummary.status ? parseSummary.status : 'partial').trim() || 'partial';
+    const safeStatusKey = /^[a-z_]+$/i.test(statusKey) ? statusKey.toLowerCase() : 'partial';
+    const statusLabel = parseSummary && parseSummary.statusLabel
+        ? String(parseSummary.statusLabel)
+        : '部分统计';
+    const summaryText = parseSummary && parseSummary.summaryText
+        ? String(parseSummary.summaryText)
+        : '暂无统计摘要';
+    const issues = parseSummary && Array.isArray(parseSummary.focusIssues) ? parseSummary.focusIssues : [];
+    const issueHtml = issues.length > 0
+        ? `
+            <div class="recognize-previous-message-issues">
+                ${issues.map((issue) => {
+                    const text = typeof manager.formatOriginalParseIssue === 'function'
+                        ? manager.formatOriginalParseIssue(issue)
+                        : String(issue && issue.reason ? issue.reason : '格式无法识别');
+                    return `<div class="recognize-previous-message-issue">${escapeHtml(text)}</div>`;
+                }).join('')}
+            </div>
+        `
+        : '';
+
+    return `
+        <div class="recognize-previous-message-meta">${escapeHtml(`${safeUserName} · ${regionLabel} · 最近录入第 ${Number(row.index) + 1} 条`)}</div>
+        <div class="recognize-previous-message-topline">
+            <span class="recognize-previous-message-total">总：${escapeHtml(totalText)}</span>
+            <span class="recognize-previous-message-time">添加时间：${escapeHtml(createdAtText)}</span>
+        </div>
+        <div class="recognize-previous-message-summary-line">
+            <span class="recognize-previous-message-badge status-${escapeHtml(safeStatusKey)}">${escapeHtml(statusLabel)}</span>
+            <span class="recognize-previous-message-summary">${escapeHtml(summaryText)}</span>
+        </div>
+        ${issueHtml}
+        <pre class="recognize-previous-message-content">${escapeHtml(rawMessage || '暂无内容')}</pre>
+    `;
+}
+
+function refreshRecognizePreviousMessagePreview() {
+    const button = document.getElementById('toggleRecognizePreviousMessageBtn');
+    const panel = document.getElementById('recognizePreviousMessagePanel');
+    const body = document.getElementById('recognizePreviousMessageBody');
+    if (!button || !panel || !body) return;
+
+    const active = !!recognizePreviousMessagePreviewVisible;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+
+    if (!active) {
+        panel.hidden = true;
+        body.innerHTML = '';
+        return;
+    }
+
+    panel.hidden = false;
+    body.innerHTML = buildRecognizePreviousMessageBodyHtml({
+        userName: resolveRecognizePreviousMessageTargetUserName(),
+        regionKey: getActiveRecognizeRegionKey()
+    });
+}
+
+function toggleRecognizePreviousMessagePreview(forceVisible = null) {
+    const nextVisible = typeof forceVisible === 'boolean'
+        ? forceVisible
+        : !recognizePreviousMessagePreviewVisible;
+    if (nextVisible && !resolveRecognizePreviousMessageTargetUserName()) {
+        showError('查看失败', '请先在左侧选中单个客户，再查看上一条消息');
+        return;
+    }
+    recognizePreviousMessagePreviewVisible = nextVisible;
+    refreshRecognizePreviousMessagePreview();
 }
 
 function closeCustomerSettingsModal() {
@@ -8749,7 +8873,7 @@ async function resolveMessageAmbiguityFlow(message, clientId, options = {}) {
 
     for (let i = 0; i < 8; i += 1) {
         const preview = await requestRecognizePreview(currentMessage, clientId, {
-            preferWorker: preferWorker && !interactive,
+            preferWorker,
             allowPartial: true
         });
         if (!isAmbiguityResult(preview)) {
@@ -9040,6 +9164,7 @@ function renderRecognizeVoiceUi() {
     }
 
     if (!statusEl) return;
+    statusEl.hidden = false;
     statusEl.className = 'recognize-voice-status';
 
     if (planLocked) {
@@ -9080,7 +9205,8 @@ function renderRecognizeVoiceUi() {
         statusEl.textContent = getRecognizeVoiceUnavailableHint(recognizeVoiceServiceStatus);
         return;
     }
-    statusEl.textContent = `离线语音录入可用，点击“语音录入”开始录音${recognizeVoiceServiceStatus.model ? `（${recognizeVoiceServiceStatus.model}）` : ''}。`;
+    statusEl.textContent = '';
+    statusEl.hidden = true;
 }
 
 function appendRecognizeSpeechText(fragment) {
@@ -11804,6 +11930,7 @@ function renderRecognizeRegionButtons() {
         };
         container.appendChild(button);
     });
+    refreshRecognizePreviousMessagePreview();
 }
 
 function renderViewRegionButtons() {
@@ -13819,6 +13946,7 @@ function openModal(modalType, options = {}) {
         renderRecognizeRegionButtons();
         applyRecognizeAttributePanelVisible(recognizeAttributePanelVisible);
         syncRecognizeModalActionMode();
+        refreshRecognizePreviousMessagePreview();
     }
 
     modal.style.display = 'block';
@@ -13849,6 +13977,8 @@ function closeModal() {
     stopRecognizeClipboardMonitor();
     resetRecognizeModalState();
     setRecognizePreviewError('');
+    recognizePreviousMessagePreviewVisible = false;
+    refreshRecognizePreviousMessagePreview();
     clearRecognizeEditContext();
 }
 
@@ -14817,7 +14947,8 @@ async function confirmEdit() {
             const { userName, index, regionKey } = recognizeEditContext;
             const resolved = await resolveMessageAmbiguityFlow(message, userName, {
                 interactive: true,
-                updateTextarea: true
+                updateTextarea: true,
+                preferWorker: true
             });
             const previewResult = resolved && resolved.previewResult ? resolved.previewResult : null;
             if (!previewResult || !previewResult.success) {
@@ -14840,7 +14971,9 @@ async function confirmEdit() {
             const originalMessageForStorage = messageTextarea
                 ? String(messageTextarea.value || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
                 : String((resolved && typeof resolved.message === 'string' ? resolved.message : message) || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-            window.userManager.applyEditedOriginalData(userName, index, regionKey, originalMessageForStorage);
+            window.userManager.applyEditedOriginalData(userName, index, regionKey, originalMessageForStorage, {
+                preview: previewResult
+            });
             renderViewRegionButtons();
             closeModal();
             const regionLabel = window.userManager.getUserRegionDisplayLabel
@@ -14871,7 +15004,8 @@ async function confirmEdit() {
         for (const userName of selectedUsers) {
             const resolved = await resolveMessageAmbiguityFlow(message, userName, {
                 interactive: true,
-                updateTextarea: true
+                updateTextarea: true,
+                preferWorker: true
             });
             const previewResult = resolved && resolved.previewResult ? resolved.previewResult : null;
             if (!previewResult || !previewResult.success) {
@@ -14888,7 +15022,8 @@ async function confirmEdit() {
             preparedOperations.push({
                 userName,
                 message,
-                originalMessageForStorage
+                originalMessageForStorage,
+                previewResult
             });
         }
 
@@ -14898,6 +15033,7 @@ async function confirmEdit() {
                 clientId: operation.userName,
                 originalMessage: operation.originalMessageForStorage,
                 createdAt,
+                previewResult: operation.previewResult,
                 persist: false
             });
             if (!result.success) {
@@ -15981,6 +16117,102 @@ function computeOriginalRowExportPnl(row, winningConfigs = {}) {
     };
 }
 
+function collectExportUserSettlementRows(userTotals = [], userConfigMap = new Map(), exportOriginalRows = [], winningConfigs = {}) {
+    const rowsByUser = new Map();
+    exportOriginalRows.forEach((item) => {
+        const userName = String(item && item.userName ? item.userName : '').trim();
+        if (!userName) return;
+        if (!rowsByUser.has(userName)) {
+            rowsByUser.set(userName, []);
+        }
+        rowsByUser.get(userName).push(item);
+    });
+
+    const stakeByUser = new Map();
+    (Array.isArray(userTotals) ? userTotals : []).forEach((item) => {
+        const userName = String(item && item.userName ? item.userName : '').trim();
+        if (!userName) return;
+        stakeByUser.set(userName, Number(item && item.amount) || 0);
+    });
+
+    const allUsers = Array.from(new Set([
+        ...Array.from(stakeByUser.keys()),
+        ...Array.from(rowsByUser.keys())
+    ]));
+
+    return allUsers
+        .map((userName) => {
+            const userRows = rowsByUser.get(userName) || [];
+            const config = userConfigMap instanceof Map ? (userConfigMap.get(userName) || {}) : {};
+            const totalStakeFallback = userRows.reduce((sum, item) => sum + (Number(item && item.orderTotal) || 0), 0);
+            const totalStake = stakeByUser.has(userName) ? (Number(stakeByUser.get(userName)) || 0) : totalStakeFallback;
+            const totalRebate = userRows.reduce((sum, item) => sum + (Number(item && item.rebate) || 0), 0);
+
+            const rowsWithWinning = userRows.filter((item) => {
+                const configItem = winningConfigs[String(item && item.regionKey ? item.regionKey : '')];
+                return !!(configItem && configItem.numberText);
+            });
+            const invalidWinningCount = userRows.filter((item) => {
+                const configItem = winningConfigs[String(item && item.regionKey ? item.regionKey : '')];
+                return !!(configItem && configItem.error && !configItem.numberText);
+            }).length;
+            const computableRows = rowsWithWinning.filter(item => Number.isFinite(item && item.pnl));
+            const unresolvedRows = Math.max(0, rowsWithWinning.length - computableRows.length);
+            const hitStake = rowsWithWinning.length > 0
+                ? rowsWithWinning.reduce((sum, item) => sum + (Number(item && item.hitStake) || 0), 0)
+                : null;
+            const payout = rowsWithWinning.length > 0
+                ? rowsWithWinning.reduce((sum, item) => sum + (Number(item && item.payout) || 0), 0)
+                : null;
+            const pnl = computableRows.length > 0
+                ? computableRows.reduce((sum, item) => sum + (Number(item && item.pnl) || 0), 0)
+                : null;
+
+            let statusText = '待输入中奖号';
+            let statusClass = 'muted';
+            if (Number.isFinite(pnl)) {
+                if (Math.abs(pnl) < 1e-9) {
+                    statusText = '打和';
+                    statusClass = 'pnl-even';
+                } else if (pnl > 0) {
+                    statusText = '庄赢';
+                    statusClass = 'pnl-profit';
+                } else {
+                    statusText = '庄亏';
+                    statusClass = 'pnl-loss';
+                }
+            } else if (rowsWithWinning.length > 0) {
+                statusText = '无法计算';
+            } else if (invalidWinningCount > 0) {
+                statusText = '中奖号无效';
+            }
+
+            const coverageText = rowsWithWinning.length > 0
+                ? `${computableRows.length}/${rowsWithWinning.length}${unresolvedRows > 0 ? `（${unresolvedRows}条未算）` : ''}`
+                : (invalidWinningCount > 0 ? `无效 ${invalidWinningCount} 条` : '-');
+
+            return {
+                userName,
+                totalStake,
+                totalRebate,
+                hitStake,
+                payout,
+                pnl,
+                odds: Number(config && config.odds),
+                rebateRate: Number(config && config.rebateRate),
+                statusText,
+                statusClass,
+                coverageText,
+                hasWinningRows: rowsWithWinning.length > 0
+            };
+        })
+        .sort((a, b) => {
+            const stakeDiff = (Number(b && b.totalStake) || 0) - (Number(a && a.totalStake) || 0);
+            if (Math.abs(stakeDiff) > 1e-9) return stakeDiff;
+            return String(a && a.userName ? a.userName : '').localeCompare(String(b && b.userName ? b.userName : ''), 'zh-Hans-CN');
+        });
+}
+
 function buildLotteryExportDocument(scopeData, format = 'excel') {
     const data = Array.isArray(scopeData.data) ? scopeData.data : [];
     const originalData = Array.isArray(scopeData.originalData) ? scopeData.originalData : [];
@@ -16025,17 +16257,6 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
             </tr>
         `).join('')
         : '<tr><td colspan="3">暂无数据</td></tr>';
-
-    const userRowsHtml = userTotals.length > 0
-        ? userTotals.map((item) => `
-            <tr>
-                <td>${escapeHtml(item.userName)}</td>
-                <td style="text-align:right">${escapeHtml(formatNumericAmount(item.amount))}</td>
-                <td style="text-align:right">${escapeHtml(formatNumericAmount((userConfigMap.get(item.userName) || {}).odds))}</td>
-                <td style="text-align:right">${escapeHtml(formatNumericAmount((userConfigMap.get(item.userName) || {}).rebateRate))}%</td>
-            </tr>
-        `).join('')
-        : '<tr><td colspan="4">暂无数据</td></tr>';
 
     const winningSummaryText = (viewRegions.length > 0 ? viewRegions : ['new_ao', 'old_ao', 'hongkong'])
         .map((regionKey) => {
@@ -16126,6 +16347,60 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
             ? `${computablePnlRows.length}/${rowsWithWinning.length}${unresolvedPnlRows > 0 ? `（${unresolvedPnlRows}条未算）` : ''}`
             : '当前范围无对应区域数据')
         : '-';
+    const userSettlementRows = collectExportUserSettlementRows(userTotals, userConfigMap, exportOriginalRows, winningConfigs);
+    const usersWithComputablePnl = userSettlementRows.filter(item => Number.isFinite(item && item.pnl));
+    const usersWithWinningRows = userSettlementRows.filter(item => item && item.hasWinningRows);
+    const totalUserHitStake = userSettlementRows.reduce((sum, item) => sum + (Number(item && item.hitStake) || 0), 0);
+    const totalUserPayout = userSettlementRows.reduce((sum, item) => sum + (Number(item && item.payout) || 0), 0);
+    const totalUserRebate = userSettlementRows.reduce((sum, item) => sum + (Number(item && item.totalRebate) || 0), 0);
+    const totalUserPnl = usersWithComputablePnl.reduce((sum, item) => sum + (Number(item && item.pnl) || 0), 0);
+    const userSummaryPnlClass = usersWithComputablePnl.length <= 0
+        ? 'muted'
+        : (Math.abs(totalUserPnl) < 1e-9 ? 'pnl-even' : (totalUserPnl > 0 ? 'pnl-profit' : 'pnl-loss'));
+    const userRowsHtml = userSettlementRows.length > 0
+        ? userSettlementRows.map((item) => {
+            const totalStakeText = formatNumericAmount(item.totalStake || 0);
+            const rebateText = formatNumericAmount(item.totalRebate || 0);
+            const hitText = Number.isFinite(item.hitStake) ? formatNumericAmount(item.hitStake) : '-';
+            const payoutText = Number.isFinite(item.payout) ? formatNumericAmount(item.payout) : '-';
+            const pnlText = Number.isFinite(item.pnl) ? formatSignedAmount(item.pnl) : '-';
+            const oddsText = Number.isFinite(item.odds) ? formatNumericAmount(item.odds) : '-';
+            const rebateRateText = Number.isFinite(item.rebateRate) ? `${formatNumericAmount(item.rebateRate)}%` : '-';
+            const pnlClass = Number.isFinite(item.pnl)
+                ? (Math.abs(item.pnl) < 1e-9 ? 'pnl-even' : (item.pnl > 0 ? 'pnl-profit' : 'pnl-loss'))
+                : 'muted';
+            return `
+            <tr>
+                <td>${escapeHtml(item.userName || '-')}</td>
+                <td class="num">${escapeHtml(totalStakeText)}</td>
+                <td class="num">${escapeHtml(rebateText)}</td>
+                <td class="num">${escapeHtml(hitText)}</td>
+                <td class="num">${escapeHtml(payoutText)}</td>
+                <td class="num ${pnlClass}">${escapeHtml(pnlText)}</td>
+                <td class="num">${escapeHtml(oddsText)}</td>
+                <td class="num">${escapeHtml(rebateRateText)}</td>
+                <td class="${escapeHtml(item.statusClass || 'muted')}">${escapeHtml(item.statusText || '-')}</td>
+                <td class="center muted">${escapeHtml(item.coverageText || '-')}</td>
+            </tr>
+        `;
+        }).join('')
+        : '<tr><td colspan="10">暂无数据</td></tr>';
+    const userSummaryRowHtml = userSettlementRows.length > 0
+        ? `
+            <tr class="summary-row">
+                <td>汇总合计</td>
+                <td class="num">${escapeHtml(formatNumericAmount(scopeData.totalCount || 0))}</td>
+                <td class="num">${escapeHtml(formatNumericAmount(totalUserRebate))}</td>
+                <td class="num">${escapeHtml(usersWithWinningRows.length > 0 ? formatNumericAmount(totalUserHitStake) : '-')}</td>
+                <td class="num">${escapeHtml(usersWithWinningRows.length > 0 ? formatNumericAmount(totalUserPayout) : '-')}</td>
+                <td class="num ${userSummaryPnlClass}">${escapeHtml(usersWithComputablePnl.length > 0 ? formatSignedAmount(totalUserPnl) : '-')}</td>
+                <td class="num">-</td>
+                <td class="num">-</td>
+                <td class="${userSummaryPnlClass}">${escapeHtml(usersWithComputablePnl.length > 0 ? '已汇总' : '待计算')}</td>
+                <td class="center muted">${escapeHtml(usersWithWinningRows.length > 0 ? `${usersWithComputablePnl.length}/${usersWithWinningRows.length}` : '-')}</td>
+            </tr>
+        `
+        : '';
 
     const originalRowsHtml = exportOriginalRows.length > 0
         ? exportOriginalRows.map((item) => {
@@ -16158,7 +16433,7 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
                 <td style="text-align:right">${escapeHtml(rebateText)}</td>
                 <td style="text-align:right">${escapeHtml(payoutText)}</td>
                 <td style="text-align:right" class="${pnlClass}">${escapeHtml(pnlText)}</td>
-                <td>${escapeHtml(item.message || '').replace(/\n/g, '<br>')}</td>
+                <td class="message-cell">${escapeHtml(item.message || '').replace(/\n/g, '<br>')}</td>
             </tr>
         `;
         }).join('')
@@ -16180,82 +16455,200 @@ function buildLotteryExportDocument(scopeData, format = 'excel') {
         : '';
 
     const formatLabel = format === 'word' ? 'Word' : 'Excel';
+    const htmlAttrs = format === 'excel'
+        ? 'lang="zh-CN" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"'
+        : 'lang="zh-CN"';
+    const excelMeta = format === 'excel'
+        ? '<meta http-equiv="Content-Type" content="application/vnd.ms-excel; charset=UTF-8">'
+        : '<meta charset="utf-8">';
+    const excelWorkbookMeta = format === 'excel'
+        ? `<!--[if gte mso 9]><xml>
+<x:ExcelWorkbook>
+  <x:ExcelWorksheets>
+    <x:ExcelWorksheet>
+      <x:Name>客户统计导出</x:Name>
+      <x:WorksheetOptions>
+        <x:DisplayGridlines/>
+      </x:WorksheetOptions>
+    </x:ExcelWorksheet>
+  </x:ExcelWorksheets>
+</x:ExcelWorkbook>
+</xml><![endif]-->`
+        : '';
     return `<!DOCTYPE html>
-<html lang="zh-CN">
+<html ${htmlAttrs}>
 <head>
-  <meta charset="utf-8">
+  ${excelMeta}
   <title>统计导出</title>
+  ${excelWorkbookMeta}
   <style>
+    html, body { background: #ffffff; }
     body { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; color: #1f2937; margin: 18px; }
-    h1 { margin: 0 0 12px; font-size: 22px; }
-    h2 { margin: 18px 0 8px; font-size: 16px; }
-    .meta { margin: 0 0 12px; color: #374151; line-height: 1.6; }
-    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-    th, td { border: 1px solid #cbd5e1; padding: 6px 8px; font-size: 13px; vertical-align: top; }
-    th { background: #f1f5f9; text-align: left; }
-    .summary-row td { background: #f8fafc; font-weight: 700; }
+    .report-title { margin: 0 0 12px; font-size: 24px; font-weight: 700; color: #0f172a; }
+    .report-meta-table, .report-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    .report-meta-table { margin-bottom: 18px; }
+    .report-meta-table th, .report-meta-table td,
+    .report-table th, .report-table td { border: 1px solid #d6e0ea; padding: 7px 9px; font-size: 12px; vertical-align: top; }
+    .report-meta-table th { width: 108px; background: #edf5ff; color: #17406a; font-weight: 700; text-align: left; white-space: nowrap; }
+    .report-meta-table td { background: #ffffff; color: #1f2937; }
+    .meta-emphasis { font-weight: 700; color: #1d4ed8; }
+    .section-block { margin-top: 20px; }
+    .section-title { margin: 0 0 4px; font-size: 16px; font-weight: 700; color: #0f172a; }
+    .section-note { margin: 0 0 8px; font-size: 12px; line-height: 1.5; color: #64748b; }
+    .report-table thead th { background: #dfeeff; color: #12344d; font-weight: 700; text-align: left; white-space: nowrap; }
+    .report-table tbody tr:nth-child(even) td { background: #f8fbff; }
+    .summary-row td { background: #edf5ff !important; font-weight: 700; }
+    .num { text-align: right; white-space: nowrap; }
+    .center { text-align: center; white-space: nowrap; }
+    .message-cell { white-space: pre-wrap; word-break: break-all; line-height: 1.55; }
     .pnl-profit { color: #047857; font-weight: 700; }
     .pnl-loss { color: #b91c1c; font-weight: 700; }
     .pnl-even { color: #0f766e; font-weight: 700; }
     .muted { color: #64748b; }
     .result-win { color: #15803d; font-weight: 700; }
     .result-loss { color: #b91c1c; font-weight: 700; }
+    .section-footer { margin-top: 6px; font-size: 11px; color: #64748b; }
   </style>
 </head>
 <body>
-    <h1>客户统计导出（${escapeHtml(formatLabel)}）</h1>
-  <div class="meta">
-    导出范围：${escapeHtml(scopeData.scopeLabel || '-')}<br>
-    客户：${escapeHtml(users.join('，') || '-')}<br>
-    查看区域：${escapeHtml(regionLabels.join('、') || '-')}<br>
-    结算口径：结果汇总 = 总注 - 结果支出 - 返利<br>
-    当前范围总注：${escapeHtml(formatNumericAmount(scopeData.totalCount || 0))}<br>
-    总返利：${escapeHtml(formatNumericAmount(totalRebateAll))}<br>
-    中奖号：${escapeHtml(winningSummaryText)}<br>
-    合计结果：<span class="${totalPnlMetaClass}">${escapeHtml(totalPnlMetaText)}</span><br>
-    结果汇总计算条数：${escapeHtml(pnlCoverageMetaText)}<br>
-    导出时间：${escapeHtml(scopeData.exportedAt || new Date().toLocaleString('zh-CN'))}
+  <div class="report-title">客户统计导出（${escapeHtml(formatLabel)}）</div>
+
+  <table class="report-meta-table">
+    <tbody>
+      <tr>
+        <th>导出范围</th>
+        <td>${escapeHtml(scopeData.scopeLabel || '-')}</td>
+        <th>客户</th>
+        <td>${escapeHtml(users.join('，') || '-')}</td>
+      </tr>
+      <tr>
+        <th>查看区域</th>
+        <td>${escapeHtml(regionLabels.join('、') || '-')}</td>
+        <th>导出时间</th>
+        <td>${escapeHtml(scopeData.exportedAt || new Date().toLocaleString('zh-CN'))}</td>
+      </tr>
+      <tr>
+        <th>当前范围总注</th>
+        <td class="meta-emphasis">${escapeHtml(formatNumericAmount(scopeData.totalCount || 0))}</td>
+        <th>总返利</th>
+        <td>${escapeHtml(formatNumericAmount(totalRebateAll))}</td>
+      </tr>
+      <tr>
+        <th>中奖号</th>
+        <td>${escapeHtml(winningSummaryText)}</td>
+        <th>合计结果</th>
+        <td class="${totalPnlMetaClass}">${escapeHtml(totalPnlMetaText)}</td>
+      </tr>
+      <tr>
+        <th>计算覆盖</th>
+        <td>${escapeHtml(pnlCoverageMetaText)}</td>
+        <th>结算口径</th>
+        <td>结果汇总 = 总注 - 结果支出 - 返利</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="section-block">
+    <div class="section-title">结果汇总</div>
+    <div class="section-note">按当前查看区域汇总总注、命中、结果支出、返利与最终结果。</div>
+    <table class="report-table">
+      <colgroup>
+        <col style="width:12%">
+        <col style="width:10%">
+        <col style="width:14%">
+        <col style="width:14%">
+        <col style="width:14%">
+        <col style="width:12%">
+        <col style="width:12%">
+        <col style="width:12%">
+      </colgroup>
+      <thead>
+        <tr><th>区域</th><th class="num">中奖号</th><th class="num">当前总注</th><th class="num">当前命中</th><th class="num">当前结果支出</th><th class="num">当前返利</th><th class="num">结果汇总</th><th>状态</th></tr>
+      </thead>
+      <tbody>${regionPnlRowsHtml}</tbody>
+    </table>
   </div>
 
-  <h2>结果汇总</h2>
-  <table>
-    <thead>
-      <tr><th>区域</th><th>中奖号</th><th>当前总注</th><th>当前命中</th><th>当前结果支出</th><th>当前返利</th><th>结果汇总</th><th>状态</th></tr>
-    </thead>
-    <tbody>${regionPnlRowsHtml}</tbody>
-  </table>
+  <div class="section-block">
+    <div class="section-title">客户注额分布</div>
+    <div class="section-note">按客户汇总当前总注、返利、命中、结果支出与输赢，便于直接核对客户结算结果。</div>
+    <table class="report-table">
+      <colgroup>
+        <col style="width:16%">
+        <col style="width:10%">
+        <col style="width:10%">
+        <col style="width:10%">
+        <col style="width:12%">
+        <col style="width:12%">
+        <col style="width:8%">
+        <col style="width:8%">
+        <col style="width:8%">
+        <col style="width:6%">
+      </colgroup>
+      <thead>
+        <tr><th>客户</th><th class="num">当前总注</th><th class="num">当前返利</th><th class="num">当前命中</th><th class="num">当前结果支出</th><th class="num">当前输赢</th><th class="num">倍率</th><th class="num">返利%</th><th>结果状态</th><th class="center">覆盖</th></tr>
+      </thead>
+      <tbody>${userRowsHtml}${userSummaryRowHtml}</tbody>
+    </table>
+    <div class="section-footer">覆盖列表示该客户当前范围内，已完成输赢计算的消息条数 / 具备中奖号的消息条数。</div>
+  </div>
 
-  <h2>客户注额分布</h2>
-  <table>
-    <thead>
-      <tr><th>客户</th><th>当前总注</th><th>倍率</th><th>返利%</th></tr>
-    </thead>
-    <tbody>${userRowsHtml}</tbody>
-  </table>
+  <div class="section-block">
+    <div class="section-title">按金额聚合</div>
+    <div class="section-note">将相同金额的号码组合汇总，适合快速查看整批相同注额的分布。</div>
+    <table class="report-table">
+      <colgroup>
+        <col style="width:68%">
+        <col style="width:16%">
+        <col style="width:16%">
+      </colgroup>
+      <thead>
+        <tr><th>号码组合</th><th class="num">金额</th><th class="num">号码数</th></tr>
+      </thead>
+      <tbody>${groupedRowsHtml}</tbody>
+    </table>
+  </div>
 
-  <h2>按金额聚合</h2>
-  <table>
-    <thead>
-      <tr><th>号码组合</th><th>金额</th><th>号码数</th></tr>
-    </thead>
-    <tbody>${groupedRowsHtml}</tbody>
-  </table>
+  <div class="section-block">
+    <div class="section-title">号码明细</div>
+    <div class="section-note">按号码查看当前累计值，默认已按金额从高到低排列。</div>
+    <table class="report-table">
+      <colgroup>
+        <col style="width:16%">
+        <col style="width:44%">
+        <col style="width:40%">
+      </colgroup>
+      <thead>
+        <tr><th>号码</th><th>生肖</th><th class="num">累计值</th></tr>
+      </thead>
+      <tbody>${detailRowsHtml}</tbody>
+    </table>
+  </div>
 
-  <h2>号码明细</h2>
-  <table>
-    <thead>
-      <tr><th>号码</th><th>生肖</th><th>累计值</th></tr>
-    </thead>
-    <tbody>${detailRowsHtml}</tbody>
-  </table>
-
-	  <h2>原始消息结算明细（结算视角）</h2>
-	  <table>
-	    <thead>
-	      <tr><th>序号</th><th>客户</th><th>区域</th><th>中奖号</th><th>结果状态</th><th>本条总注</th><th>本条命中</th><th>结算倍率</th><th>本条返利</th><th>本条结果支出</th><th>本条结果</th><th>内容</th></tr>
-	    </thead>
-	    <tbody>${originalRowsHtml}${originalSummaryRowHtml}</tbody>
-	  </table>
+  <div class="section-block">
+    <div class="section-title">原始消息结算明细（结算视角）</div>
+    <div class="section-note">逐条展示原始消息对应的总注、命中、返利、结果支出与输赢，便于复核每一条记录。</div>
+    <table class="report-table">
+      <colgroup>
+        <col style="width:5%">
+        <col style="width:9%">
+        <col style="width:7%">
+        <col style="width:6%">
+        <col style="width:7%">
+        <col style="width:8%">
+        <col style="width:8%">
+        <col style="width:7%">
+        <col style="width:8%">
+        <col style="width:9%">
+        <col style="width:8%">
+        <col style="width:18%">
+      </colgroup>
+      <thead>
+        <tr><th class="num">序号</th><th>客户</th><th>区域</th><th class="num">中奖号</th><th>结果状态</th><th class="num">本条总注</th><th class="num">本条命中</th><th class="num">结算倍率</th><th class="num">本条返利</th><th class="num">本条结果支出</th><th class="num">本条结果</th><th>内容</th></tr>
+      </thead>
+      <tbody>${originalRowsHtml}${originalSummaryRowHtml}</tbody>
+    </table>
+  </div>
 </body>
 </html>`;
 }
@@ -16671,6 +17064,8 @@ window.exportClientDataDocument = exportClientDataDocument;
 window.openCustomerSettings = openCustomerSettings;
 window.isCustomerSettingsListDockOpenForUser = isCustomerSettingsListDockOpenForUser;
 window.openCustomerSettingsFromRecognize = openCustomerSettingsFromRecognize;
+window.toggleRecognizePreviousMessagePreview = toggleRecognizePreviousMessagePreview;
+window.refreshRecognizePreviousMessagePreview = refreshRecognizePreviousMessagePreview;
 window.closeCustomerSettingsModal = closeCustomerSettingsModal;
 window.renderSharedCustomerSettlementSettings = renderSharedCustomerSettlementSettings;
 window.saveSharedCustomerSettlementSettings = saveSharedCustomerSettlementSettings;

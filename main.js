@@ -32,7 +32,7 @@ let unlockedModuleSecret = '';
 let activeModuleId = MODULE_IDS.AUTH;
 const MODULE_PASSWORD_OVERRIDE_FILE = 'module-password-overrides.json';
 const TRIAL_PLAN_PREFERENCE_FILE = 'trial-plan-preference.json';
-const TRIAL_DAYS = 3;
+const TRIAL_DAYS = 7;
 const basePasswordRoutes = buildPasswordRoutesFromEnv(process.env);
 
 const modulePasswordRouter = new ModulePasswordRouter({
@@ -430,7 +430,7 @@ function createWindow() {
       webSecurity: true,
     },
     // 添加窗口图标
-    icon: path.join(__dirname, 'public', 'icon.icns'),
+    icon: resolvePublicFilePath('icon.icns'),
     // 添加窗口标题
     title: MODULE_DEFINITIONS[MODULE_IDS.AUTH].title,
     // 添加窗口最小尺寸

@@ -39,6 +39,53 @@
                             oninput="handleUserSearchInput(this.value)"
                         >
                     </div>
+                    <div class="user-sort-row" role="tablist" aria-label="客户列表排序">
+                        <span class="original-data-sort-label">排序方式：</span>
+                        <button
+                            id="userSortSerialAscBtn"
+                            class="original-data-sort-tab"
+                            type="button"
+                            role="tab"
+                            aria-selected="false"
+                            aria-pressed="false"
+                            onclick="userManager.setUserListSortMode('serial_asc')"
+                        >
+                            序号从小到大
+                        </button>
+                        <button
+                            id="userSortSerialDescBtn"
+                            class="original-data-sort-tab"
+                            type="button"
+                            role="tab"
+                            aria-selected="false"
+                            aria-pressed="false"
+                            onclick="userManager.setUserListSortMode('serial_desc')"
+                        >
+                            序号从大到小
+                        </button>
+                        <button
+                            id="userSortAmountAscBtn"
+                            class="original-data-sort-tab"
+                            type="button"
+                            role="tab"
+                            aria-selected="false"
+                            aria-pressed="false"
+                            onclick="userManager.setUserListSortMode('amount_asc')"
+                        >
+                            金额从小到大
+                        </button>
+                        <button
+                            id="userSortAmountDescBtn"
+                            class="original-data-sort-tab active"
+                            type="button"
+                            role="tab"
+                            aria-selected="true"
+                            aria-pressed="true"
+                            onclick="userManager.setUserListSortMode('amount_desc')"
+                        >
+                            金额从大到小
+                        </button>
+                    </div>
                     <ul id="userList"></ul>
                 </div>
             </aside>
@@ -100,6 +147,53 @@
                                     oninput="handleOriginalDataSearchInput(this.value)"
                                 >
                             </div>
+                            <div class="original-data-sort-row" role="tablist" aria-label="原始消息排序">
+                                <span class="original-data-sort-label">排序方式：</span>
+                                <button
+                                    id="originalDataSortSerialAscBtn"
+                                    class="original-data-sort-tab active"
+                                    type="button"
+                                    role="tab"
+                                    aria-selected="true"
+                                    aria-pressed="true"
+                                    onclick="userManager.setOriginalDataSortMode('serial_asc')"
+                                >
+                                    序号从小到大
+                                </button>
+                                <button
+                                    id="originalDataSortSerialDescBtn"
+                                    class="original-data-sort-tab"
+                                    type="button"
+                                    role="tab"
+                                    aria-selected="false"
+                                    aria-pressed="false"
+                                    onclick="userManager.setOriginalDataSortMode('serial_desc')"
+                                >
+                                    序号从大到小
+                                </button>
+                                <button
+                                    id="originalDataSortAmountAscBtn"
+                                    class="original-data-sort-tab"
+                                    type="button"
+                                    role="tab"
+                                    aria-selected="false"
+                                    aria-pressed="false"
+                                    onclick="userManager.setOriginalDataSortMode('amount_asc')"
+                                >
+                                    金额从小到大
+                                </button>
+                                <button
+                                    id="originalDataSortAmountDescBtn"
+                                    class="original-data-sort-tab"
+                                    type="button"
+                                    role="tab"
+                                    aria-selected="false"
+                                    aria-pressed="false"
+                                    onclick="userManager.setOriginalDataSortMode('amount_desc')"
+                                >
+                                    金额从大到小
+                                </button>
+                            </div>
                         </div>
                     </div>
                     <div class="right-column-body">
@@ -148,7 +242,6 @@
                         </div>
 
                         <div class="recognize-inline-actions">
-                            <span>输入后自动识别，右侧实时核对标准格式。</span>
                             <div class="recognize-inline-action-buttons">
                                 <button id="recognizeVoiceButton" class="edit-button recognize-voice-toggle" type="button" onclick="toggleRecognizeVoiceInput()" aria-pressed="false">语音录入</button>
                                 <div class="recognize-input-mode-toggle" role="group" aria-label="输入模式">
@@ -156,8 +249,17 @@
                                     <button id="recognizeInputModeFree" class="recognize-input-mode-button" type="button" onclick="setRecognizeInputMode('free')">自由输入</button>
                                 </div>
                                 <button id="openRecognizeCustomerSettingsBtn" class="edit-button recognize-attr-toggle" type="button" onclick="openCustomerSettingsFromRecognize()" aria-pressed="false">客户设置</button>
+                                <button id="toggleRecognizePreviousMessageBtn" class="edit-button recognize-attr-toggle recognize-history-toggle" type="button" onclick="toggleRecognizePreviousMessagePreview()" aria-pressed="false">上一条消息</button>
                             </div>
                         </div>
+
+                        <section id="recognizePreviousMessagePanel" class="recognize-previous-message-panel" hidden>
+                            <div class="recognize-previous-message-head">
+                                <div class="recognize-previous-message-title">上一条消息预览</div>
+                                <div class="recognize-previous-message-state">只读</div>
+                            </div>
+                            <div id="recognizePreviousMessageBody" class="recognize-previous-message-body"></div>
+                        </section>
 
                         <div id="clipboardAssistBanner" class="clipboard-assist-banner">
                             <div class="clipboard-assist-head">
@@ -175,7 +277,7 @@
                             <textarea id="message" rows="4" cols="50" placeholder="输入消息，例如：40-39-37-38-49-36-48-34-46各5"></textarea>
                             <div id="messageErrorOverlay" class="message-error-overlay" aria-hidden="true"></div>
                         </div>
-                        <div id="recognizeVoiceStatus" class="recognize-voice-status" aria-live="polite">语音录入可用，点击“语音录入”开始听写。</div>
+                        <div id="recognizeVoiceStatus" class="recognize-voice-status" aria-live="polite" hidden></div>
 
                         <div class="ocr-uploader" id="ocrDropZone">
                             <input id="ocrImageInput" type="file" accept="image/*" hidden>
@@ -213,7 +315,6 @@
                 <section class="recognize-preview-column">
                     <div class="recognize-preview-head">
                         <h4>识别核对</h4>
-                        <span>左侧原始消息，右侧标准格式</span>
                     </div>
                     <pre id="result"></pre>
                 </section>

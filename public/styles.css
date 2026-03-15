@@ -489,6 +489,10 @@ textarea {
   width: 100%;
 }
 
+.user-sort-row {
+  padding: 0 var(--space-6) var(--space-5);
+}
+
 .selection-mode-row {
   margin: var(--space-5) var(--space-6) var(--space-4);
   padding: var(--space-4) var(--space-5);
@@ -775,6 +779,7 @@ textarea {
   padding: var(--space-5) var(--space-6);
   margin-bottom: var(--space-4);
   cursor: pointer;
+  position: relative;
   transition: background-color 0.2s ease, transform 0.15s ease;
 }
 
@@ -1038,9 +1043,28 @@ textarea {
 }
 
 .user-list ul li.is-selected {
-  background: linear-gradient(135deg, #d7ecff 0%, #c8e3ff 100%);
-  border-color: #8ab9e8;
-  box-shadow: inset 0 0 0 1px rgba(41, 108, 167, 0.35);
+  background: linear-gradient(135deg, #dcedff 0%, #c8e2ff 55%, #b8d8ff 100%);
+  border-color: #4f90c8;
+  box-shadow:
+    inset 5px 0 0 #2f6ea2,
+    inset 0 0 0 1px rgba(41, 108, 167, 0.28),
+    0 10px 24px rgba(31, 102, 158, 0.18);
+}
+
+.user-list ul li.is-selected .user-item-name {
+  color: #184d7b;
+  font-weight: 800;
+}
+
+.user-list ul li.is-selected .user-settlement-summary,
+.user-list ul li.is-selected .user-region-mode-summary {
+  color: #2b5d86;
+}
+
+.user-list ul li.is-selected .user-region-state.no-data {
+  border-color: #8db7dc;
+  color: #355978;
+  background: rgba(255, 255, 255, 0.82);
 }
 
 .user-list button,
@@ -1250,7 +1274,7 @@ button:active {
 
 .zodiac-row {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr);
+  grid-template-columns: 68px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   padding: 6px;
@@ -1260,8 +1284,10 @@ button:active {
 }
 
 .zodiac-row-animal {
-  width: 38px;
-  height: 38px;
+  --card-number-font-size: 14px;
+  --card-value-font-size: 18px;
+  width: 62px;
+  height: 62px;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
@@ -1270,6 +1296,24 @@ button:active {
   font-weight: 700;
   color: #fff;
   box-shadow: 0 3px 8px rgba(20, 42, 64, 0.2);
+  overflow: hidden;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.zodiac-row-animal .zodiac-stack-layout {
+  gap: 0.16em;
+  padding: 0 0.12em;
+}
+
+.zodiac-row-animal .zodiac-stack-top {
+  min-width: 1.58em;
+  min-height: 1.58em;
+  padding: 0 0.24em;
+}
+
+.zodiac-row-animal .zodiac-stack-bottom {
+  padding: 0 0.18em;
 }
 
 .zodiac-row-numbers {
@@ -1780,6 +1824,59 @@ button:active {
   display: block;
 }
 
+.user-sort-row,
+.original-data-sort-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.user-sort-label,
+.original-data-sort-label {
+  flex: 0 0 auto;
+  font-size: var(--font-size-sm);
+  font-weight: 800;
+  color: #5f7890;
+  white-space: nowrap;
+}
+
+.user-sort-tab,
+.original-data-sort-tab,
+.user-list .user-sort-tab,
+.user-list .original-data-sort-tab {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid #c7d9ea;
+  background: #f4f8fc;
+  color: #4d6680;
+  font-size: var(--font-size-sm);
+  font-weight: 800;
+  cursor: pointer;
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+  white-space: nowrap;
+}
+
+.user-sort-tab:hover,
+.original-data-sort-tab:hover,
+.user-list .user-sort-tab:hover,
+.user-list .original-data-sort-tab:hover {
+  border-color: #99bad6;
+  color: #204d73;
+  background: #edf5fc;
+}
+
+.user-sort-tab.active,
+.original-data-sort-tab.active,
+.user-list .user-sort-tab.active,
+.user-list .original-data-sort-tab.active {
+  border-color: var(--primary);
+  background: linear-gradient(180deg, #357fb5, #1f669e);
+  color: #ffffff;
+  box-shadow: 0 8px 18px rgba(31, 102, 158, 0.18);
+}
+
 .original-data-search {
   width: 100%;
   max-width: none;
@@ -1866,6 +1963,15 @@ button:active {
   gap: 4px;
 }
 
+.message-meta-row {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .original-data-list .message-meta,
 .original-data li .message-meta {
   display: block;
@@ -1873,6 +1979,20 @@ button:active {
   line-height: var(--line-tight);
   font-weight: 700;
   color: #5f7890;
+}
+
+.message-meta-total {
+  display: inline;
+  font-size: var(--font-size-lg);
+  line-height: 1.1;
+  font-weight: 900;
+  color: var(--primary);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.message-meta-total.is-unresolved {
+  color: #a5771a;
 }
 
 .original-data-list .message-time,
@@ -2580,6 +2700,166 @@ textarea#message:focus,
   border-color: #1e5b8d;
   color: #ffffff;
   box-shadow: 0 8px 18px rgba(31, 102, 158, 0.22);
+}
+
+.recognize-history-toggle {
+  min-width: 128px;
+}
+
+.recognize-previous-message-panel {
+  margin: 4px 0 12px;
+  padding: 12px 14px;
+  border: 1px solid #d7e4f1;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #fbfdff 0%, #f3f8fd 100%);
+  box-shadow: 0 10px 22px rgba(30, 71, 111, 0.08);
+}
+
+.recognize-previous-message-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.recognize-previous-message-title {
+  font-size: var(--font-size-sm);
+  font-weight: 800;
+  color: #1d4468;
+}
+
+.recognize-previous-message-state {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(45, 117, 184, 0.1);
+  color: #2c628f;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.recognize-previous-message-body {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.recognize-previous-message-meta {
+  font-size: var(--font-size-sm);
+  font-weight: 800;
+  color: #1f4b73;
+}
+
+.recognize-previous-message-topline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.recognize-previous-message-total {
+  color: var(--primary);
+  font-size: var(--font-size-lg);
+  line-height: 1.1;
+  font-weight: 900;
+  font-family: var(--font-mono);
+}
+
+.recognize-previous-message-time {
+  font-size: var(--font-size-xs);
+  color: #617b95;
+}
+
+.recognize-previous-message-summary-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.recognize-previous-message-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+  background: #e7eef5;
+  color: #496179;
+}
+
+.recognize-previous-message-badge.status-complete {
+  background: rgba(21, 128, 61, 0.12);
+  color: #187040;
+}
+
+.recognize-previous-message-badge.status-partial {
+  background: rgba(37, 99, 235, 0.12);
+  color: #2453a5;
+}
+
+.recognize-previous-message-badge.status-blocked,
+.recognize-previous-message-badge.status-play {
+  background: rgba(217, 119, 6, 0.12);
+  color: #9a5a10;
+}
+
+.recognize-previous-message-badge.status-empty_or_noise,
+.recognize-previous-message-badge.status-ignored {
+  background: rgba(100, 116, 139, 0.12);
+  color: #58677a;
+}
+
+.recognize-previous-message-summary {
+  flex: 1 1 220px;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: #425b73;
+  line-height: 1.55;
+}
+
+.recognize-previous-message-issues {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.recognize-previous-message-issue {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 247, 237, 0.92);
+  color: #9a4f18;
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+}
+
+.recognize-previous-message-content {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 11px 12px;
+  border-radius: 12px;
+  border: 1px solid #d9e5f1;
+  background: rgba(255, 255, 255, 0.95);
+  color: #1f2937;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "SFMono-Regular", "Consolas", "Liberation Mono", monospace;
+}
+
+.recognize-previous-message-empty {
+  padding: 14px 12px;
+  border-radius: 12px;
+  border: 1px dashed #cad8e6;
+  background: rgba(255, 255, 255, 0.76);
+  color: #60788f;
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
 }
 
 .recognize-voice-status {
@@ -5990,47 +6270,47 @@ textarea#message:focus,
   overflow: hidden;
 }
 
-.customer-settings-drawer-host .attribute-help {
+:is(.customer-settings-drawer-host, .recognize-attribute-dock) .attribute-help {
   flex: 1 1 auto;
   min-height: 0;
   height: 100%;
 }
 
-.customer-settings-drawer-host .attribute-help-body {
+:is(.customer-settings-drawer-host, .recognize-attribute-dock) .attribute-help-body {
   flex: 1 1 auto;
   min-height: 0;
 }
 
-.customer-settings-drawer-host .attribute-help.is-tabbed #recognizeGroupNoiseBody {
+:is(.customer-settings-drawer-host, .recognize-attribute-dock) .attribute-help.is-tabbed #recognizeGroupNoiseBody {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
 }
 
-.customer-settings-drawer-host .attribute-help.is-tabbed #recognizeGroupNoiseBody #noiseWorkspaceSubgroups,
-.customer-settings-drawer-host .attribute-help.is-tabbed #recognizeGroupNoiseBody .recognize-side-subgroup-body,
-.customer-settings-drawer-host .attribute-help.is-tabbed #recognizeGroupNoiseBody #noiseRuleList.anchor-alias-list,
-.customer-settings-drawer-host .attribute-help.is-tabbed #recognizeGroupNoiseBody #ignoreTokenList.anchor-alias-list {
+:is(.customer-settings-drawer-host, .recognize-attribute-dock) .attribute-help.is-tabbed #recognizeGroupNoiseBody #noiseWorkspaceSubgroups,
+:is(.customer-settings-drawer-host, .recognize-attribute-dock) .attribute-help.is-tabbed #recognizeGroupNoiseBody .recognize-side-subgroup-body,
+:is(.customer-settings-drawer-host, .recognize-attribute-dock) .attribute-help.is-tabbed #recognizeGroupNoiseBody #noiseRuleList.anchor-alias-list,
+:is(.customer-settings-drawer-host, .recognize-attribute-dock) .attribute-help.is-tabbed #recognizeGroupNoiseBody #ignoreTokenList.anchor-alias-list {
   overflow: visible;
   max-height: none;
 }
 
-.customer-settings-drawer-host .attribute-help.is-tabbed #recognizeGroupNoiseBody #noiseWorkspaceSubgroups {
+:is(.customer-settings-drawer-host, .recognize-attribute-dock) .attribute-help.is-tabbed #recognizeGroupNoiseBody #noiseWorkspaceSubgroups {
   flex: 0 0 auto;
   min-height: auto;
 }
 
-.customer-settings-drawer-host .attribute-help.is-tabbed #recognizeGroupNoiseBody .recognize-side-subgroup,
-.customer-settings-drawer-host .attribute-help.is-tabbed #recognizeGroupNoiseBody .recognize-side-subgroup.expanded-fill {
+:is(.customer-settings-drawer-host, .recognize-attribute-dock) .attribute-help.is-tabbed #recognizeGroupNoiseBody .recognize-side-subgroup,
+:is(.customer-settings-drawer-host, .recognize-attribute-dock) .attribute-help.is-tabbed #recognizeGroupNoiseBody .recognize-side-subgroup.expanded-fill {
   flex: 0 0 auto;
 }
 
-.customer-settings-drawer-host .attribute-help.is-tabbed #recognizeGroupNoiseBody .anchor-impact-panel {
+:is(.customer-settings-drawer-host, .recognize-attribute-dock) .attribute-help.is-tabbed #recognizeGroupNoiseBody .anchor-impact-panel {
   height: auto;
 }
 
-.customer-settings-drawer-host .attribute-help.is-tabbed #recognizeGroupNoiseBody .anchor-impact-preview {
+:is(.customer-settings-drawer-host, .recognize-attribute-dock) .attribute-help.is-tabbed #recognizeGroupNoiseBody .anchor-impact-preview {
   flex: 0 0 auto;
   min-height: 120px;
   max-height: none;

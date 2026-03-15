@@ -1,12 +1,11 @@
 {
   "name": "messagecounter",
-  "version": "6.0.4",
+  "version": "6.0.5",
   "author": "小张",
   "description": "一款支持内置书库与本地 TXT 导入的离线小说阅读器",
   "main": "main.js",
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
-    "antd": "^5.20.5",
     "electron-updater": "^6.3.9",
     "sharp": "^0.34.4",
     "tesseract.js": "^6.0.1"
@@ -21,9 +20,15 @@
   },
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --mac --win",
-    "dist:win": "electron-builder --win nsis",
-    "dist:mac": "electron-builder --mac dmg",
+    "dist": "npm run dist:mac && npm run dist:win",
+    "dist:win": "node scripts/run-electron-builder.js --with-ai-models --win nsis",
+    "dist:mac": "node scripts/run-electron-builder.js --with-ai-models --mac dmg",
+    "dist:slim": "npm run dist:mac:slim && npm run dist:win:slim",
+    "dist:win:slim": "node scripts/run-electron-builder.js --win nsis",
+    "dist:mac:slim": "node scripts/run-electron-builder.js --mac dmg",
+    "dist:full": "npm run dist",
+    "dist:win:full": "npm run dist:win",
+    "dist:mac:full": "npm run dist:mac",
     "postinstall": "electron-builder install-app-deps",
     "license:list-usb": "node scripts/license-tools.js list-usb",
     "license:machine-fingerprint": "node scripts/license-tools.js machine-fingerprint",
@@ -38,78 +43,5 @@
     "license:studio:dist:mac": "electron-builder --config scripts/license-studio/builder.config.json --mac zip",
     "license:studio:dist:mac:dmg": "electron-builder --config scripts/license-studio/builder.config.json --mac dmg",
     "license:studio:dist:win": "electron-builder --config scripts/license-studio/builder.config.json --win nsis"
-  },
-  "build": {
-    "appId": "com.messagecounter.app",
-    "productName": "古典小说阅读器",
-    "asar": true,
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "main.js",
-      "preload.js",
-      "src/**/*",
-      "public/**/*",
-      "package.json"
-    ],
-    "mac": {
-      "target": [
-        "dmg",
-        "zip"
-      ],
-      "icon": "public/icon.icns",
-      "extendInfo": {
-        "NSMicrophoneUsageDescription": "语音录入需要使用麦克风，把语音转成文字消息。",
-        "NSSpeechRecognitionUsageDescription": "语音录入需要语音识别权限，把说话内容转成文字消息。"
-      },
-      "identity": null
-    },
-    "win": {
-      "target": [
-        "nsis"
-      ],
-      "signAndEditExecutable": false
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
-    },
-    "extraResources": [
-      {
-        "from": "public/",
-        "to": "public",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "keys/",
-        "to": "keys",
-        "filter": [
-          "license-public.pem"
-        ]
-      },
-      {
-        "from": "assets/ocr/",
-        "to": "ocr",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "assets/ai/",
-        "to": "ai",
-        "filter": [
-          "**/*"
-        ]
-      }
-    ],
-    "publish": [
-      {
-        "provider": "github",
-        "releaseType": "release"
-      }
-    ]
   }
 }
