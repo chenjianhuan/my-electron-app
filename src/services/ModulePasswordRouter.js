@@ -13,9 +13,9 @@ const MODULE_DEFINITIONS = Object.freeze({
   },
   [MODULE_IDS.LOTTERY]: {
     id: MODULE_IDS.LOTTERY,
-    name: 'AI 消息统计',
+    name: '金瓶梅统计',
     file: 'index.html',
-    title: 'MessageCounter - 网友消息统计',
+    title: '金瓶梅统计',
   },
   [MODULE_IDS.WECHAT]: {
     id: MODULE_IDS.WECHAT,

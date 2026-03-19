@@ -524,7 +524,7 @@ function syncBlockedUpgradeOverlay(status) {
         `;
         overlay.innerHTML = `
             <div style="max-width: 680px; width: 100%; background: #fff; border-radius: 12px; border: 1px solid #dbe4f0; padding: 16px 18px; color: #1e293b;">
-                <div style="font-size: 20px; font-weight: 800; color: #0f3558; margin-bottom: 8px;">A业务（AI 消息统计）需要有效授权</div>
+                <div style="font-size: 20px; font-weight: 800; color: #0f3558; margin-bottom: 8px;">A业务（金瓶梅统计）需要有效授权</div>
                 <div id="blockedUpgradeReason" style="font-size: 14px; line-height: 1.6; color: #334155;"></div>
                 <div id="blockedUpgradeAdvice" style="font-size: 14px; line-height: 1.6; color: #475569; margin-top: 8px;"></div>
                 <div id="blockedUpgradeFingerprint" style="font-size: 13px; line-height: 1.5; color: #475569; margin-top: 6px; word-break: break-all;"></div>
@@ -2151,7 +2151,7 @@ function getFallbackOfflineLicenseRequest() {
     const access = appAccessStatus || {};
     const plan = currentPlanContext || access.plan || {};
     return {
-        productName: 'AI 消息统计',
+        productName: '金瓶梅统计',
         version: document.getElementById('settingsVersionValue')
             ? String(document.getElementById('settingsVersionValue').textContent || '').replace(/^v/i, '').trim()
             : '',
@@ -2212,7 +2212,7 @@ function buildOfflineLicenseRequestText(request) {
     const payload = request || getOfflineLicenseRequestData();
     const lines = [
         '【离线授权请求】',
-        `软件：${payload.productName || 'AI 消息统计'}`,
+        `软件：${payload.productName || '金瓶梅统计'}`,
         payload.version ? `版本：v${payload.version}` : '',
         `生成时间：${formatTime(payload.generatedAt)}`,
         `设备码：${payload.machineFingerprint || '-'}`,
