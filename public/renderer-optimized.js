@@ -11978,6 +11978,12 @@ function renderViewRegionButtons() {
 
 window.refreshViewRegionBar = renderViewRegionButtons;
 window.refreshRegionPnlPanel = refreshRegionPnlPanel;
+window.getRegionWinningNumber = function getRegionWinningNumber(regionKey = '') {
+    const key = String(regionKey || '').trim();
+    if (!key) return '';
+    const parsed = parseRegionWinningNumber(regionWinningNumbers[key] || '');
+    return parsed.number === null ? '' : String(parsed.number).padStart(2, '0');
+};
 
 function normalizeRegionWinningInput(value) {
     const normalized = String(value || '')
@@ -12119,6 +12125,9 @@ function handleRegionWinningInput(event) {
     }
     regionWinningNumbers[regionKey] = normalized;
     saveRegionWinningNumbersPreference();
+    if (window.userManager && typeof window.userManager.renderOriginalData === 'function') {
+        window.userManager.renderOriginalData();
+    }
 }
 
 function handleRegionWinningBlur(event) {
@@ -12133,6 +12142,9 @@ function handleRegionWinningBlur(event) {
         input.value = fixed;
         saveRegionWinningNumbersPreference();
         refreshRegionPnlPanel();
+        if (window.userManager && typeof window.userManager.renderOriginalData === 'function') {
+            window.userManager.renderOriginalData();
+        }
     }
 }
 
@@ -14408,6 +14420,15 @@ function renderRecognizePreviewSummary(summary) {
     if (!summary || typeof summary !== 'object') return '';
     const blocks = [
         {
+            label: '已计入',
+            value: `${Number(summary.countedEntryCount) || 0}条`,
+            note: Number(summary.countedAmount) > 0 ? '' : '未计金额',
+            noteHtml: Number(summary.countedAmount) > 0
+                ? `金额 <span class="recognize-preview-summary-amount">${escapeHtml(formatNumericAmount(summary.countedAmount))}</span>`
+                : '',
+            tone: 'counted'
+        },
+        {
             label: '待处理',
             value: `${Number(summary.blockedCount) || 0}行`,
             note: '高风险内容，需修改后再入账',
@@ -14424,12 +14445,6 @@ function renderRecognizePreviewSummary(summary) {
             value: `${Number(summary.ignoredCount) || 0}行`,
             note: '摘要尾巴或噪音，不影响统计',
             tone: 'ignored'
-        },
-        {
-            label: '已计入',
-            value: `${Number(summary.countedEntryCount) || 0}条`,
-            note: Number(summary.countedAmount) > 0 ? `金额 ${formatNumericAmount(summary.countedAmount)}` : '未计金额',
-            tone: 'counted'
         }
     ];
     return `
@@ -14438,7 +14453,7 @@ function renderRecognizePreviewSummary(summary) {
                 <div class="recognize-preview-summary-card tone-${block.tone}">
                     <div class="recognize-preview-summary-label">${escapeHtml(block.label)}</div>
                     <div class="recognize-preview-summary-value">${escapeHtml(block.value)}</div>
-                    <div class="recognize-preview-summary-note">${escapeHtml(block.note)}</div>
+                    <div class="recognize-preview-summary-note">${block.noteHtml || escapeHtml(block.note)}</div>
                 </div>
             `).join('')}
         </div>
@@ -14697,6 +14712,14 @@ function buildRecognizePreviewHtml(previewResult, rawValue) {
     const firstBlockedLineNo = groupedRows.blockedRows.find((row) => Number.isFinite(Number(row && row.lineNo)) && Number(row.lineNo) > 0)?.lineNo || '';
     const sections = [
         {
+            title: '安全识别',
+            note: '这些内容已经安全计入号码统计。',
+            countLabel: `${Number(summary.countedEntryCount) || 0} 条`,
+            tone: 'counted',
+            rowsHtml: renderRecognizePreviewGroupedCompareRows(groupedRows.countedRows, 'counted'),
+            emptyText: '当前没有已安全计入的内容。'
+        },
+        {
             title: '待人工处理',
             note: '这些内容当前不会入账。请先看建议并处理后，再重新预览。',
             countLabel: `${Number(summary.blockedCount) || 0} 条`,
@@ -14720,14 +14743,6 @@ function buildRecognizePreviewHtml(previewResult, rawValue) {
             tone: 'ignored',
             rowsHtml: renderRecognizePreviewGroupedCompareRows(groupedRows.ignoredRows, 'ignored'),
             emptyText: '当前没有被忽略的内容。'
-        },
-        {
-            title: '安全识别',
-            note: '这些内容已经安全计入号码统计。',
-            countLabel: `${Number(summary.countedEntryCount) || 0} 条`,
-            tone: 'counted',
-            rowsHtml: renderRecognizePreviewGroupedCompareRows(groupedRows.countedRows, 'counted'),
-            emptyText: '当前没有已安全计入的内容。'
         }
     ];
     const sectionsHtml = sections

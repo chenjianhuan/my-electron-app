@@ -3828,6 +3828,13 @@ class MessageProcessor {
             };
         }
 
+        const implicitTargetAmountInfo = this.inspectImplicitTargetAmountSegment(rawText);
+        if (implicitTargetAmountInfo && implicitTargetAmountInfo.prefixAnalysis && implicitTargetAmountInfo.prefixAnalysis.kind === 'multi_animal') {
+            const error = new Error(`第 ${segment && segment.lineNo ? segment.lineNo : '?'} 行多个生肖 + 数值有歧义，请明确写成“各肖 / 平摊 / 各”`);
+            error.code = 'IMPLICIT_MULTI_ANIMAL_AMOUNT_AMBIGUOUS';
+            throw error;
+        }
+
         const rewritten = this.rewriteImplicitAmountLine(rawText);
         if (!rewritten || rewritten === rawText || !this.containsConfiguredAnchor(rewritten)) {
             return null;
@@ -3892,6 +3899,9 @@ class MessageProcessor {
             try {
                 parsedEntries = this.parseImplicitSegmentChunks(segment);
             } catch (error) {
+                if (error && error.code === 'IMPLICIT_MULTI_ANIMAL_AMOUNT_AMBIGUOUS') {
+                    throw error;
+                }
                 parsedEntries = null;
             }
             if (!parsedEntries || parsedEntries.length === 0) continue;
@@ -4037,20 +4047,12 @@ class MessageProcessor {
             return raw;
         }
         if (this.containsConfiguredAnchor(raw)) return raw;
-        const amountSuffixPattern = this.buildAmountSuffixPattern({ includeGeneric: true });
-        const suffixChars = amountSuffixPattern
-            ? `(?:${amountSuffixPattern}|[#*\`'"$￥¥,，。:：;；~～!！?？])*`
-            : `[#*\`'"$￥¥,，。:：;；~～!！?？]*`;
-        const match = raw.match(new RegExp(
-            `^(.*?)(${this.getFlexibleAmountPatternSource()})\\s*(${suffixChars})$`,
-            'u'
-        ));
-        if (!match) return raw;
+        const implicitTargetAmountInfo = this.inspectImplicitTargetAmountSegment(raw);
+        if (!implicitTargetAmountInfo) return raw;
 
-        let prefix = this.normalizeImplicitPrefix(match[1]);
-        if (!prefix) return raw;
-        const amountToken = match[2];
-        const suffix = match[3] || '';
+        let prefix = implicitTargetAmountInfo.prefix;
+        const amountToken = implicitTargetAmountInfo.amountToken;
+        const suffix = implicitTargetAmountInfo.suffix || '';
         const normalizedAmountToken = String(amountToken || '').replace(/[．。]/g, '.');
 
         if (normalizedAmountToken.includes('.')) {
@@ -4078,6 +4080,8 @@ class MessageProcessor {
         } else if (/数$/.test(prefix)) {
             anchorToken = '各数';
             prefix = prefix.slice(0, -1);
+        } else if (implicitTargetAmountInfo.prefixAnalysis && implicitTargetAmountInfo.prefixAnalysis.kind === 'single_animal') {
+            anchorToken = '各肖';
         }
 
         prefix = this.normalizeImplicitPrefix(prefix);
@@ -4096,6 +4100,62 @@ class MessageProcessor {
             .replace(new RegExp(`^${trimChars}`, 'g'), '')
             .replace(new RegExp(`${trimChars}$`, 'g'), '')
             .trim();
+    }
+
+    analyzeImplicitTargetPrefix(text) {
+        const normalized = this.normalizeImplicitPrefix(text);
+        if (!normalized) {
+            return { kind: 'none', candidate: '' };
+        }
+
+        const withoutRegion = this.normalizeImplicitPrefix(
+            normalized.replace(this.getRegionMarkerRegex(true), '')
+        );
+        const candidate = withoutRegion || normalized;
+        if (!candidate) {
+            return { kind: 'none', candidate: '' };
+        }
+
+        if (this.safeExtractExplicitNumbers(candidate).length > 0) {
+            return { kind: 'other', candidate };
+        }
+
+        const animalCompact = candidate.replace(/[^鼠牛虎兔龙蛇马羊猴鸡狗猪]/g, '');
+        if (animalCompact && animalCompact === candidate) {
+            if (animalCompact.length === 1) {
+                return { kind: 'single_animal', candidate, animal: animalCompact };
+            }
+            if (animalCompact.length > 1) {
+                return { kind: 'multi_animal', candidate, animals: animalCompact.split('') };
+            }
+        }
+
+        return { kind: 'other', candidate };
+    }
+
+    inspectImplicitTargetAmountSegment(text) {
+        const raw = String(text || '').trim();
+        if (!raw || this.containsConfiguredAnchor(raw)) return null;
+
+        const amountSuffixPattern = this.buildAmountSuffixPattern({ includeGeneric: true });
+        const suffixChars = amountSuffixPattern
+            ? `(?:${amountSuffixPattern}|[#*\`'"$￥¥,，。:：;；~～!！?？])*`
+            : `[#*\`'"$￥¥,，。:：;；~～!！?？]*`;
+        const match = raw.match(new RegExp(
+            `^(.*?)(${this.getFlexibleAmountPatternSource()})\\s*(${suffixChars})$`,
+            'u'
+        ));
+        if (!match) return null;
+
+        const prefix = this.normalizeImplicitPrefix(match[1]);
+        if (!prefix) return null;
+
+        return {
+            prefix,
+            amountToken: match[2],
+            suffix: match[3] || '',
+            prefixAnalysis: this.analyzeImplicitTargetPrefix(prefix)
+        };
     }
 
     stripLeadingOcrPrefix(text) {

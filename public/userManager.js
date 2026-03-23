@@ -14,6 +14,7 @@ class UserManager {
         this.virtualListStates = {};
         this.originalOrderTotalCache = new Map();
         this.originalParseSummaryCache = new Map();
+        this.originalRowHitCache = new Map();
         this.originalRowHeightCache = new Map();
         this.originalRowsSnapshotCache = {
             key: '',
@@ -23,6 +24,7 @@ class UserManager {
         this.originalDataSearchTimer = null;
         this.originalDataSearchKeyword = '';
         this.originalDataSortMode = 'serial_asc';
+        this.originalDataCollapsed = this.loadOriginalDataCollapsedPreference();
         this.selectedScopeSnapshotVersion = 0;
         this.selectedScopeSnapshotCache = {
             key: '',
@@ -938,6 +940,7 @@ class UserManager {
         this.cancelPendingOriginalDataSearchRender();
         this.originalOrderTotalCache.clear();
         this.originalParseSummaryCache.clear();
+        this.originalRowHitCache.clear();
         this.originalRowHeightCache.clear();
         this.originalRowsSnapshotVersion += 1;
         this.originalRowsSnapshotCache = {
@@ -1035,6 +1038,43 @@ class UserManager {
         return this.originalDataSearchKeyword;
     }
 
+    loadOriginalDataCollapsedPreference() {
+        if (typeof window === 'undefined' || !window.localStorage) return false;
+        try {
+            return window.localStorage.getItem('messagecounter.originalDataCollapsed.v1') === '1';
+        } catch (error) {
+            return false;
+        }
+    }
+
+    saveOriginalDataCollapsedPreference() {
+        if (typeof window === 'undefined' || !window.localStorage) return;
+        try {
+            window.localStorage.setItem('messagecounter.originalDataCollapsed.v1', this.originalDataCollapsed ? '1' : '0');
+        } catch (error) {
+            // ignore
+        }
+    }
+
+    getOriginalDataCollapsed() {
+        return this.originalDataCollapsed === true;
+    }
+
+    setOriginalDataCollapsed(collapsed) {
+        const next = collapsed === true;
+        if (next === this.originalDataCollapsed) {
+            this.syncOriginalDataCollapseControl();
+            return;
+        }
+        this.originalDataCollapsed = next;
+        this.saveOriginalDataCollapsedPreference();
+        this.renderOriginalData();
+    }
+
+    toggleOriginalDataCollapsed() {
+        this.setOriginalDataCollapsed(!this.getOriginalDataCollapsed());
+    }
+
     normalizeOriginalDataSortMode(mode = 'serial_asc') {
         const normalized = String(mode || '').trim();
         return ['serial_asc', 'serial_desc', 'amount_asc', 'amount_desc'].includes(normalized) ? normalized : 'serial_asc';
@@ -1070,6 +1110,15 @@ class UserManager {
             button.setAttribute('aria-selected', active ? 'true' : 'false');
             button.setAttribute('aria-pressed', active ? 'true' : 'false');
         });
+    }
+
+    syncOriginalDataCollapseControl() {
+        const button = document.getElementById('originalDataCollapseToggleBtn');
+        if (!button) return;
+        const collapsed = this.getOriginalDataCollapsed();
+        button.classList.toggle('active', collapsed);
+        button.textContent = collapsed ? '展开详情' : '折叠摘要';
+        button.setAttribute('aria-pressed', collapsed ? 'true' : 'false');
     }
 
     attachOriginalRowSerial(rows = []) {
@@ -1152,8 +1201,11 @@ class UserManager {
         }
 
         const fragment = document.createDocumentFragment();
+        const collapsed = this.getOriginalDataCollapsed();
         rows.forEach((row, index) => {
-            const rowNode = this.createOriginalDataRow(row, index);
+            const rowNode = collapsed
+                ? this.createCollapsedOriginalDataRow(row, index)
+                : this.createOriginalDataRow(row, index);
             if (!rowNode) return;
             fragment.appendChild(rowNode);
         });
@@ -1610,6 +1662,70 @@ class UserManager {
             }
         }
         return summary;
+    }
+
+    getCurrentWinningNumberForRegion(regionKey = '') {
+        if (typeof window === 'undefined' || typeof window.getRegionWinningNumber !== 'function') {
+            return '';
+        }
+        return String(window.getRegionWinningNumber(regionKey) || '').trim();
+    }
+
+    getOriginalRowHitAmount(row) {
+        if (!row || typeof row !== 'object') return 0;
+        const winningNumber = this.getCurrentWinningNumberForRegion(row.regionKey);
+        if (!winningNumber) return 0;
+        const cacheKey = `${this.getOriginalRowDerivedCacheKey(row)}|hit|${winningNumber}`;
+        if (this.originalRowHitCache.has(cacheKey)) {
+            return this.originalRowHitCache.get(cacheKey) || 0;
+        }
+
+        const raw = this.extractOriginalMessageText(row.message);
+        const userName = String(row.userName || '').trim();
+        const targetRegion = String(row.regionKey || this.activeRegion || 'new_ao').trim() || 'new_ao';
+        let hitAmount = 0;
+
+        if (raw && window.messageProcessor && typeof window.messageProcessor.parseMessage === 'function') {
+            try {
+                const parsed = window.messageProcessor.parseMessage(raw, {
+                    clientId: userName,
+                    allowPartial: true
+                });
+                const regionAccounting = window.messageProcessor.getEffectiveRegionAccountingInfo
+                    ? window.messageProcessor.getEffectiveRegionAccountingInfo(userName)
+                    : {
+                        separateStatsByRegion: true,
+                        defaultRegion: targetRegion
+                    };
+                (Array.isArray(parsed && parsed.entries) ? parsed.entries : []).forEach((entry) => {
+                    const amount = Number(entry && entry.amount);
+                    const numbers = Array.isArray(entry && entry.numbers) ? entry.numbers : [];
+                    if (!Number.isFinite(amount) || amount <= 0 || numbers.length === 0) return;
+                    const parsedRegion = String(entry && entry.regionKey ? entry.regionKey : targetRegion).trim() || targetRegion;
+                    const accountingRegion = regionAccounting && regionAccounting.separateStatsByRegion === false
+                        ? String(regionAccounting.defaultRegion || targetRegion).trim() || targetRegion
+                        : parsedRegion;
+                    if (accountingRegion !== targetRegion) return;
+                    const hitCount = numbers.reduce((sum, number) => (
+                        String(number || '').padStart(2, '0') === winningNumber ? sum + 1 : sum
+                    ), 0);
+                    if (hitCount > 0) {
+                        hitAmount += amount * hitCount;
+                    }
+                });
+            } catch (error) {
+                hitAmount = 0;
+            }
+        }
+
+        this.originalRowHitCache.set(cacheKey, hitAmount);
+        if (this.originalRowHitCache.size > 8000) {
+            const first = this.originalRowHitCache.keys().next();
+            if (!first.done) {
+                this.originalRowHitCache.delete(first.value);
+            }
+        }
+        return hitAmount;
     }
 
     buildOriginalParseSummaryText(summary) {
@@ -3088,6 +3204,7 @@ class UserManager {
         if (!originalDataListElement) return;
         this.cancelPendingOriginalDataSearchRender();
         this.syncOriginalDataSortControls();
+        this.syncOriginalDataCollapseControl();
         let rows = this.attachOriginalRowSerial(this.getOriginalRowsForCurrentScope());
 
         const keyword = String(this.originalDataSearchKeyword || '').trim();
@@ -3260,6 +3377,7 @@ class UserManager {
         const serialNo = Number.isInteger(row && row.sourceSerial) ? row.sourceSerial : (Number.isInteger(rowIndex) ? (rowIndex + 1) : 0);
         const parseSummary = this.getOriginalParseSummaryCached(row);
         const orderTotal = this.getOriginalOrderTotalCached(row);
+        const hitAmount = this.getOriginalRowHitAmount(row);
         const totalText = orderTotal == null ? '未识别' : this.formatAmountValue(orderTotal);
         const createdAtText = this.formatOriginalMessageCreatedAt(row.createdAt || (row.originalEntry && this.extractOriginalMessageCreatedAt(row.originalEntry)));
         const issueTooltip = (Array.isArray(parseSummary.focusIssues) ? parseSummary.focusIssues : [])
@@ -3285,6 +3403,12 @@ class UserManager {
             totalInline.classList.add('is-unresolved');
         }
         totalInline.textContent = `总：${totalText}`;
+
+        const hitInline = document.createElement('span');
+        hitInline.classList.add('message-meta-hit');
+        if (hitAmount > 0) {
+            hitInline.textContent = `命中：${this.formatAmountValue(hitAmount)}`;
+        }
 
         const timeSpan = document.createElement('span');
         timeSpan.classList.add('message-time');
@@ -3319,21 +3443,38 @@ class UserManager {
 
         metaRow.appendChild(metaSpan);
         metaRow.appendChild(totalInline);
+        if (hitAmount > 0) {
+            metaRow.appendChild(hitInline);
+        }
 
         contentWrap.appendChild(metaRow);
         contentWrap.appendChild(timeSpan);
         contentWrap.appendChild(summaryWrap);
 
+        const actions = this.createOriginalDataRowActions(row, parseSummary, regionLabel);
+
+        headerWrap.appendChild(contentWrap);
+        headerWrap.appendChild(actions);
+
+        li.appendChild(headerWrap);
+        if (issueWrap.childNodes.length > 0) {
+            li.appendChild(issueWrap);
+        }
+        li.appendChild(textSpan);
+        return li;
+    }
+
+    createOriginalDataRowActions(row, parseSummary, regionLabel) {
         const actions = document.createElement('div');
         actions.classList.add('message-actions');
 
         const primaryActionButton = document.createElement('button');
-        const primaryIssue = Array.isArray(parseSummary.focusIssues) ? parseSummary.focusIssues[0] : null;
+        const primaryIssue = Array.isArray(parseSummary && parseSummary.focusIssues) ? parseSummary.focusIssues[0] : null;
         const primaryFocusLineNo = Number.isFinite(Number(primaryIssue && primaryIssue.lineNo))
             ? Number(primaryIssue.lineNo)
             : null;
-        const needsFollowUp = ['blocked', 'play_only'].includes(String(parseSummary.status || '').trim())
-            || (Array.isArray(parseSummary.focusIssues) && parseSummary.focusIssues.length > 0);
+        const needsFollowUp = ['blocked', 'play_only'].includes(String(parseSummary && parseSummary.status || '').trim())
+            || (Array.isArray(parseSummary && parseSummary.focusIssues) && parseSummary.focusIssues.length > 0);
         primaryActionButton.classList.add(needsFollowUp ? 'continue-button' : 'edit-button');
         primaryActionButton.textContent = needsFollowUp ? '继续处理' : '编辑';
         primaryActionButton.onclick = () => this.editOriginalData(row.userName, row.index, row.regionKey, {
@@ -3356,15 +3497,47 @@ class UserManager {
 
         actions.appendChild(primaryActionButton);
         actions.appendChild(deleteButton);
+        return actions;
+    }
 
-        headerWrap.appendChild(contentWrap);
-        headerWrap.appendChild(actions);
+    createCollapsedOriginalDataRow(row, rowIndex = 0) {
+        const li = document.createElement('li');
+        li.classList.add('original-data-list', 'is-collapsed');
+        const regionLabel = row.regionLabel || this.getRegionLabel(row.regionKey);
+        const serialNo = Number.isInteger(row && row.sourceSerial) ? row.sourceSerial : (Number.isInteger(rowIndex) ? (rowIndex + 1) : 0);
+        const parseSummary = this.getOriginalParseSummaryCached(row);
+        const orderTotal = this.getOriginalOrderTotalCached(row);
+        const totalText = orderTotal == null ? '未识别' : this.formatAmountValue(orderTotal);
+        const hitAmount = this.getOriginalRowHitAmount(row);
 
-        li.appendChild(headerWrap);
-        if (issueWrap.childNodes.length > 0) {
-            li.appendChild(issueWrap);
+        const summary = document.createElement('div');
+        summary.classList.add('original-data-collapsed-summary');
+
+        const mainText = document.createElement('span');
+        mainText.classList.add('original-data-collapsed-main');
+        mainText.textContent = `${serialNo} ${row.userName}（${regionLabel}）`;
+        summary.appendChild(mainText);
+
+        const totalNode = document.createElement('span');
+        totalNode.classList.add('original-data-collapsed-total');
+        if (orderTotal == null) {
+            totalNode.classList.add('is-unresolved');
         }
-        li.appendChild(textSpan);
+        totalNode.textContent = `总：${totalText}`;
+        summary.appendChild(totalNode);
+
+        const hitText = document.createElement('span');
+        hitText.classList.add('original-data-collapsed-hit');
+        if (hitAmount > 0) {
+            hitText.textContent = `命中：${this.formatAmountValue(hitAmount)}`;
+        } else {
+            hitText.classList.add('is-empty');
+            hitText.textContent = '命中：';
+        }
+        summary.appendChild(hitText);
+
+        li.appendChild(summary);
+        li.appendChild(this.createOriginalDataRowActions(row, parseSummary, regionLabel));
         return li;
     }
 

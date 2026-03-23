@@ -137,7 +137,18 @@
                 <section class="right-column right-column-original">
                     <div class="right-column-head panel-head">
                         <div class="original-data-head">
-                            <h3 id="originalDataTitle">原始消息</h3>
+                            <div class="original-data-title-row">
+                                <h3 id="originalDataTitle">原始消息</h3>
+                                <button
+                                    id="originalDataCollapseToggleBtn"
+                                    class="original-data-sort-tab original-data-display-toggle"
+                                    type="button"
+                                    aria-pressed="false"
+                                    onclick="userManager.toggleOriginalDataCollapsed()"
+                                >
+                                    折叠摘要
+                                </button>
+                            </div>
                             <div class="original-data-search-row">
                                 <input
                                     id="originalDataSearchInput"
