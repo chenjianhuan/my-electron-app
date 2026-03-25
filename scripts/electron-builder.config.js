@@ -75,6 +75,8 @@ module.exports = {
   publish: [
     {
       provider: 'github',
+      owner: 'chenjianhuan',
+      repo: 'my-electron-app',
       releaseType: 'release',
     },
   ],
