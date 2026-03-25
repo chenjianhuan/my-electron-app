@@ -405,6 +405,75 @@ class MainController {
       }
     });
 
+    ipcMain.handle('lottery:export-backup', async (_event, payload) => {
+      try {
+        await this.drainUserDataSaveQueue();
+        const timestamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
+        const defaultDir = electronApp && typeof electronApp.getPath === 'function'
+          ? electronApp.getPath('documents')
+          : process.cwd();
+        const defaultName = `lottery_backup_${timestamp}.json`;
+        const saveResult = await dialog.showSaveDialog({
+          title: '导出客户数据与偏好备份',
+          defaultPath: path.join(defaultDir, defaultName),
+          filters: [{ name: 'JSON 备份文件', extensions: ['json'] }],
+        });
+
+        if (saveResult.canceled || !saveResult.filePath) {
+          return { ok: false, canceled: true, reason: '已取消导出' };
+        }
+
+        const exportResult = this.userModel.writeBackupBundle(saveResult.filePath, {
+          appVersion: payload && payload.appVersion,
+          localPreferences: payload && payload.localPreferences,
+        });
+
+        return {
+          ok: true,
+          filePath: saveResult.filePath,
+          summary: exportResult.summary,
+        };
+      } catch (error) {
+        return { ok: false, reason: error.message || '导出备份失败' };
+      }
+    });
+
+    ipcMain.handle('lottery:import-backup', async (_event, payload) => {
+      try {
+        await this.drainUserDataSaveQueue();
+        const defaultDir = electronApp && typeof electronApp.getPath === 'function'
+          ? electronApp.getPath('documents')
+          : process.cwd();
+        const openResult = await dialog.showOpenDialog({
+          title: '导入客户数据与偏好备份',
+          defaultPath: defaultDir,
+          properties: ['openFile'],
+          filters: [{ name: 'JSON 备份文件', extensions: ['json'] }],
+        });
+
+        if (openResult.canceled || !Array.isArray(openResult.filePaths) || !openResult.filePaths[0]) {
+          return { ok: false, canceled: true, reason: '已取消导入' };
+        }
+
+        const importResult = this.userModel.importBackupBundle(openResult.filePaths[0], {
+          appVersion: payload && payload.appVersion,
+          currentLocalPreferences: payload && payload.currentLocalPreferences,
+        });
+
+        return {
+          ok: true,
+          filePath: openResult.filePaths[0],
+          summary: importResult.summary,
+          localPreferences: importResult.localPreferences,
+          safetyBackupPath: importResult.safetyBackupPath,
+          exportedAt: importResult.bundle.exportedAt,
+          backupAppVersion: importResult.bundle.appVersion || '',
+        };
+      } catch (error) {
+        return { ok: false, reason: error.message || '导入备份失败' };
+      }
+    });
+
     ipcMain.handle('lottery:clear-all-users-by-password', async (_event, payload) => {
       try {
         const rawPassword = payload && payload.password ? String(payload.password) : '';
@@ -491,6 +560,21 @@ class MainController {
       if (this.pendingUserDataSave) {
         this.scheduleUserDataSaveFlush();
       }
+    }
+  }
+
+  async drainUserDataSaveQueue() {
+    if (this.userDataSaveTimer) {
+      clearTimeout(this.userDataSaveTimer);
+      this.userDataSaveTimer = null;
+    }
+
+    while (this.userDataSaveInFlight || this.pendingUserDataSave) {
+      if (this.pendingUserDataSave && !this.userDataSaveInFlight) {
+        await this.flushUserDataSaveQueue();
+        continue;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 15));
     }
   }
 

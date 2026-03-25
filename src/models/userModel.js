@@ -2,6 +2,8 @@
 const fs = require('fs');
 const path = require('path');
 
+const BACKUP_SCHEMA_VERSION = 1;
+
 class UserModel {
   constructor(app) {
     // 定义存储用户数据的文件路径
@@ -818,6 +820,180 @@ class UserModel {
       console.error('保存属性配置失败:', error);
       throw error;
     }
+  }
+
+  sanitizeLocalPreferenceMap(preferences) {
+    if (!preferences || typeof preferences !== 'object' || Array.isArray(preferences)) {
+      return {};
+    }
+
+    const sanitized = {};
+    Object.entries(preferences).forEach(([rawKey, rawValue]) => {
+      const key = String(rawKey || '').trim();
+      if (!key || key.length > 120) return;
+      if (rawValue == null) return;
+
+      const value = typeof rawValue === 'string' ? rawValue : String(rawValue);
+      if (value.length > 200_000) return;
+      sanitized[key] = value;
+    });
+
+    return sanitized;
+  }
+
+  buildBackupSummary(payload = {}) {
+    const userData = payload && payload.userData && typeof payload.userData === 'object'
+      ? payload.userData
+      : {};
+    const customAttributes = payload && payload.customAttributes && typeof payload.customAttributes === 'object'
+      ? payload.customAttributes
+      : {};
+    const attributeConfig = payload && payload.attributeConfig && typeof payload.attributeConfig === 'object'
+      ? payload.attributeConfig
+      : {};
+    const localPreferences = payload && payload.localPreferences && typeof payload.localPreferences === 'object'
+      ? payload.localPreferences
+      : {};
+
+    return {
+      userCount: Object.keys(userData).length,
+      customAttributeCount: Object.keys(customAttributes).length,
+      clientRuleCount: Object.keys(attributeConfig.clientRules || {}).length,
+      localPreferenceCount: Object.keys(localPreferences).length,
+    };
+  }
+
+  buildBackupBundle(options = {}) {
+    const data = {
+      userData: this.loadUserData(),
+      customAttributes: this.loadCustomAttributes(),
+      attributeLayout: this.loadAttributeLayout(),
+      attributeConfig: this.loadAttributeConfig(),
+      localPreferences: this.sanitizeLocalPreferenceMap(options.localPreferences || {}),
+    };
+
+    const bundle = {
+      schemaVersion: BACKUP_SCHEMA_VERSION,
+      module: 'lottery',
+      exportedAt: options.exportedAt || new Date().toISOString(),
+      data,
+    };
+
+    const appVersion = String(options.appVersion || '').trim();
+    if (appVersion) {
+      bundle.appVersion = appVersion;
+    }
+
+    const backupType = String(options.backupType || '').trim();
+    if (backupType) {
+      bundle.backupType = backupType;
+    }
+
+    return {
+      bundle,
+      summary: this.buildBackupSummary(data),
+    };
+  }
+
+  writeBackupBundle(filePath, options = {}) {
+    const { bundle, summary } = this.buildBackupBundle(options);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, `${JSON.stringify(bundle, null, 2)}\n`, 'utf8');
+    return {
+      filePath,
+      bundle,
+      summary,
+    };
+  }
+
+  normalizeBackupBundle(rawBundle) {
+    if (!rawBundle || typeof rawBundle !== 'object' || Array.isArray(rawBundle)) {
+      throw new Error('备份文件格式无效');
+    }
+
+    const schemaVersion = Number(rawBundle.schemaVersion);
+    if (schemaVersion !== BACKUP_SCHEMA_VERSION) {
+      throw new Error('备份文件版本不支持');
+    }
+
+    const moduleName = String(rawBundle.module || '').trim();
+    if (moduleName && moduleName !== 'lottery') {
+      throw new Error('备份文件不属于当前模块');
+    }
+
+    const data = rawBundle.data;
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      throw new Error('备份文件缺少数据内容');
+    }
+
+    const userData = data.userData;
+    if (!this.validateUserData(userData)) {
+      throw new Error('备份文件中的客户数据无效');
+    }
+
+    return {
+      schemaVersion,
+      module: 'lottery',
+      exportedAt: typeof rawBundle.exportedAt === 'string' ? rawBundle.exportedAt : '',
+      appVersion: typeof rawBundle.appVersion === 'string' ? rawBundle.appVersion : '',
+      data: {
+        userData,
+        customAttributes: this.sanitizeCustomAttributeMap(data.customAttributes || {}),
+        attributeLayout: this.sanitizeAttributeLayout(data.attributeLayout || {}),
+        attributeConfig: this.sanitizeAttributeConfig(data.attributeConfig || {}),
+        localPreferences: this.sanitizeLocalPreferenceMap(data.localPreferences || {}),
+      },
+    };
+  }
+
+  readBackupBundle(filePath) {
+    if (!fs.existsSync(filePath)) {
+      throw new Error('备份文件不存在');
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch (error) {
+      throw new Error('备份文件解析失败');
+    }
+
+    const bundle = this.normalizeBackupBundle(parsed);
+    return {
+      bundle,
+      summary: this.buildBackupSummary(bundle.data),
+    };
+  }
+
+  createPreImportBackup(options = {}) {
+    const backupsDir = path.join(path.dirname(this.userDataPath), 'import-backups');
+    const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 17);
+    const filePath = path.join(backupsDir, `lottery_pre_import_${timestamp}.json`);
+    return this.writeBackupBundle(filePath, {
+      appVersion: options.appVersion,
+      localPreferences: options.localPreferences,
+      backupType: 'pre_import',
+    });
+  }
+
+  importBackupBundle(filePath, options = {}) {
+    const { bundle, summary } = this.readBackupBundle(filePath);
+    const safetyBackup = this.createPreImportBackup({
+      appVersion: options.appVersion,
+      localPreferences: options.currentLocalPreferences,
+    });
+
+    this.saveUserData(bundle.data.userData);
+    this.saveCustomAttributes(bundle.data.customAttributes);
+    this.saveAttributeLayout(bundle.data.attributeLayout);
+    this.saveAttributeConfig(bundle.data.attributeConfig);
+
+    return {
+      bundle,
+      summary,
+      safetyBackupPath: safetyBackup.filePath,
+      localPreferences: bundle.data.localPreferences,
+    };
   }
 
   // 导出用户数据

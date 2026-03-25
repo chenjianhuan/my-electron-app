@@ -65,6 +65,7 @@ let realtimePreviewWorkerConfigKey = '';
 const realtimePreviewWorkerPending = new Map();
 let clipboardMonitorStartedAt = 0;
 let recognizeEditContext = null;
+let recognizeDeferredMainRefresh = false;
 let recognizeAttributePanelVisible = false;
 let recognizePreviousMessagePreviewVisible = false;
 let hedgeReportAutoCalcTimer = null;
@@ -105,6 +106,9 @@ let regionWinningNumbers = {
     old_ao: '',
     hongkong: ''
 };
+const activeBusyTaskKeys = new Set();
+const activeBusyNoticeMap = new Map();
+let busyNoticeSeq = 0;
 
 const CLIPBOARD_DUP_LEDGER_KEY = 'clipboardDupLedger.v1';
 const CLIPBOARD_DUP_KEEP_DAYS = 7;
@@ -147,6 +151,31 @@ const TELEGRAM_SUPPORT_LINK = 'https://t.me/CANGJIE01';
 const TELEGRAM_SUPPORT_QR_PATH = './telegram-cangjie01-qr.svg?v=20260311';
 const SETTINGS_PASSWORD_MODULE_ID = 'lottery';
 const HEDGE_MAX_LOSS_KEY = 'hedgeMaxLoss.v1';
+const ORIGINAL_DATA_COLLAPSED_KEY = 'messagecounter.originalDataCollapsed.v1';
+const LOTTERY_BACKUP_LOCAL_STORAGE_KEYS = Object.freeze([
+    ATTRIBUTE_GROUP_ORDER_KEY,
+    LEGAL_NOTICE_DISMISSED_KEY,
+    CLIPBOARD_ASSIST_ENABLED_KEY,
+    RECOGNIZE_INPUT_MODE_KEY,
+    RECOGNIZE_ATTRIBUTE_PANEL_VISIBLE_KEY,
+    RECOGNIZE_SIDE_GROUP_STATE_KEY,
+    NOISE_WORKSPACE_ACTIVE_GROUP_KEY,
+    RECOGNIZE_SPLIT_WIDTH_KEY,
+    RECOGNIZE_ATTR_SPLIT_WIDTH_KEY,
+    RECOGNIZE_LAYOUT_PROFILE_VERSION_KEY,
+    MAIN_SPLIT_USER_WIDTH_KEY,
+    MAIN_SPLIT_MIDDLE_WIDTH_KEY,
+    MAIN_SPLIT_ZODIAC_CURRENT_WIDTH_KEY,
+    MAIN_SPLIT_RIGHT_RANK_WIDTH_KEY,
+    CUSTOMER_SETTINGS_DOCK_WIDTH_KEY,
+    HEDGE_REPORT_MODE_KEY,
+    ANCHOR_STRATEGY_GUIDE_STATE_KEY,
+    ANCHOR_SUBGROUP_STATE_KEY,
+    REGION_WINNING_NUMBERS_KEY,
+    HEDGE_MAX_LOSS_KEY,
+    ORIGINAL_DATA_COLLAPSED_KEY,
+]);
+const LOTTERY_BACKUP_LOCAL_STORAGE_KEY_SET = new Set(LOTTERY_BACKUP_LOCAL_STORAGE_KEYS);
 const ANCHOR_MODE_LABELS = {
     per_number: '每个号码录入金额',
     per_target_equal_split: '每个目标组录入金额（组内平分）',
@@ -259,6 +288,155 @@ let anchorRuleDrawerState = {
     editSource: '',
     editClientId: ''
 };
+
+function waitForNextPaint() {
+    return new Promise((resolve) => {
+        requestAnimationFrame(() => {
+            requestAnimationFrame(resolve);
+        });
+    });
+}
+
+function resolveBusyTaskText(value, fallback = '') {
+    const resolved = typeof value === 'function' ? value() : value;
+    const text = String(resolved == null ? '' : resolved).trim();
+    return text || fallback;
+}
+
+function ensureBusyNoticeElement() {
+    let notice = document.getElementById('taskBusyNotice');
+    if (notice) return notice;
+    notice = document.createElement('div');
+    notice.id = 'taskBusyNotice';
+    notice.className = 'task-busy-notice';
+    notice.hidden = true;
+    notice.setAttribute('role', 'status');
+    notice.setAttribute('aria-live', 'polite');
+    document.body.appendChild(notice);
+    return notice;
+}
+
+function renderBusyNotice() {
+    const notice = ensureBusyNoticeElement();
+    const activeEntries = Array.from(activeBusyNoticeMap.entries());
+    if (activeBusyTaskKeys.size === 0 || activeEntries.length === 0) {
+        notice.hidden = true;
+        notice.textContent = '';
+        return;
+    }
+    const [, latestText] = activeEntries[activeEntries.length - 1];
+    notice.textContent = String(latestText || '').trim();
+    notice.hidden = false;
+}
+
+function pushBusyNotice(text = '') {
+    const safeText = String(text || '').trim();
+    if (!safeText) return '';
+    const token = `busy-notice-${++busyNoticeSeq}`;
+    activeBusyNoticeMap.set(token, safeText);
+    renderBusyNotice();
+    return token;
+}
+
+function removeBusyNotice(token = '') {
+    if (!token) return;
+    activeBusyNoticeMap.delete(token);
+    renderBusyNotice();
+}
+
+function resolveBusyTaskButton(buttonOrResolver) {
+    if (!buttonOrResolver) return null;
+    if (typeof buttonOrResolver === 'function') {
+        return buttonOrResolver() || null;
+    }
+    return buttonOrResolver;
+}
+
+function setBusyTaskButtonState(buttonOrResolver, options = {}) {
+    const button = resolveBusyTaskButton(buttonOrResolver);
+    if (!button) {
+        return () => {};
+    }
+    const previousText = button.textContent;
+    const previousDisabled = !!button.disabled;
+    const busyLabel = resolveBusyTaskText(options.busyLabel, previousText);
+    button.dataset.taskBusyState = '1';
+    button.classList.add('is-task-busy');
+    button.setAttribute('aria-busy', 'true');
+    button.disabled = true;
+    button.textContent = busyLabel;
+    return () => {
+        if (!button.isConnected) return;
+        button.classList.remove('is-task-busy');
+        button.removeAttribute('aria-busy');
+        delete button.dataset.taskBusyState;
+        if (typeof options.restoreButton === 'function') {
+            options.restoreButton(button);
+            return;
+        }
+        const idleLabel = resolveBusyTaskText(options.idleLabel, previousText);
+        button.textContent = idleLabel;
+        button.disabled = previousDisabled;
+    };
+}
+
+async function runBusyTask(work, options = {}) {
+    const taskKey = String(options.key || '').trim();
+    if (taskKey && activeBusyTaskKeys.has(taskKey)) {
+        return null;
+    }
+    if (taskKey) {
+        activeBusyTaskKeys.add(taskKey);
+    }
+
+    const restoreButton = setBusyTaskButtonState(options.button, options);
+    const noticeLabel = resolveBusyTaskText(options.noticeLabel);
+    let noticeToken = '';
+    let noticeTimer = null;
+    let taskFinished = false;
+    const showNotice = () => {
+        noticeTimer = null;
+        if (taskFinished) return;
+        if (noticeToken || !noticeLabel) return;
+        noticeToken = pushBusyNotice(noticeLabel);
+    };
+
+    try {
+        if (options.noticeImmediate === true) {
+            showNotice();
+        } else if (noticeLabel) {
+            const delay = Math.max(0, Number(options.noticeDelayMs) || 180);
+            noticeTimer = setTimeout(showNotice, delay);
+        }
+
+        if (options.yieldBeforeRun === true) {
+            await waitForNextPaint();
+        }
+
+        const result = typeof work === 'function' ? work() : work;
+        return result && typeof result.then === 'function'
+            ? await result
+            : result;
+    } finally {
+        taskFinished = true;
+        if (noticeTimer) {
+            clearTimeout(noticeTimer);
+            noticeTimer = null;
+        }
+        if (noticeToken) {
+            removeBusyNotice(noticeToken);
+            noticeToken = '';
+        }
+        restoreButton();
+        if (typeof options.onFinally === 'function') {
+            options.onFinally();
+        }
+        if (taskKey) {
+            activeBusyTaskKeys.delete(taskKey);
+        }
+        renderBusyNotice();
+    }
+}
 let anchorRuleDrawerSnapshot = null;
 let noiseRuleEditorState = {
     editPattern: '',
@@ -1009,6 +1187,144 @@ function closePlanModal() {
     const modal = document.getElementById('planModal');
     if (!modal) return;
     modal.style.display = 'none';
+}
+
+function getLotteryBackupAppVersion() {
+    const versionEl = document.getElementById('settingsVersionValue');
+    return versionEl
+        ? String(versionEl.textContent || '').replace(/^v/i, '').trim()
+        : '';
+}
+
+function formatLotteryBackupDisplayTime(value = '') {
+    const text = String(value || '').trim();
+    if (!text) return '';
+    const parsed = new Date(text);
+    if (Number.isNaN(parsed.getTime())) {
+        return text;
+    }
+    return parsed.toLocaleString('zh-CN', { hour12: false });
+}
+
+function collectLotteryBackupLocalPreferences() {
+    const snapshot = {};
+    if (typeof window === 'undefined' || !window.localStorage) {
+        return snapshot;
+    }
+    LOTTERY_BACKUP_LOCAL_STORAGE_KEYS.forEach((key) => {
+        try {
+            const value = window.localStorage.getItem(key);
+            if (value !== null) {
+                snapshot[key] = value;
+            }
+        } catch (error) {
+            // ignore individual storage read failures
+        }
+    });
+    return snapshot;
+}
+
+function applyLotteryBackupLocalPreferences(preferences = {}) {
+    if (typeof window === 'undefined' || !window.localStorage) {
+        return;
+    }
+
+    LOTTERY_BACKUP_LOCAL_STORAGE_KEYS.forEach((key) => {
+        try {
+            window.localStorage.removeItem(key);
+        } catch (error) {
+            // ignore individual storage removal failures
+        }
+    });
+
+    if (!preferences || typeof preferences !== 'object') {
+        return;
+    }
+
+    Object.entries(preferences).forEach(([key, value]) => {
+        if (!LOTTERY_BACKUP_LOCAL_STORAGE_KEY_SET.has(String(key || '').trim())) {
+            return;
+        }
+        if (typeof value !== 'string') {
+            return;
+        }
+        try {
+            window.localStorage.setItem(key, value);
+        } catch (error) {
+            // ignore individual storage write failures
+        }
+    });
+}
+
+async function exportLotteryBackup() {
+    if (!ipcRenderer || typeof ipcRenderer.invoke !== 'function') {
+        showError('导出失败', 'IPC 不可用，请重启应用');
+        return;
+    }
+
+    try {
+        const result = await ipcRenderer.invoke('lottery:export-backup', {
+            appVersion: getLotteryBackupAppVersion(),
+            localPreferences: collectLotteryBackupLocalPreferences(),
+        });
+
+        if (!result || !result.ok) {
+            if (result && result.canceled) {
+                showSuccess('已取消导出');
+                return;
+            }
+            showError('导出失败', (result && result.reason) || '保存备份失败');
+            return;
+        }
+
+        const summary = result.summary || {};
+        const userCount = Number(summary.userCount) || 0;
+        const countText = userCount > 0 ? `，共 ${userCount} 个客户` : '';
+        showSuccess(`备份导出成功：${result.filePath}${countText}`);
+    } catch (error) {
+        showError('导出失败', error.message);
+    }
+}
+
+async function importLotteryBackup() {
+    if (!ipcRenderer || typeof ipcRenderer.invoke !== 'function') {
+        showError('导入失败', 'IPC 不可用，请重启应用');
+        return;
+    }
+
+    const confirmed = window.confirm(
+        '导入会覆盖当前本机全部客户数据、规则配置和本地偏好设置。导入前会自动备份当前数据，是否继续？'
+    );
+    if (!confirmed) {
+        return;
+    }
+
+    try {
+        const result = await ipcRenderer.invoke('lottery:import-backup', {
+            appVersion: getLotteryBackupAppVersion(),
+            currentLocalPreferences: collectLotteryBackupLocalPreferences(),
+        });
+
+        if (!result || !result.ok) {
+            if (result && result.canceled) {
+                showSuccess('已取消导入');
+                return;
+            }
+            showError('导入失败', (result && result.reason) || '导入备份失败');
+            return;
+        }
+
+        applyLotteryBackupLocalPreferences(result.localPreferences || {});
+        closeSettingsModal();
+
+        const versionText = result.backupAppVersion ? `\n备份版本：v${result.backupAppVersion}` : '';
+        const exportedAtText = result.exportedAt ? `\n备份时间：${formatLotteryBackupDisplayTime(result.exportedAt)}` : '';
+        const safetyBackupText = result.safetyBackupPath ? `\n导入前兜底备份：${result.safetyBackupPath}` : '';
+        window.alert(`导入成功，页面将立即刷新。${versionText}${exportedAtText}${safetyBackupText}`);
+        window.location.reload();
+    } catch (error) {
+        showError('导入失败', error.message);
+    }
 }
 
 function openSettingsModal() {
@@ -10849,9 +11165,11 @@ function normalizeMessageTextareaWhitespace(textarea, options = {}) {
 
 function parseManualInputState(value) {
     const text = String(value || '');
-    const amountMatch = text.match(/^([\d.]*)(?:\s*各\s*|=|\s+)([\d.]*)$/);
+    const amountMatch = text.match(/^([\d.\s]*)(?:\s*各\s*|=)([\d.]*)$/);
     const hasAmount = !!amountMatch;
-    const numberPart = hasAmount ? (amountMatch[1] || '') : text;
+    const numberPart = String(hasAmount ? (amountMatch[1] || '') : text)
+        .trim()
+        .replace(/\s+/g, '.');
     const amountPart = hasAmount ? (amountMatch[2] || '') : '';
 
     if (!/^[\d.]*$/.test(numberPart)) return null;
@@ -10970,7 +11288,16 @@ function handleMessageManualInputKeydown(event) {
         return;
     }
 
-    if (key === ' ' || key === '=') {
+    if (key === ' ') {
+        event.preventDefault();
+        if (state.inAmount) return;
+        if (state.pending) {
+            showError('输入错误', '号码输入不完整，请补全两位');
+        }
+        return;
+    }
+
+    if (key === '=') {
         event.preventDefault();
         if (state.pending) {
             showError('输入错误', '号码输入不完整，请补全两位');
@@ -11035,10 +11362,10 @@ function normalizeMessageBeforeSubmit(message, options = {}) {
         }
     }
 
-    const numberWithAmount = /^((?:\d{2}\.)*\d{2})(?:\s*各\s*|=|\s+)(\d+(?:\.\d+)?)$/;
+    const numberWithAmount = /^((?:\d{2}(?:[.\s]+\d{2})*))\s*(?:各|=)\s*(\d+(?:\.\d+)?)$/;
     const matched = trimmed.match(numberWithAmount);
     if (matched) {
-        return `${matched[1]}各${matched[2]}`;
+        return `${matched[1].replace(/\s+/g, '.')}各${matched[2]}`;
     }
     return trimmed;
 }
@@ -11171,7 +11498,7 @@ function renderRecognizeInputModeUi() {
     if (formattedBtn) {
         formattedBtn.classList.toggle('active', formatted);
         formattedBtn.setAttribute('aria-pressed', formatted ? 'true' : 'false');
-        formattedBtn.title = '输入号码时自动补分隔符与“各”金额格式';
+        formattedBtn.title = '输入号码时自动补分隔符；输入 = 开始金额';
     }
     if (freeBtn) {
         freeBtn.classList.toggle('active', !formatted);
@@ -13875,8 +14202,11 @@ function syncRecognizeModalActionMode() {
     const confirmBtn = document.getElementById('recognizeConfirmBtn');
     const clearBtn = document.getElementById('recognizeClearBtn');
     if (confirmBtn) {
-        confirmBtn.textContent = recognizeEditContext ? '保存' : '添加';
-        confirmBtn.disabled = recognizePreviewBlocked;
+        const isBusy = confirmBtn.dataset.taskBusyState === '1';
+        if (!isBusy) {
+            confirmBtn.textContent = recognizeEditContext ? '保存' : '添加';
+        }
+        confirmBtn.disabled = isBusy ? true : recognizePreviewBlocked;
     }
     if (clearBtn) {
         clearBtn.textContent = recognizeEditContext ? '取消' : '清空输入';
@@ -13981,6 +14311,8 @@ function openModal(modalType, options = {}) {
 function closeModal() {
     const modal = document.getElementById('myModal');
     modal.style.display = 'none';
+    const shouldRefreshMainSections = recognizeDeferredMainRefresh === true;
+    recognizeDeferredMainRefresh = false;
     if (recognizeConfigRefreshTimer) {
         clearTimeout(recognizeConfigRefreshTimer);
         recognizeConfigRefreshTimer = null;
@@ -13992,6 +14324,12 @@ function closeModal() {
     recognizePreviousMessagePreviewVisible = false;
     refreshRecognizePreviousMessagePreview();
     clearRecognizeEditContext();
+    if (shouldRefreshMainSections && window.userManager && typeof window.userManager.renderAllSections === 'function') {
+        window.userManager.renderAllSections({
+            refreshRecognizePreviousMessagePreview: false,
+            refreshRecognizePanels: false
+        });
+    }
 }
 
 function renderCompareCellValue(value, fallbackText, extraClass = '') {
@@ -14944,162 +15282,200 @@ async function previewMessage(options = {}) {
 
 // 确认编辑
 async function confirmEdit() {
-    try {
-        const messageTextarea = document.getElementById('message');
-        const rawInputMessage = messageTextarea
-            ? String(messageTextarea.value || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-            : '';
-        let message = normalizeMessageBeforeSubmit(rawInputMessage);
-        if (recognizeEditContext) {
+    return runBusyTask(async () => {
+        try {
+            const messageTextarea = document.getElementById('message');
+            const rawInputMessage = messageTextarea
+                ? String(messageTextarea.value || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+                : '';
+            let message = normalizeMessageBeforeSubmit(rawInputMessage);
+            if (recognizeEditContext) {
+                if (!message) {
+                    showError('确认失败', '请输入消息内容');
+                    return;
+                }
+                if (!window.userManager || typeof window.userManager.applyEditedOriginalData !== 'function') {
+                    throw new Error('当前版本不支持原始消息快捷编辑');
+                }
+
+                const { userName, index, regionKey } = recognizeEditContext;
+                const resolved = await resolveMessageAmbiguityFlow(message, userName, {
+                    interactive: true,
+                    updateTextarea: true,
+                    preferWorker: true
+                });
+                const previewResult = resolved && resolved.previewResult ? resolved.previewResult : null;
+                if (!previewResult || !previewResult.success) {
+                    const errorMessage = previewResult && previewResult.error ? previewResult.error : '解析失败';
+                    renderInlineParseError(errorMessage, { context: 'confirm', clientId: userName });
+                    showError('确认失败', `${userName}: ${errorMessage}`);
+                    return;
+                }
+                const blockingUnresolvedLines = Array.isArray(previewResult.result && previewResult.result.blockingUnresolvedLines)
+                    ? previewResult.result.blockingUnresolvedLines.filter(Boolean)
+                    : [];
+                if (blockingUnresolvedLines.length > 0) {
+                    const blockedMessage = `当前消息不可保存：存在 ${blockingUnresolvedLines.length} 条被拦截内容`;
+                    setRecognizePreviewBlocked(true);
+                    setRecognizePreviewError(blockedMessage);
+                    renderInlineParseError(blockedMessage, { context: 'confirm', clientId: userName });
+                    showError('确认失败', `${userName}: 存在 ${blockingUnresolvedLines.length} 条被拦截内容，已阻止保存`);
+                    return;
+                }
+                const originalMessageForStorage = messageTextarea
+                    ? String(messageTextarea.value || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+                    : String((resolved && typeof resolved.message === 'string' ? resolved.message : message) || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+                window.userManager.applyEditedOriginalData(userName, index, regionKey, originalMessageForStorage, {
+                    preview: previewResult
+                });
+                closeModal();
+                const regionLabel = window.userManager.getUserRegionDisplayLabel
+                    ? window.userManager.getUserRegionDisplayLabel(userName, regionKey)
+                    : (window.userManager.getRegionLabel ? window.userManager.getRegionLabel(regionKey) : regionKey);
+                showSuccess(`消息修改成功：${userName}（${regionLabel}）`);
+                return;
+            }
+
+            const selectedUsers = typeof userManager.getSelectedUsers === 'function'
+                ? userManager.getSelectedUsers()
+                : [userManager.getCurrentUser()].filter(Boolean);
+
+            if (!selectedUsers.length) {
+                showError('确认失败', '请先选择至少一个用户');
+                return;
+            }
+
             if (!message) {
                 showError('确认失败', '请输入消息内容');
                 return;
             }
-            if (!window.userManager || typeof window.userManager.applyEditedOriginalData !== 'function') {
-                throw new Error('当前版本不支持原始消息快捷编辑');
-            }
 
-            const { userName, index, regionKey } = recognizeEditContext;
-            const resolved = await resolveMessageAmbiguityFlow(message, userName, {
-                interactive: true,
-                updateTextarea: true,
-                preferWorker: true
-            });
-            const previewResult = resolved && resolved.previewResult ? resolved.previewResult : null;
-            if (!previewResult || !previewResult.success) {
-                const errorMessage = previewResult && previewResult.error ? previewResult.error : '解析失败';
-                renderInlineParseError(errorMessage, { context: 'confirm', clientId: userName });
-                showError('确认失败', `${userName}: ${errorMessage}`);
-                return;
-            }
-            const blockingUnresolvedLines = Array.isArray(previewResult.result && previewResult.result.blockingUnresolvedLines)
-                ? previewResult.result.blockingUnresolvedLines.filter(Boolean)
-                : [];
-            if (blockingUnresolvedLines.length > 0) {
-                const blockedMessage = `当前消息不可保存：存在 ${blockingUnresolvedLines.length} 条被拦截内容`;
-                setRecognizePreviewBlocked(true);
-                setRecognizePreviewError(blockedMessage);
-                renderInlineParseError(blockedMessage, { context: 'confirm', clientId: userName });
-                showError('确认失败', `${userName}: 存在 ${blockingUnresolvedLines.length} 条被拦截内容，已阻止保存`);
-                return;
-            }
-            const originalMessageForStorage = messageTextarea
-                ? String(messageTextarea.value || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-                : String((resolved && typeof resolved.message === 'string' ? resolved.message : message) || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-            window.userManager.applyEditedOriginalData(userName, index, regionKey, originalMessageForStorage, {
-                preview: previewResult
-            });
-            renderViewRegionButtons();
-            closeModal();
-            const regionLabel = window.userManager.getUserRegionDisplayLabel
-                ? window.userManager.getUserRegionDisplayLabel(userName, regionKey)
-                : (window.userManager.getRegionLabel ? window.userManager.getRegionLabel(regionKey) : regionKey);
-            showSuccess(`消息修改成功：${userName}（${regionLabel}）`);
-            return;
-        }
-
-        const selectedUsers = typeof userManager.getSelectedUsers === 'function'
-            ? userManager.getSelectedUsers()
-            : [userManager.getCurrentUser()].filter(Boolean);
-        
-        if (!selectedUsers.length) {
-            showError('确认失败', '请先选择至少一个用户');
-            return;
-        }
-
-        if (!message) {
-            showError('确认失败', '请输入消息内容');
-            return;
-        }
-
-        let totalAdded = 0;
-        let maxIgnoredLineCount = 0;
-        const createdAt = new Date().toISOString();
-        const preparedOperations = [];
-        for (const userName of selectedUsers) {
-            const resolved = await resolveMessageAmbiguityFlow(message, userName, {
-                interactive: true,
-                updateTextarea: true,
-                preferWorker: true
-            });
-            const previewResult = resolved && resolved.previewResult ? resolved.previewResult : null;
-            if (!previewResult || !previewResult.success) {
-                const errorMessage = previewResult && previewResult.error ? previewResult.error : '解析失败';
-                renderInlineParseError(errorMessage, { context: 'confirm', clientId: userName });
-                showError('处理失败', `${userName}: ${errorMessage}`);
-                return;
-            }
-            message = resolved.message;
-
-            const originalMessageForStorage = messageTextarea
-                ? String(messageTextarea.value || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-                : String(message || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-            preparedOperations.push({
-                userName,
-                message,
-                originalMessageForStorage,
-                previewResult
-            });
-        }
-
-        let appliedOperationCount = 0;
-        for (const operation of preparedOperations) {
-            const result = messageProcessor.processMessageForUser(operation.message, operation.userName, {
-                clientId: operation.userName,
-                originalMessage: operation.originalMessageForStorage,
-                createdAt,
-                previewResult: operation.previewResult,
-                persist: false
-            });
-            if (!result.success) {
-                if (appliedOperationCount > 0 && userManager && typeof userManager.saveUserData === 'function') {
-                    userManager.saveUserData();
+            let totalAdded = 0;
+            let maxIgnoredLineCount = 0;
+            const createdAt = new Date().toISOString();
+            const preparedOperations = [];
+            for (const userName of selectedUsers) {
+                const resolved = await resolveMessageAmbiguityFlow(message, userName, {
+                    interactive: true,
+                    updateTextarea: true,
+                    preferWorker: true
+                });
+                const previewResult = resolved && resolved.previewResult ? resolved.previewResult : null;
+                if (!previewResult || !previewResult.success) {
+                    const errorMessage = previewResult && previewResult.error ? previewResult.error : '解析失败';
+                    renderInlineParseError(errorMessage, { context: 'confirm', clientId: userName });
+                    showError('处理失败', `${userName}: ${errorMessage}`);
+                    return;
                 }
-                renderInlineParseError(result.message, { context: 'confirm', clientId: operation.userName });
-                showError('处理失败', `${operation.userName}: ${result.message}`);
-                return;
+                message = resolved.message;
+
+                const originalMessageForStorage = messageTextarea
+                    ? String(messageTextarea.value || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+                    : String(message || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+                preparedOperations.push({
+                    userName,
+                    message,
+                    originalMessageForStorage,
+                    previewResult
+                });
             }
-            appliedOperationCount += 1;
-            totalAdded += result.totalAdded || 0;
-            maxIgnoredLineCount = Math.max(maxIgnoredLineCount, Number(result.ignoredLineCount) || 0);
-        }
-        if (preparedOperations.length > 0 && userManager && typeof userManager.saveUserData === 'function') {
-            userManager.saveUserData();
-        }
 
-        selectedUsers.forEach((userName) => {
-            const regionKeys = extractRegionKeysForDuplicate(message, userName);
-            markMessageRecordedForToday(message, [userName], regionKeys);
-        });
+            let appliedOperationCount = 0;
+            for (const operation of preparedOperations) {
+                const result = messageProcessor.processMessageForUser(operation.message, operation.userName, {
+                    clientId: operation.userName,
+                    originalMessage: operation.originalMessageForStorage,
+                    createdAt,
+                    previewResult: operation.previewResult,
+                    persist: false
+                });
+                if (!result.success) {
+                    if (appliedOperationCount > 0 && userManager && typeof userManager.saveUserData === 'function') {
+                        userManager.saveUserData();
+                    }
+                    renderInlineParseError(result.message, { context: 'confirm', clientId: operation.userName });
+                    showError('处理失败', `${operation.userName}: ${result.message}`);
+                    return;
+                }
+                appliedOperationCount += 1;
+                totalAdded += result.totalAdded || 0;
+                maxIgnoredLineCount = Math.max(maxIgnoredLineCount, Number(result.ignoredLineCount) || 0);
+            }
+            if (preparedOperations.length > 0 && userManager && typeof userManager.saveUserData === 'function') {
+                userManager.saveUserData();
+            }
 
-        userManager.renderAllSections();
-        renderViewRegionButtons();
-        const resultElement = document.getElementById('result');
-        if (messageTextarea) {
-            messageTextarea.value = '';
-            syncRecognizeMessageAutoHeight();
-            messageTextarea.focus();
-        }
-        syncRecognizeRegionSelectionFromMessage('');
-        if (resultElement) {
-            resultElement.innerHTML = '';
-        }
-        setRecognizePreviewError('');
-        clearMessageLineError();
-        renderMessageLineNumbers();
-        const ignoredHint = maxIgnoredLineCount > 0
-            ? `，另有 ${maxIgnoredLineCount} 行未识别内容已忽略`
-            : '';
-        showSuccess(`消息处理成功，已添加到 ${selectedUsers.length} 位客户，总数: ${totalAdded}${ignoredHint}`);
-    } catch (error) {
-        if (error && error.message) {
-            renderInlineParseError(error.message, {
-                context: 'confirm',
-                clientId: recognizeEditContext ? recognizeEditContext.userName : getPreviewClientId()
+            selectedUsers.forEach((userName) => {
+                const regionKeys = extractRegionKeysForDuplicate(message, userName);
+                markMessageRecordedForToday(message, [userName], regionKeys);
             });
+
+            recognizeDeferredMainRefresh = true;
+            userManager.renderAllSections({
+                refreshCurrentUserDisplay: false,
+                refreshTitles: false,
+                refreshSection: false,
+                refreshSortedResults: false,
+                refreshOriginalData: false,
+                refreshUserList: false,
+                refreshViewRegionBar: false,
+                refreshRegionPnlPanel: false,
+                refreshDashboardStatus: false,
+                refreshRecognizePreviousMessagePreview: 'auto',
+                refreshRecognizePanels: false
+            });
+            const resultElement = document.getElementById('result');
+            if (messageTextarea) {
+                messageTextarea.value = '';
+                syncRecognizeMessageAutoHeight();
+                messageTextarea.focus();
+            }
+            syncRecognizeRegionSelectionFromMessage('');
+            if (resultElement) {
+                resultElement.innerHTML = '';
+            }
+            setRecognizePreviewError('');
+            clearMessageLineError();
+            renderMessageLineNumbers();
+            const ignoredHint = maxIgnoredLineCount > 0
+                ? `，另有 ${maxIgnoredLineCount} 行未识别内容已忽略`
+                : '';
+            showSuccess(`消息处理成功，已添加到 ${selectedUsers.length} 位客户，总数: ${totalAdded}${ignoredHint}`);
+        } catch (error) {
+            if (error && error.message) {
+                renderInlineParseError(error.message, {
+                    context: 'confirm',
+                    clientId: recognizeEditContext ? recognizeEditContext.userName : getPreviewClientId()
+                });
+            }
+            showError('确认失败', error.message);
         }
-        showError('确认失败', error.message);
-    }
+    }, {
+        key: 'recognize-confirm',
+        button: () => document.getElementById('recognizeConfirmBtn'),
+        busyLabel: () => recognizeEditContext ? '保存中...' : '添加中...',
+        idleLabel: () => recognizeEditContext ? '保存' : '添加',
+        noticeLabel: () => recognizeEditContext ? '正在保存原始消息...' : '正在处理消息...',
+        noticeDelayMs: 220,
+        yieldBeforeRun: true,
+        onFinally: () => syncRecognizeModalActionMode()
+    });
+}
+
+async function handleSaveEditedOriginalData() {
+    return runBusyTask(() => {
+        if (!window.userManager || typeof window.userManager.saveEditedOriginalData !== 'function') {
+            showError('保存失败', '当前版本不支持原始消息编辑');
+            return;
+        }
+        window.userManager.saveEditedOriginalData();
+    }, {
+        key: 'edit-original-save',
+        button: () => document.getElementById('editOriginalSaveBtn'),
+        busyLabel: '保存中...',
+        idleLabel: '保存',
+        yieldBeforeRun: true
+    });
 }
 
 // 复制客户端数据
@@ -16754,46 +17130,55 @@ function promptExportDocumentFormat() {
 }
 
 async function exportClientDataDocument() {
-    try {
-        if (!ipcRenderer || typeof ipcRenderer.invoke !== 'function') {
-            showError('导出失败', 'IPC 不可用，请重启应用');
-            return;
-        }
+    return runBusyTask(async () => {
+        try {
+            if (!ipcRenderer || typeof ipcRenderer.invoke !== 'function') {
+                showError('导出失败', 'IPC 不可用，请重启应用');
+                return;
+            }
 
-        const scoped = collectCurrentLotteryScopeData();
-        if (!scoped.ok) {
-            showError('导出失败', scoped.reason || '当前范围没有可导出的数据');
-            return;
-        }
+            const scoped = collectCurrentLotteryScopeData();
+            if (!scoped.ok) {
+                showError('导出失败', scoped.reason || '当前范围没有可导出的数据');
+                return;
+            }
 
-        const format = await promptExportDocumentFormat();
-        if (!format) {
-            showSuccess('已取消导出');
-            return;
-        }
-
-        const content = buildLotteryExportDocument(scoped.scopeData, format);
-        const timestamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
-        const fileName = `lottery_export_${timestamp}_${format}`;
-        const result = await ipcRenderer.invoke('lottery:export-document', {
-            format,
-            fileName,
-            content
-        });
-
-        if (!result || !result.ok) {
-            if (result && result.canceled) {
+            const format = await promptExportDocumentFormat();
+            if (!format) {
                 showSuccess('已取消导出');
                 return;
             }
-            showError('导出失败', (result && result.reason) || '保存文件失败');
-            return;
-        }
 
-        showSuccess(`导出成功：${result.filePath}`);
-    } catch (error) {
-        showError('导出失败', error.message);
-    }
+            const content = buildLotteryExportDocument(scoped.scopeData, format);
+            const timestamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
+            const fileName = `lottery_export_${timestamp}_${format}`;
+            const result = await ipcRenderer.invoke('lottery:export-document', {
+                format,
+                fileName,
+                content
+            });
+
+            if (!result || !result.ok) {
+                if (result && result.canceled) {
+                    showSuccess('已取消导出');
+                    return;
+                }
+                showError('导出失败', (result && result.reason) || '保存文件失败');
+                return;
+            }
+
+            showSuccess(`导出成功：${result.filePath}`);
+        } catch (error) {
+            showError('导出失败', error.message);
+        }
+    }, {
+        key: 'export-current-scope',
+        button: () => document.getElementById('exportCurrentScopeBtn'),
+        busyLabel: '导出中...',
+        idleLabel: '导出当前范围',
+        noticeLabel: '正在导出当前范围...',
+        noticeDelayMs: 180
+    });
 }
 
 // 生成复制内容
@@ -17076,6 +17461,8 @@ window.previewMessage = previewMessage;
 window.confirmEdit = confirmEdit;
 window.copyClientData = copyClientData;
 window.exportClientDataDocument = exportClientDataDocument;
+window.exportLotteryBackup = exportLotteryBackup;
+window.importLotteryBackup = importLotteryBackup;
 window.openCustomerSettings = openCustomerSettings;
 window.isCustomerSettingsListDockOpenForUser = isCustomerSettingsListDockOpenForUser;
 window.openCustomerSettingsFromRecognize = openCustomerSettingsFromRecognize;
@@ -17177,3 +17564,4 @@ window.handleRecognizeQuickAddAnchor = handleRecognizeQuickAddAnchor;
 window.handleRecognizeQuickAddAmountUnit = handleRecognizeQuickAddAmountUnit;
 window.handleRecognizeBlockedAiRewrite = handleRecognizeBlockedAiRewrite;
 window.clearOcrImage = clearOcrImage;
+window.handleSaveEditedOriginalData = handleSaveEditedOriginalData;

@@ -75,7 +75,9 @@ class UserManager {
                 estimateOffsets: null,
                 totalEstimateHeight: 0,
                 rafId: null,
+                measureRafId: null,
                 lastPaintTs: 0,
+                measuredHeights: new Map(),
                 bound: false,
                 disabled: false,
                 scrollHandler: null
@@ -90,6 +92,10 @@ class UserManager {
             minRenderCount: 24,
             maxRenderCount: 120,
             emptyText: '',
+            getItemKey: null,
+            measureRenderedItemHeights: false,
+            itemSpacing: 0,
+            onItemHeightMeasured: null,
             ...state.options,
             ...options
         };
@@ -154,6 +160,10 @@ class UserManager {
             cancelAnimationFrame(state.rafId);
             state.rafId = null;
         }
+        if (state.measureRafId) {
+            cancelAnimationFrame(state.measureRafId);
+            state.measureRafId = null;
+        }
         if (state.emptyNode) {
             state.emptyNode.remove();
             state.emptyNode = null;
@@ -186,9 +196,67 @@ class UserManager {
         });
     }
 
+    getVirtualItemKey(state, item, index) {
+        if (!state) return String(index);
+        if (state.options && typeof state.options.getItemKey === 'function') {
+            const customKey = state.options.getItemKey(item, index);
+            if (customKey != null && customKey !== '') {
+                return String(customKey);
+            }
+        }
+        return String(index);
+    }
+
+    scheduleVirtualListMeasurement(state) {
+        if (!state || state.measureRafId || !state.options || state.options.measureRenderedItemHeights !== true) return;
+        state.measureRafId = requestAnimationFrame(() => {
+            state.measureRafId = null;
+            this.measureVirtualListRenderedRows(state);
+        });
+    }
+
+    measureVirtualListRenderedRows(state) {
+        if (!state || !state.container || !state.topSpacer || !state.bottomSpacer) return;
+        if (!state.options || state.options.measureRenderedItemHeights !== true) return;
+        const items = Array.isArray(state.items) ? state.items : [];
+        if (items.length === 0) return;
+
+        const itemSpacing = Math.max(0, Number(state.options.itemSpacing) || 0);
+        const onItemHeightMeasured = typeof state.options.onItemHeightMeasured === 'function'
+            ? state.options.onItemHeightMeasured
+            : null;
+        let node = state.topSpacer.nextSibling;
+        let hasChanges = false;
+
+        while (node && node !== state.bottomSpacer) {
+            const index = Number.parseInt(node.getAttribute('data-virtual-index') || '', 10);
+            if (Number.isInteger(index) && index >= 0 && index < items.length) {
+                const key = this.getVirtualItemKey(state, items[index], index);
+                const measuredHeight = Math.max(20, Math.ceil((node.offsetHeight || 0) + itemSpacing));
+                const previousHeight = Number(state.measuredHeights.get(key));
+                if (!Number.isFinite(previousHeight) || Math.abs(previousHeight - measuredHeight) >= 1) {
+                    state.measuredHeights.set(key, measuredHeight);
+                    hasChanges = true;
+                    if (onItemHeightMeasured) {
+                        onItemHeightMeasured(items[index], index, measuredHeight);
+                    }
+                }
+            }
+            node = node.nextSibling;
+        }
+
+        if (!hasChanges) return;
+        this.buildVirtualEstimateOffsets(state);
+        this.scheduleVirtualListRender(state);
+    }
+
     setVirtualListData(container, items, renderItem, options = {}) {
         const state = this.ensureVirtualListState(container, options);
         if (!state) return;
+        if (state.measureRafId) {
+            cancelAnimationFrame(state.measureRafId);
+            state.measureRafId = null;
+        }
         state.items = Array.isArray(items) ? items : [];
         state.renderItem = typeof renderItem === 'function' ? renderItem : null;
         this.buildVirtualEstimateOffsets(state);
@@ -201,6 +269,11 @@ class UserManager {
 
     getVirtualEstimatedHeight(state, item, index) {
         if (!state) return 56;
+        const itemKey = this.getVirtualItemKey(state, item, index);
+        const measuredHeight = Number(state.measuredHeights.get(itemKey));
+        if (Number.isFinite(measuredHeight) && measuredHeight > 0) {
+            return Math.max(20, Math.min(1600, measuredHeight));
+        }
         const estimateByItem = state.options && typeof state.options.getItemEstimate === 'function'
             ? Number(state.options.getItemEstimate(item, index))
             : NaN;
@@ -289,8 +362,8 @@ class UserManager {
         const viewportHeight = Math.max(itemHeight * 4, container.clientHeight || 0);
         const scrollTop = Math.max(0, container.scrollTop);
         const overscan = Math.max(0, state.options.overscan || 0);
-        const minRenderCount = Math.max(20, state.options.minRenderCount || 72);
-        const maxRenderCount = Math.max(minRenderCount, state.options.maxRenderCount || 160);
+        const minRenderCount = Math.max(1, Number(state.options.minRenderCount) || 1);
+        const maxRenderCount = Math.max(minRenderCount, Number(state.options.maxRenderCount) || 160);
         const offsets = Array.isArray(state.estimateOffsets) && state.estimateOffsets.length === totalCount + 1
             ? state.estimateOffsets
             : null;
@@ -355,6 +428,7 @@ class UserManager {
         state.lastEndIndex = endIndex;
         state.lastTotalCount = totalCount;
         state.appliedVersion = state.dataVersion;
+        this.scheduleVirtualListMeasurement(state);
     }
 
     renderVirtualRows(container, rows, renderItem, options = {}) {
@@ -634,7 +708,19 @@ class UserManager {
         this.invalidateUserListDerivedCaches();
 
         if (options.render !== false) {
-            this.renderAllSections();
+            const affectsCurrentScope = this.isUserInCurrentScope(userName);
+            this.renderAllSections({
+                refreshCurrentUserDisplay: false,
+                refreshTitles: false,
+                refreshSection: false,
+                refreshSortedResults: false,
+                refreshOriginalData: affectsCurrentScope,
+                refreshViewRegionBar: false,
+                refreshRegionPnlPanel: false,
+                refreshDashboardStatus: false,
+                refreshRecognizePreviousMessagePreview: affectsCurrentScope ? 'auto' : false,
+                refreshRecognizePanels: false
+            });
         }
         if (options.save !== false) {
             this.saveUserData();
@@ -669,7 +755,19 @@ class UserManager {
         user.settlementOdds = this.normalizeSettlementOddsValue(odds, this.getInitialSettlementOdds(userName));
         this.invalidateUserListDerivedCaches();
         if (options.render !== false) {
-            this.renderAllSections();
+            const affectsCurrentScope = this.isUserInCurrentScope(userName);
+            this.renderAllSections({
+                refreshCurrentUserDisplay: false,
+                refreshTitles: false,
+                refreshSection: false,
+                refreshSortedResults: affectsCurrentScope,
+                refreshOriginalData: false,
+                refreshViewRegionBar: false,
+                refreshRegionPnlPanel: affectsCurrentScope,
+                refreshDashboardStatus: affectsCurrentScope,
+                refreshRecognizePreviousMessagePreview: false,
+                refreshRecognizePanels: false
+            });
         }
         if (options.save !== false) {
             this.saveUserData();
@@ -719,7 +817,19 @@ class UserManager {
         }
 
         if (options.render !== false) {
-            this.renderAllSections();
+            const affectsCurrentScope = this.isUserInCurrentScope(userName);
+            this.renderAllSections({
+                refreshCurrentUserDisplay: false,
+                refreshTitles: false,
+                refreshSection: false,
+                refreshSortedResults: affectsCurrentScope,
+                refreshOriginalData: false,
+                refreshViewRegionBar: false,
+                refreshRegionPnlPanel: affectsCurrentScope,
+                refreshDashboardStatus: affectsCurrentScope,
+                refreshRecognizePreviousMessagePreview: false,
+                refreshRecognizePanels: false
+            });
         }
         if (options.save !== false) {
             this.saveUserData();
@@ -1027,6 +1137,16 @@ class UserManager {
         return `${userName}|${regionKey}|${index}|${message}`;
     }
 
+    getOriginalStoredParseSummary(row) {
+        if (!row || typeof row !== 'object') return null;
+        const cacheKey = this.getOriginalRowDerivedCacheKey(row);
+        if (cacheKey && this.originalParseSummaryCache.has(cacheKey)) {
+            return this.originalParseSummaryCache.get(cacheKey);
+        }
+        const storedSummary = this.extractOriginalMessageParseSummary(row.originalEntry);
+        return storedSummary || null;
+    }
+
     setOriginalDataSearchKeyword(keyword = '') {
         const next = String(keyword == null ? '' : keyword);
         if (next === this.originalDataSearchKeyword) return;
@@ -1176,8 +1296,23 @@ class UserManager {
         return false;
     }
 
-    shouldUseOriginalDataVirtualList() {
-        return false;
+    shouldUseOriginalDataVirtualList(rows = []) {
+        return Array.isArray(rows) && rows.length >= 36;
+    }
+
+    shouldUseUserListVirtualList(userNames = []) {
+        return Array.isArray(userNames) && userNames.length >= 18;
+    }
+
+    estimateUserListRowHeight() {
+        return 148;
+    }
+
+    getOriginalVirtualRowEstimate(row) {
+        if (this.getOriginalDataCollapsed()) {
+            return 64;
+        }
+        return this.estimateOriginalRowHeight(row);
     }
 
     prewarmOriginalRowHeights(rows = []) {
@@ -1208,6 +1343,28 @@ class UserManager {
                 : this.createOriginalDataRow(row, index);
             if (!rowNode) return;
             fragment.appendChild(rowNode);
+        });
+        container.appendChild(fragment);
+    }
+
+    renderUserListStaticRows(container, userNames = [], serialMap = new Map()) {
+        if (!container) return;
+        this.deactivateVirtualList(container);
+        container.innerHTML = '';
+
+        if (!Array.isArray(userNames) || userNames.length === 0) {
+            const empty = document.createElement('li');
+            empty.className = 'user-list-empty';
+            empty.textContent = this.userSearchKeyword ? '没有匹配的客户' : '暂无客户';
+            container.appendChild(empty);
+            return;
+        }
+
+        const fragment = document.createDocumentFragment();
+        userNames.forEach((userName, index) => {
+            fragment.appendChild(this.createUserListRow(userName, {
+                serialNo: serialMap.get(userName) || (index + 1)
+            }));
         });
         container.appendChild(fragment);
     }
@@ -1262,6 +1419,39 @@ class UserManager {
         return this.normalizeOriginalParseSummary(entry.parseSummary, {
             fallbackAmount: this.extractOriginalMessageTotal(entry)
         });
+    }
+
+    normalizeOriginalHitNumberAmounts(hitNumberAmounts) {
+        if (!hitNumberAmounts || typeof hitNumberAmounts !== 'object') return null;
+        const normalized = {};
+        const appendAmount = (rawNumber, rawAmount) => {
+            const numericNumber = Number.parseInt(rawNumber, 10);
+            const amount = Number(rawAmount);
+            if (!Number.isInteger(numericNumber) || numericNumber < 1 || numericNumber > 49) return;
+            if (!Number.isFinite(amount) || amount <= 0) return;
+            const formattedNumber = String(numericNumber).padStart(2, '0');
+            normalized[formattedNumber] = (Number(normalized[formattedNumber]) || 0) + amount;
+        };
+
+        if (hitNumberAmounts instanceof Map) {
+            hitNumberAmounts.forEach((amount, number) => appendAmount(number, amount));
+        } else {
+            Object.entries(hitNumberAmounts).forEach(([number, amount]) => appendAmount(number, amount));
+        }
+
+        const keys = Object.keys(normalized).sort((left, right) => Number(left) - Number(right));
+        if (keys.length === 0) return null;
+        const ordered = {};
+        keys.forEach((key) => {
+            ordered[key] = normalized[key];
+        });
+        return ordered;
+    }
+
+    extractOriginalMessageHitNumberAmounts(entry) {
+        if (!entry || typeof entry !== 'object') return null;
+        const candidate = entry.hitNumberAmounts || entry.hitAmounts || entry.hitNumberIndex;
+        return this.normalizeOriginalHitNumberAmounts(candidate);
     }
 
     normalizeOriginalParseIssue(issue) {
@@ -1358,7 +1548,7 @@ class UserManager {
         return normalized;
     }
 
-    buildStoredOriginalDataEntry(message, totalAmount = null, createdAt = '', editedAt = '', parseSummary = null) {
+    buildStoredOriginalDataEntry(message, totalAmount = null, createdAt = '', editedAt = '', parseSummary = null, hitNumberAmounts = null) {
         const entry = {
             message: this.extractOriginalMessageText(message)
         };
@@ -1381,6 +1571,10 @@ class UserManager {
             if (normalizedParseSummary) {
                 entry.parseSummary = normalizedParseSummary;
             }
+        }
+        const normalizedHitNumberAmounts = this.normalizeOriginalHitNumberAmounts(hitNumberAmounts);
+        if (normalizedHitNumberAmounts) {
+            entry.hitNumberAmounts = normalizedHitNumberAmounts;
         }
         return entry;
     }
@@ -1560,6 +1754,39 @@ class UserManager {
         return null;
     }
 
+    buildOriginalHitNumberAmountsFromPreview(preview, regionKey = this.activeRegion, userName = '') {
+        const safeRegionKey = String(regionKey || this.activeRegion || 'new_ao').trim() || 'new_ao';
+        if (!preview || !preview.success || !preview.result) return null;
+        const previewEntries = Array.isArray(preview.result.entries) ? preview.result.entries.filter(Boolean) : [];
+        if (previewEntries.length === 0) return null;
+
+        if (window.messageProcessor && typeof window.messageProcessor.buildHitNumberAmountsForRegion === 'function') {
+            return this.normalizeOriginalHitNumberAmounts(
+                window.messageProcessor.buildHitNumberAmountsForRegion(previewEntries, {
+                    clientId: String(userName || '').trim(),
+                    regionKey: safeRegionKey
+                })
+            );
+        }
+
+        const hitNumberAmounts = {};
+        previewEntries.forEach((entry) => {
+            const entryRegion = String(entry && entry.regionKey ? entry.regionKey : safeRegionKey).trim() || safeRegionKey;
+            if (entryRegion !== safeRegionKey) return;
+            const amount = Number(entry && entry.amount);
+            const numbers = Array.isArray(entry && entry.numbers) ? entry.numbers : [];
+            if (!Number.isFinite(amount) || amount <= 0 || numbers.length === 0) return;
+            numbers.forEach((number) => {
+                const numericNumber = Number.parseInt(number, 10);
+                if (!Number.isInteger(numericNumber) || numericNumber < 1 || numericNumber > 49) return;
+                const formattedNumber = String(numericNumber).padStart(2, '0');
+                hitNumberAmounts[formattedNumber] = (Number(hitNumberAmounts[formattedNumber]) || 0) + amount;
+            });
+        });
+
+        return this.normalizeOriginalHitNumberAmounts(hitNumberAmounts);
+    }
+
     getOriginalOrderTotalCached(row) {
         if (!row || typeof row !== 'object') return 0;
         const storedTotal = this.extractOriginalMessageTotal(row.originalEntry);
@@ -1684,35 +1911,29 @@ class UserManager {
         const userName = String(row.userName || '').trim();
         const targetRegion = String(row.regionKey || this.activeRegion || 'new_ao').trim() || 'new_ao';
         let hitAmount = 0;
+        const storedHitNumberAmounts = this.extractOriginalMessageHitNumberAmounts(row.originalEntry);
 
-        if (raw && window.messageProcessor && typeof window.messageProcessor.parseMessage === 'function') {
+        if (storedHitNumberAmounts) {
+            hitAmount = Number(storedHitNumberAmounts[winningNumber]) || 0;
+        } else if (raw && window.messageProcessor && typeof window.messageProcessor.parseMessage === 'function') {
             try {
                 const parsed = window.messageProcessor.parseMessage(raw, {
                     clientId: userName,
                     allowPartial: true
                 });
-                const regionAccounting = window.messageProcessor.getEffectiveRegionAccountingInfo
-                    ? window.messageProcessor.getEffectiveRegionAccountingInfo(userName)
-                    : {
-                        separateStatsByRegion: true,
-                        defaultRegion: targetRegion
-                    };
-                (Array.isArray(parsed && parsed.entries) ? parsed.entries : []).forEach((entry) => {
-                    const amount = Number(entry && entry.amount);
-                    const numbers = Array.isArray(entry && entry.numbers) ? entry.numbers : [];
-                    if (!Number.isFinite(amount) || amount <= 0 || numbers.length === 0) return;
-                    const parsedRegion = String(entry && entry.regionKey ? entry.regionKey : targetRegion).trim() || targetRegion;
-                    const accountingRegion = regionAccounting && regionAccounting.separateStatsByRegion === false
-                        ? String(regionAccounting.defaultRegion || targetRegion).trim() || targetRegion
-                        : parsedRegion;
-                    if (accountingRegion !== targetRegion) return;
-                    const hitCount = numbers.reduce((sum, number) => (
-                        String(number || '').padStart(2, '0') === winningNumber ? sum + 1 : sum
-                    ), 0);
-                    if (hitCount > 0) {
-                        hitAmount += amount * hitCount;
+                const preview = {
+                    success: true,
+                    result: {
+                        entries: Array.isArray(parsed && parsed.entries) ? parsed.entries : []
                     }
-                });
+                };
+                const hitNumberAmounts = this.buildOriginalHitNumberAmountsFromPreview(preview, targetRegion, userName);
+                if (hitNumberAmounts) {
+                    hitAmount = Number(hitNumberAmounts[winningNumber]) || 0;
+                    if (row.originalEntry && typeof row.originalEntry === 'object') {
+                        row.originalEntry.hitNumberAmounts = hitNumberAmounts;
+                    }
+                }
             } catch (error) {
                 hitAmount = 0;
             }
@@ -1790,7 +2011,8 @@ class UserManager {
                 const editedAt = this.extractOriginalMessageEditedAt(item);
                 if (item && typeof item === 'object') {
                     const totalAmount = this.extractOriginalMessageTotal(item);
-                    return this.buildStoredOriginalDataEntry(message, totalAmount, createdAt, editedAt, item.parseSummary);
+                    const hitNumberAmounts = this.extractOriginalMessageHitNumberAmounts(item);
+                    return this.buildStoredOriginalDataEntry(message, totalAmount, createdAt, editedAt, item.parseSummary, hitNumberAmounts);
                 }
                 return message;
             });
@@ -2245,6 +2467,22 @@ class UserManager {
         };
     }
 
+    isUserInCurrentScope(userName = '') {
+        const targetUser = String(userName || '').trim();
+        if (!targetUser) return false;
+        return this.getScopeUsers().includes(targetUser);
+    }
+
+    isRecognizeModalOpen() {
+        if (typeof document === 'undefined') return false;
+        const recognizeModal = document.getElementById('myModal');
+        return !!(recognizeModal && recognizeModal.style.display === 'block');
+    }
+
+    shouldRefreshOptionalPanel(optionValue, autoCondition = false) {
+        return optionValue === true || (optionValue !== false && autoCondition);
+    }
+
     buildEmptySelectedScopeSnapshot(users = []) {
         const baseData = this.generateData();
         return {
@@ -2413,7 +2651,9 @@ class UserManager {
         }
 
         this.applyScopeModeFlags();
-        this.renderAllSections();
+        this.renderAllSections({
+            refreshViewRegionBar: false
+        });
 
         console.log('切换用户选择:', this.getScopeUsers().join(','));
     }
@@ -2468,29 +2708,56 @@ class UserManager {
     }
 
     // 渲染所有区域
-    renderAllSections() {
-        this.updateCurrentUserDisplay();
-        this.updateTitles();
-        this.renderSection('section1');
-        this.renderSortedResults();
-        this.renderOriginalData();
-        this.renderUserList();
-        if (typeof window.refreshViewRegionBar === 'function') {
+    renderAllSections(options = {}) {
+        const config = {
+            refreshCurrentUserDisplay: true,
+            refreshTitles: true,
+            refreshSection: true,
+            refreshSortedResults: true,
+            refreshOriginalData: true,
+            refreshUserList: true,
+            refreshViewRegionBar: true,
+            refreshRegionPnlPanel: true,
+            refreshDashboardStatus: true,
+            refreshRecognizePreviousMessagePreview: 'auto',
+            refreshRecognizePanels: 'auto',
+            ...options
+        };
+
+        if (config.refreshCurrentUserDisplay) {
+            this.updateCurrentUserDisplay();
+        }
+        if (config.refreshTitles) {
+            this.updateTitles();
+        }
+        if (config.refreshSection) {
+            this.renderSection('section1');
+        }
+        if (config.refreshSortedResults) {
+            this.renderSortedResults();
+        }
+        if (config.refreshOriginalData) {
+            this.renderOriginalData();
+        }
+        if (config.refreshUserList) {
+            this.renderUserList();
+        }
+        if (config.refreshViewRegionBar && typeof window.refreshViewRegionBar === 'function') {
             window.refreshViewRegionBar();
         }
-        if (typeof window.refreshRegionPnlPanel === 'function') {
+        if (config.refreshRegionPnlPanel && typeof window.refreshRegionPnlPanel === 'function') {
             window.refreshRegionPnlPanel();
         }
-        if (typeof window.refreshDashboardStatus === 'function') {
+        if (config.refreshDashboardStatus && typeof window.refreshDashboardStatus === 'function') {
             window.refreshDashboardStatus();
         }
-        if (typeof window.refreshRecognizePreviousMessagePreview === 'function') {
+        const recognizeModalOpen = this.isRecognizeModalOpen();
+        if (this.shouldRefreshOptionalPanel(config.refreshRecognizePreviousMessagePreview, recognizeModalOpen)
+            && typeof window.refreshRecognizePreviousMessagePreview === 'function'
+        ) {
             window.refreshRecognizePreviousMessagePreview();
         }
-        const recognizeModal = typeof document !== 'undefined'
-            ? document.getElementById('myModal')
-            : null;
-        const shouldRefreshRecognizePanels = !!(recognizeModal && recognizeModal.style.display === 'block');
+        const shouldRefreshRecognizePanels = this.shouldRefreshOptionalPanel(config.refreshRecognizePanels, recognizeModalOpen);
         if (shouldRefreshRecognizePanels) {
             if (typeof window.handleAnchorRuleScopeChange === 'function') {
                 window.handleAnchorRuleScopeChange();
@@ -2525,7 +2792,9 @@ class UserManager {
             userName,
             render: false
         });
-        this.renderAllSections();
+        this.renderAllSections({
+            refreshViewRegionBar: false
+        });
         this.saveUserData();
         
         console.log('添加用户:', userName);
@@ -2538,6 +2807,7 @@ class UserManager {
             return false;
         }
 
+        const affectsCurrentScope = this.isUserInCurrentScope(userName);
         delete this.users[userName];
         this.invalidateUserListDerivedCaches();
         if (this.expandedSettlementUser === userName) {
@@ -2574,11 +2844,21 @@ class UserManager {
 
         this.applyScopeModeFlags();
 
-        // 删除后无论当前是否仍有选中客户，都必须统一刷新主页面，
-        // 否则右侧累计值/原始消息可能停留在删除前的数据。
-        this.updateCurrentUserDisplay();
-        this.updateTitles();
-        this.renderAllSections();
+        if (affectsCurrentScope || remainingUsers.length === 0) {
+            this.renderAllSections();
+        } else {
+            this.renderAllSections({
+                refreshCurrentUserDisplay: false,
+                refreshTitles: false,
+                refreshSection: false,
+                refreshSortedResults: false,
+                refreshOriginalData: false,
+                refreshRegionPnlPanel: false,
+                refreshDashboardStatus: false,
+                refreshRecognizePreviousMessagePreview: false,
+                refreshRecognizePanels: false
+            });
+        }
         this.saveUserData();
         
         console.log('删除用户:', userName);
@@ -2602,6 +2882,7 @@ class UserManager {
         if (!targetUser || !this.users[targetUser]) {
             throw new Error('请先选择客户');
         }
+        const affectsCurrentScope = this.isUserInCurrentScope(targetUser);
         const ok = confirm(`确定清空客户 ${targetUser} 的录入条目数据吗？\n仅清空号码统计与原始消息，不会删除该客户的结算设置和解析偏好。`);
         if (!ok) {
             return { cleared: false, userName: targetUser };
@@ -2620,7 +2901,21 @@ class UserManager {
 
         this.invalidateOriginalDataDerivedCaches();
         this.invalidateUserListDerivedCaches();
-        this.renderAllSections();
+        if (affectsCurrentScope) {
+            this.renderAllSections();
+        } else {
+            this.renderAllSections({
+                refreshCurrentUserDisplay: false,
+                refreshTitles: false,
+                refreshSection: false,
+                refreshSortedResults: false,
+                refreshOriginalData: false,
+                refreshRegionPnlPanel: false,
+                refreshDashboardStatus: false,
+                refreshRecognizePreviousMessagePreview: false,
+                refreshRecognizePanels: false
+            });
+        }
         this.saveUserData();
         console.log('已清空录入条目数据:', targetUser);
         return { cleared: true, userName: targetUser };
@@ -2797,26 +3092,32 @@ class UserManager {
             userSearchInput.value = this.userSearchKeyword;
         }
 
-        userListElement.innerHTML = '';
         const keyword = String(this.userSearchKeyword || '').trim();
         const sortedUsers = this.getFilteredUserNames(keyword);
+        const serialMap = this.getUserSerialMap();
 
-        if (sortedUsers.length === 0) {
-            const empty = document.createElement('li');
-            empty.className = 'user-list-empty';
-            empty.textContent = keyword ? '没有匹配的客户' : '暂无客户';
-            userListElement.appendChild(empty);
+        if (!this.shouldUseUserListVirtualList(sortedUsers)) {
+            this.renderUserListStaticRows(userListElement, sortedUsers, serialMap);
             return;
         }
 
-        const fragment = document.createDocumentFragment();
-        const serialMap = this.getUserSerialMap();
-        sortedUsers.forEach(user => {
-            fragment.appendChild(this.createUserListRow(user, {
-                serialNo: serialMap.get(user) || 0
-            }));
-        });
-        userListElement.appendChild(fragment);
+        this.renderVirtualRows(
+            userListElement,
+            sortedUsers,
+            (userName, index) => this.createUserListRow(userName, {
+                serialNo: serialMap.get(userName) || (index + 1)
+            }),
+            {
+                estimateItemHeight: this.estimateUserListRowHeight(),
+                getItemKey: (userName, index) => String(userName || index),
+                overscan: 5,
+                minRenderCount: 10,
+                maxRenderCount: 36,
+                measureRenderedItemHeights: true,
+                itemSpacing: 8,
+                emptyText: keyword ? '没有匹配的客户' : '暂无客户'
+            }
+        );
     }
 
     // 渲染区域
@@ -3223,21 +3524,40 @@ class UserManager {
             rows = this.sortOriginalRows(rows);
         }
 
-        if (!this.shouldUseOriginalDataVirtualList()) {
+        if (!this.shouldUseOriginalDataVirtualList(rows)) {
             this.renderOriginalDataStaticRows(originalDataListElement, rows);
             return;
         }
 
+        const collapsed = this.getOriginalDataCollapsed();
+        const virtualModeKey = collapsed ? 'collapsed' : 'expanded';
+
         this.renderVirtualRows(
             originalDataListElement,
             rows,
-            (row, index) => this.createOriginalDataRow(row, index),
+            (row, index) => collapsed
+                ? this.createCollapsedOriginalDataRow(row, index)
+                : this.createOriginalDataRow(row, index),
             {
-                estimateItemHeight: 110,
-                getItemEstimate: (row) => this.estimateOriginalRowHeight(row),
-                overscan: 4,
-                minRenderCount: 12,
+                estimateItemHeight: collapsed ? 64 : 110,
+                getItemEstimate: (row) => this.getOriginalVirtualRowEstimate(row),
+                getItemKey: (row, index) => `${virtualModeKey}:${this.getOriginalRowDerivedCacheKey(row) || `original:${index}`}`,
+                overscan: collapsed ? 6 : 4,
+                minRenderCount: collapsed ? 16 : 12,
                 maxRenderCount: 48,
+                measureRenderedItemHeights: collapsed !== true,
+                itemSpacing: 8,
+                onItemHeightMeasured: (row, _index, height) => {
+                    const cacheKey = this.getOriginalRowDerivedCacheKey(row);
+                    if (!cacheKey) return;
+                    this.originalRowHeightCache.set(cacheKey, height);
+                    if (this.originalRowHeightCache.size > 8000) {
+                        const first = this.originalRowHeightCache.keys().next();
+                        if (!first.done) {
+                            this.originalRowHeightCache.delete(first.value);
+                        }
+                    }
+                },
                 emptyText: '暂无原始消息'
             }
         );
@@ -3338,26 +3658,24 @@ class UserManager {
         const regionLabel = row.regionLabel || this.getRegionLabel(row.regionKey);
         const rawMessage = this.extractOriginalMessageText(row.message);
         const createdAtText = this.formatOriginalMessageCreatedAt(row.createdAt || (row.originalEntry && this.extractOriginalMessageCreatedAt(row.originalEntry)));
-        const cachedSummary = cacheKey && this.originalParseSummaryCache.has(cacheKey)
-            ? this.originalParseSummaryCache.get(cacheKey)
-            : null;
-        const issueText = cachedSummary
-            ? (Array.isArray(cachedSummary.focusIssues) ? cachedSummary.focusIssues : [])
+        const storedSummary = this.getOriginalStoredParseSummary(row);
+        const issueText = storedSummary
+            ? (Array.isArray(storedSummary.focusIssues) ? storedSummary.focusIssues : [])
                 .map((issue) => this.formatOriginalParseIssue(issue))
                 .join('\n')
             : '';
-        const summaryText = cachedSummary && cachedSummary.summaryText
-            ? String(cachedSummary.summaryText)
+        const summaryText = storedSummary && storedSummary.summaryText
+            ? String(storedSummary.summaryText)
             : '';
-        const text = cachedSummary
+        const text = storedSummary
             ? `${row.userName || ''}（${regionLabel || ''}）\n添加时间：${createdAtText}\n${summaryText}\n${issueText}\n${rawMessage}`.replace(/\r/g, '')
             : `${row.userName || ''}（${regionLabel || ''}）\n添加时间：${createdAtText}\n${rawMessage}`.replace(/\r/g, '');
         const logicalLines = text
             .split('\n')
-            .reduce((sum, line) => sum + Math.max(1, Math.ceil(String(line || '').length / 32)), 0);
-        const estimated = 64 + (logicalLines * 20);
+            .reduce((sum, line) => sum + Math.max(1, Math.ceil(String(line || '').length / 30)), 0);
+        const estimated = 72 + (logicalLines * 20) + 8;
         const height = Math.max(72, Math.min(1400, estimated));
-        if (cacheKey && cachedSummary) {
+        if (cacheKey) {
             this.originalRowHeightCache.set(cacheKey, height);
             if (this.originalRowHeightCache.size > 8000) {
                 const first = this.originalRowHeightCache.keys().next();
@@ -3638,9 +3956,10 @@ class UserManager {
             totalAmount = this.calculateOriginalOrderTotal(message, userName, regionKey);
         }
         const parseSummary = this.buildOriginalParseSummaryFromPreview(validation.preview, regionKey, totalAmount);
+        const hitNumberAmounts = this.buildOriginalHitNumberAmountsFromPreview(validation.preview, regionKey, userName);
         const createdAt = this.extractOriginalMessageCreatedAt(regionData.originalData[index]);
         const editedAt = new Date().toISOString();
-        regionData.originalData[index] = this.buildStoredOriginalDataEntry(message, totalAmount, createdAt, editedAt, parseSummary);
+        regionData.originalData[index] = this.buildStoredOriginalDataEntry(message, totalAmount, createdAt, editedAt, parseSummary, hitNumberAmounts);
         this.invalidateOriginalDataDerivedCaches();
         this.recalculateUserData(userName, regionKey);
         this.renderAllSections();
@@ -4015,7 +4334,9 @@ class UserManager {
         if (options && options.render === false) {
             return;
         }
-        this.renderAllSections();
+        this.renderAllSections({
+            refreshViewRegionBar: false
+        });
     }
 
     // 设置汇总模式

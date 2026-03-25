@@ -266,6 +266,7 @@ class MessageProcessor {
             version: 'v1.1',
             defaultOdds: this.SYSTEM_DEFAULT_ODDS,
             tailShorthandAsSeparateGroups: true,
+            ignoreTokens: ['特码'],
             amountUnits: this.getSystemAmountUnits(),
             anchorSemantics: {
                 '各': { amountDistribute: 'per_number', enabled: true },
@@ -2634,8 +2635,43 @@ class MessageProcessor {
         return cursor;
     }
 
+    getAmountWrapperClosingChar(ch) {
+        const wrapperMap = {
+            '(': ')',
+            '（': '）',
+            '[': ']',
+            '【': '】',
+            '{': '}',
+            '｛': '｝',
+            '<': '>',
+            '《': '》',
+            '〈': '〉',
+            '「': '」',
+            '『': '』',
+            '〔': '〕'
+        };
+        return wrapperMap[ch] || '';
+    }
+
     parseAmountTokenAt(text, startIndex) {
-        const slice = String(text || '').slice(startIndex);
+        const sourceText = String(text || '');
+        let cursor = startIndex;
+        while (cursor < sourceText.length && /\s/.test(sourceText[cursor])) {
+            cursor += 1;
+        }
+
+        const wrapperClosers = [];
+        while (cursor < sourceText.length) {
+            const closingChar = this.getAmountWrapperClosingChar(sourceText[cursor]);
+            if (!closingChar) break;
+            wrapperClosers.push(closingChar);
+            cursor += 1;
+            while (cursor < sourceText.length && /\s/.test(sourceText[cursor])) {
+                cursor += 1;
+            }
+        }
+
+        const slice = sourceText.slice(cursor);
         const match = slice.match(/^(?:[0-9０-９]+(?:[.．][0-9０-９]+)?|[零〇一二两三四五六七八九十百千万]+)/);
         if (!match) return null;
         const amountText = match[0];
@@ -2646,15 +2682,38 @@ class MessageProcessor {
             amount = NaN;
         }
         if (!Number.isFinite(amount) || amount <= 0) return null;
-        let endIndex = startIndex + amountText.length;
-        while (endIndex < text.length && /\s/.test(text[endIndex])) {
+
+        let endIndex = cursor + amountText.length;
+        while (endIndex < sourceText.length && /\s/.test(sourceText[endIndex])) {
             endIndex += 1;
         }
-        const unitToken = this.matchConfiguredAmountSuffixAt(text, endIndex, { includeGeneric: true });
+
+        let unitToken = this.matchConfiguredAmountSuffixAt(sourceText, endIndex, { includeGeneric: true });
         if (unitToken) {
             endIndex += unitToken.length;
         }
-        while (endIndex < text.length && this.isAnchorTrailingChar(text[endIndex])) {
+
+        while (endIndex < sourceText.length && /\s/.test(sourceText[endIndex])) {
+            endIndex += 1;
+        }
+        while (wrapperClosers.length > 0 && sourceText[endIndex] === wrapperClosers[wrapperClosers.length - 1]) {
+            wrapperClosers.pop();
+            endIndex += 1;
+            while (endIndex < sourceText.length && /\s/.test(sourceText[endIndex])) {
+                endIndex += 1;
+            }
+            if (!unitToken) {
+                unitToken = this.matchConfiguredAmountSuffixAt(sourceText, endIndex, { includeGeneric: true });
+                if (unitToken) {
+                    endIndex += unitToken.length;
+                }
+                while (endIndex < sourceText.length && /\s/.test(sourceText[endIndex])) {
+                    endIndex += 1;
+                }
+            }
+        }
+
+        while (endIndex < sourceText.length && this.isAnchorTrailingChar(sourceText[endIndex])) {
             endIndex += 1;
         }
         return {
@@ -4051,6 +4110,7 @@ class MessageProcessor {
         if (!implicitTargetAmountInfo) return raw;
 
         let prefix = implicitTargetAmountInfo.prefix;
+        const rawPrefix = String(implicitTargetAmountInfo.rawPrefix || prefix);
         const amountToken = implicitTargetAmountInfo.amountToken;
         const suffix = implicitTargetAmountInfo.suffix || '';
         const normalizedAmountToken = String(amountToken || '').replace(/[．。]/g, '.');
@@ -4063,6 +4123,24 @@ class MessageProcessor {
         const amountValue = this.safeParseAmountCandidate(amountToken);
         const hasAmountSuffixHint = !!this.matchConfiguredAmountSuffixAt(suffix, 0, { includeGeneric: true }) || /[#*￥¥]/.test(suffix);
         const hasAnchorHint = /[号肖数]$/.test(prefix);
+        const prefixLooksLikePureNumberList = explicitPrefixNumbers.length > 0
+            && /^[0-9０-９\s,，.．。/\-—~～+*#=]+$/u.test(prefix);
+        const amountIsPureChineseToken = this.isPureChineseAmountToken(amountToken);
+        const rawPrefixHasExplicitShorthandSeparator = /[.．。/\-—=+#*]/u.test(rawPrefix);
+
+        if (!hasAmountSuffixHint && !hasAnchorHint && prefixLooksLikePureNumberList) {
+            if (explicitPrefixNumbers.length > 1) {
+                return raw;
+            }
+            if (!amountIsPureChineseToken) {
+                if (!rawPrefixHasExplicitShorthandSeparator) {
+                    return raw;
+                }
+                if (!Number.isFinite(amountValue) || amountValue <= 49) {
+                    return raw;
+                }
+            }
+        }
 
         if (!hasAmountSuffixHint && !hasAnchorHint) {
             if (explicitPrefixNumbers.length > 1 && Number.isFinite(amountValue) && amountValue <= 49) {
@@ -4147,10 +4225,12 @@ class MessageProcessor {
         ));
         if (!match) return null;
 
+        const rawPrefix = String(match[1] || '');
         const prefix = this.normalizeImplicitPrefix(match[1]);
         if (!prefix) return null;
 
         return {
+            rawPrefix,
             prefix,
             amountToken: match[2],
             suffix: match[3] || '',
@@ -4284,28 +4364,34 @@ class MessageProcessor {
         const suffixPattern = this.buildSafeSingleNumberSuffixPattern();
         const optionalSuffix = suffixPattern ? `(?:\\s*(${suffixPattern}))?` : '';
         const dottedRequiredSuffix = suffixPattern ? `\\s*(${suffixPattern})` : '';
+        const trailingNoisePattern = `(?:[#*\`'"$￥¥,，.．。:：;；~～!！?？]*)`;
         const primaryPattern = new RegExp(
-            `^(\\d{1,2})\\s*(?:[-=/#*])\\s*(${amountPattern})${optionalSuffix}(?:[#*\`'"$￥¥]*)$`,
+            `^(\\d{1,2})\\s*(?:[.．。]+\\s*)?([-=/#*])\\s*(${amountPattern})${optionalSuffix}${trailingNoisePattern}$`,
             'u'
         );
         const dottedUnitPattern = new RegExp(
-            `^(\\d{1,2})\\s*[.．。]\\s*(${amountPattern})${dottedRequiredSuffix}(?:[#*\`'"$￥¥]*)$`,
+            `^(\\d{1,2})\\s*[.．。]\\s*(${amountPattern})${dottedRequiredSuffix}${trailingNoisePattern}$`,
             'u'
         );
-        const match = normalized.match(primaryPattern) || normalized.match(dottedUnitPattern);
+        const primaryMatch = normalized.match(primaryPattern);
+        const dottedMatch = primaryMatch ? null : normalized.match(dottedUnitPattern);
+        const match = primaryMatch || dottedMatch;
         if (!match) return null;
         const number = parseInt(match[1], 10);
         if (!this.validateNumber(number)) return null;
-        const amountText = String(match[2] || '').trim();
+        const connector = primaryMatch ? String(match[2] || '') : '';
+        const amountText = String((primaryMatch ? match[3] : match[2]) || '').trim();
         const amount = this.safeParseAmountCandidate(amountText);
-        const unitToken = String(match[3] || '').trim();
+        const unitToken = String((primaryMatch ? match[4] : match[3]) || '').trim();
         if (!Number.isFinite(amount)) return null;
-        if (amount <= 49 && !unitToken) return null;
+        const allowSlashWithChineseAmount = connector === '/' && this.isPureChineseAmountToken(amountText);
+        if (amount <= 49 && !unitToken && !allowSlashWithChineseAmount) return null;
         return {
             number,
             amount,
             amountText,
             unitToken,
+            connector,
             rewritten: `${this.formatNumber(number)}各${amountText}`
         };
     }
@@ -4535,6 +4621,10 @@ class MessageProcessor {
         } catch (error) {
             return NaN;
         }
+    }
+
+    isPureChineseAmountToken(token) {
+        return /^[零〇一二两三四五六七八九十百千万]+$/u.test(String(token || '').trim());
     }
 
     safeExtractExplicitNumbers(text) {
@@ -4937,6 +5027,70 @@ class MessageProcessor {
             accountingRegionKey,
             accountingRegionLabel: this.getRegionLabelByKey(accountingRegionKey)
         };
+    }
+
+    normalizeStoredHitNumberAmounts(hitNumberAmounts) {
+        if (!hitNumberAmounts || typeof hitNumberAmounts !== 'object') return null;
+        const normalized = {};
+        const appendAmount = (rawNumber, rawAmount) => {
+            const numericNumber = Number.parseInt(rawNumber, 10);
+            const amount = Number(rawAmount);
+            if (!Number.isInteger(numericNumber) || !this.validateNumber(numericNumber)) return;
+            if (!Number.isFinite(amount) || amount <= 0) return;
+            const formattedNumber = this.formatNumber(numericNumber);
+            normalized[formattedNumber] = (Number(normalized[formattedNumber]) || 0) + amount;
+        };
+
+        if (hitNumberAmounts instanceof Map) {
+            hitNumberAmounts.forEach((amount, number) => appendAmount(number, amount));
+        } else {
+            Object.entries(hitNumberAmounts).forEach(([number, amount]) => appendAmount(number, amount));
+        }
+
+        const keys = Object.keys(normalized).sort((left, right) => Number(left) - Number(right));
+        if (keys.length === 0) return null;
+        const ordered = {};
+        keys.forEach((key) => {
+            ordered[key] = normalized[key];
+        });
+        return ordered;
+    }
+
+    buildHitNumberAmountsForRegion(entries = [], options = {}) {
+        const clientId = options && options.clientId ? options.clientId : '';
+        const accountingInfo = options && options.accountingInfo
+            ? options.accountingInfo
+            : this.getEffectiveRegionAccountingInfo(clientId);
+        const targetRegionKey = this.normalizeRegionKey(
+            options && options.regionKey ? options.regionKey : '',
+            accountingInfo && accountingInfo.defaultRegion ? accountingInfo.defaultRegion : this.getDefaultRegionKey()
+        );
+        const hitNumberAmounts = new Map();
+
+        (Array.isArray(entries) ? entries : []).forEach((entry) => {
+            if (!entry || typeof entry !== 'object') return;
+            const accounting = this.resolveEntryAccountingInfo(entry.regionKey || targetRegionKey, {
+                clientId,
+                accountingInfo
+            });
+            const accountingRegionKey = this.normalizeRegionKey(
+                accounting && accounting.accountingRegionKey ? accounting.accountingRegionKey : targetRegionKey,
+                targetRegionKey
+            );
+            if (accountingRegionKey !== targetRegionKey) return;
+            const amount = Number(entry.amount);
+            const numbers = Array.isArray(entry.numbers) ? entry.numbers : [];
+            if (!Number.isFinite(amount) || amount <= 0 || numbers.length === 0) return;
+
+            numbers.forEach((number) => {
+                const numericNumber = Number.parseInt(number, 10);
+                if (!Number.isInteger(numericNumber) || !this.validateNumber(numericNumber)) return;
+                const formattedNumber = this.formatNumber(numericNumber);
+                hitNumberAmounts.set(formattedNumber, (Number(hitNumberAmounts.get(formattedNumber)) || 0) + amount);
+            });
+        });
+
+        return this.normalizeStoredHitNumberAmounts(hitNumberAmounts);
     }
 
     parseFlexibleAmount(token) {
@@ -5651,6 +5805,7 @@ class MessageProcessor {
             const touchedRegionKeys = new Set();
             const orderTotalsByRegion = new Map();
             const entryCountsByRegion = new Map();
+            const hitNumberAmountsByRegion = new Map();
             const defaultOdds = this.getEffectiveDefaultOdds(clientId);
             const ensureRegionPayoutData = (regionData) => {
                 if (!regionData || !Array.isArray(regionData.data)) return null;
@@ -5708,6 +5863,7 @@ class MessageProcessor {
                 entryCountsByRegion.set(regionKey, (Number(entryCountsByRegion.get(regionKey)) || 0) + 1);
                 const payoutData = ensureRegionPayoutData(userData);
                 const entryOdds = this.normalizeOddsValue(entry.odds, defaultOdds);
+                const regionHitNumberAmounts = hitNumberAmountsByRegion.get(regionKey) || new Map();
                 entry.numbers.forEach(number => {
                     const formattedNumber = this.formatNumber(number);
                     const dataItem = userData.data.find(item => item.number === formattedNumber);
@@ -5725,7 +5881,14 @@ class MessageProcessor {
                     if (payoutItem) {
                         payoutItem.value += entry.amount * entryOdds;
                     }
+                    regionHitNumberAmounts.set(
+                        formattedNumber,
+                        (Number(regionHitNumberAmounts.get(formattedNumber)) || 0) + (Number(entry.amount) || 0)
+                    );
                 });
+                if (regionHitNumberAmounts.size > 0) {
+                    hitNumberAmountsByRegion.set(regionKey, regionHitNumberAmounts);
+                }
             });
 
             touchedRegionKeys.forEach(regionKey => {
@@ -5742,13 +5905,18 @@ class MessageProcessor {
                     countedEntryCount: Number(entryCountsByRegion.get(regionKey)) || 0,
                     countedAmount: totalAmountForRegion
                 });
-                userData.originalData.push({
+                const hitNumberAmounts = this.normalizeStoredHitNumberAmounts(hitNumberAmountsByRegion.get(regionKey));
+                const originalDataEntry = {
                     message: originalMessageForStorage,
                     totalAmount: totalAmountForRegion,
                     createdAt,
                     parseSummary,
                     ...(editedAt ? { editedAt } : {}),
-                });
+                };
+                if (hitNumberAmounts) {
+                    originalDataEntry.hitNumberAmounts = hitNumberAmounts;
+                }
+                userData.originalData.push(originalDataEntry);
                 userData.totalCount = userData.data.reduce((sum, item) => sum + item.value, 0);
             });
 

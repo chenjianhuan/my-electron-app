@@ -11,7 +11,7 @@
         <div class="top-menu-primary">
             <button onclick="openModal('recognize')">消息识别</button>
             <button onclick="copyClientData()">复制当前范围</button>
-            <button onclick="exportClientDataDocument()">导出当前范围</button>
+            <button id="exportCurrentScopeBtn" onclick="exportClientDataDocument()">导出当前范围</button>
             <button onclick="openHedgeReportModal()">数据上报</button>
         </div>
         <div class="top-menu-meta">
@@ -893,7 +893,7 @@
             <h2 id="editOriginalModalTitle">编辑原始消息</h2>
             <textarea id="editOriginalMessageInput" rows="5" placeholder="请输入消息，例如：14.21.13各20"></textarea>
             <div class="modal-buttons">
-                <button class="confirm-button" onclick="userManager.saveEditedOriginalData()">保存</button>
+                <button id="editOriginalSaveBtn" class="confirm-button" onclick="handleSaveEditedOriginalData()">保存</button>
                 <button class="cancel-button" onclick="userManager.closeEditOriginalModal()">取消</button>
             </div>
         </div>
@@ -917,6 +917,20 @@
                         <div class="settings-item-desc">当前软件版本。</div>
                     </div>
                     <div id="settingsVersionValue" class="settings-item-value">v-</div>
+                </div>
+                <div class="settings-item">
+                    <div class="settings-item-main">
+                        <div class="settings-item-title">导出数据备份</div>
+                        <div class="settings-item-desc">导出当前客户数据、规则配置和本地偏好，方便重装后恢复。</div>
+                    </div>
+                    <button class="edit-button" type="button" onclick="exportLotteryBackup()">导出</button>
+                </div>
+                <div class="settings-item">
+                    <div class="settings-item-main">
+                        <div class="settings-item-title">导入数据备份</div>
+                        <div class="settings-item-desc">用备份文件覆盖当前本机客户数据、规则配置和本地偏好；导入前会自动留存当前数据备份。</div>
+                    </div>
+                    <button class="edit-button" type="button" onclick="importLotteryBackup()">导入</button>
                 </div>
                 <div class="settings-item">
                     <div class="settings-item-main">
