@@ -25,11 +25,7 @@ jobs:
 
   build:
     needs: prepare_release
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
 
     steps:
       - name: Checkout
@@ -56,15 +52,9 @@ jobs:
         run: npm install
 
       - name: Build (Windows)
-        if: matrix.os == 'windows-latest'
         run: node scripts/run-electron-builder.js --with-ai-models --win nsis --publish never
 
-      - name: Build (macOS)
-        if: matrix.os == 'macos-latest'
-        run: node scripts/run-electron-builder.js --with-ai-models --mac dmg zip --publish never
-
       - name: Publish Windows assets
-        if: matrix.os == 'windows-latest'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
@@ -72,21 +62,6 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             dist/*.exe
-            dist/*.blockmap
-            dist/latest*.yml
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Publish macOS assets
-        if: matrix.os == 'macos-latest'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          overwrite_files: true
-          fail_on_unmatched_files: true
-          files: |
-            dist/*.dmg
-            dist/*.zip
             dist/*.blockmap
             dist/latest*.yml
         env:
