@@ -5696,15 +5696,52 @@ class MessageProcessor {
 
     // 处理消息并更新用户数据
     processMessageForUser(message, userName, options = {}) {
+        const getTimingNow = () => (
+            typeof performance !== 'undefined' && typeof performance.now === 'function'
+                ? performance.now()
+                : Date.now()
+        );
+        const roundTimingMs = (value) => {
+            const numericValue = Number(value);
+            if (!Number.isFinite(numericValue)) return 0;
+            return Math.round(numericValue * 100) / 100;
+        };
+        const collectTiming = !!(options && options.collectTiming);
+        const timing = collectTiming
+            ? {
+                startedAtMs: getTimingNow(),
+                usedPreview: false,
+                entryCount: 0,
+                steps: []
+            }
+            : null;
+        const pushTimingStep = (label, startedAt, extra = {}) => {
+            if (!timing || !label) return 0;
+            const durationMs = roundTimingMs(getTimingNow() - Number(startedAt || timing.startedAtMs || 0));
+            timing.steps.push({
+                label: String(label),
+                durationMs,
+                ...extra
+            });
+            return durationMs;
+        };
         try {
             const clientId = this.normalizeRuleClientId(options && options.clientId ? options.clientId : userName);
             const allowPartial = !options || options.allowPartial !== false;
+            const parseStartedAt = getTimingNow();
             const normalizedPreview = this.normalizePreviewResultForProcessing(options && options.previewResult, {
                 message
             });
             const parsedMessage = normalizedPreview
                 ? normalizedPreview.parsedMessage
                 : this.parseMessage(message, { clientId, allowPartial });
+            if (timing) {
+                timing.usedPreview = !!normalizedPreview;
+                timing.entryCount = Array.isArray(parsedMessage && parsedMessage.entries) ? parsedMessage.entries.length : 0;
+                pushTimingStep(normalizedPreview ? 'normalize-preview' : 'parse-message', parseStartedAt, {
+                    entryCount: timing.entryCount
+                });
+            }
             const regionAccountingInfo = this.getEffectiveRegionAccountingInfo(clientId);
             const providedOriginalMessage = options && Object.prototype.hasOwnProperty.call(options, 'originalMessage')
                 ? String(options.originalMessage == null ? '' : options.originalMessage)
@@ -5742,6 +5779,7 @@ class MessageProcessor {
             }
             const blockedPlayEntries = Array.isArray(parsedMessage.playEntries) ? parsedMessage.playEntries : [];
             const unresolvedLines = Array.isArray(parsedMessage.unresolvedLines) ? parsedMessage.unresolvedLines : [];
+            const validateStartedAt = getTimingNow();
             const blockingPlayIssues = blockedPlayEntries
                 .filter(entry => this.isBlockingPlayEntry(entry))
                 .map(entry => this.buildBlockingIssueFromPlayEntry(entry));
@@ -5759,6 +5797,11 @@ class MessageProcessor {
                     ? normalizedPreview.ignoredUnresolvedLines
                     : unresolvedLines.filter((issue) => !blockingIssueKeys.has(this.buildPreviewIssueKey(issue))))
                 : unresolvedLines.filter((issue) => !blockingIssueKeys.has(this.buildPreviewIssueKey(issue)));
+            pushTimingStep('validate-preview', validateStartedAt, {
+                unresolvedLineCount: unresolvedLines.length,
+                blockingLineCount: blockingUnresolvedLines.length,
+                blockedPlayCount: blockedPlayEntries.length
+            });
             if (blockingPlayIssues.length > 0) {
                 const previewText = blockedPlayEntries
                     .slice(0, 2)
@@ -5806,6 +5849,7 @@ class MessageProcessor {
             const orderTotalsByRegion = new Map();
             const entryCountsByRegion = new Map();
             const hitNumberAmountsByRegion = new Map();
+            const regionRuntimeCache = new Map();
             const defaultOdds = this.getEffectiveDefaultOdds(clientId);
             const ensureRegionPayoutData = (regionData) => {
                 if (!regionData || !Array.isArray(regionData.data)) return null;
@@ -5847,29 +5891,55 @@ class MessageProcessor {
                 });
                 return regionData.payoutData;
             };
-            parsedMessage.entries.forEach(entry => {
-                const accounting = this.resolveEntryAccountingInfo(entry && entry.regionKey ? entry.regionKey : '', {
-                    clientId,
-                    accountingInfo: regionAccountingInfo
-                });
-                const regionKey = accounting.accountingRegionKey || (userManager.getActiveRegion ? userManager.getActiveRegion() : 'new_ao');
+            const getRegionRuntime = (regionKey) => {
+                if (regionRuntimeCache.has(regionKey)) {
+                    return regionRuntimeCache.get(regionKey);
+                }
                 const userData = userManager.getUserRegionData
                     ? userManager.getUserRegionData(userName, regionKey)
                     : userManager.getUserData(userName);
                 if (!userData) {
                     throw new Error(`地区数据不存在: ${regionKey}`);
                 }
+                const payoutData = ensureRegionPayoutData(userData);
+                const dataItemMap = new Map();
+                userData.data.forEach((item) => {
+                    if (!item || typeof item.number !== 'string') return;
+                    dataItemMap.set(item.number, item);
+                });
+                const payoutItemMap = new Map();
+                if (Array.isArray(payoutData)) {
+                    payoutData.forEach((item) => {
+                        if (!item || typeof item.number !== 'string') return;
+                        payoutItemMap.set(item.number, item);
+                    });
+                }
+                const runtime = {
+                    userData,
+                    payoutData,
+                    dataItemMap,
+                    payoutItemMap
+                };
+                regionRuntimeCache.set(regionKey, runtime);
+                return runtime;
+            };
+            const applyEntriesStartedAt = getTimingNow();
+            parsedMessage.entries.forEach(entry => {
+                const accounting = this.resolveEntryAccountingInfo(entry && entry.regionKey ? entry.regionKey : '', {
+                    clientId,
+                    accountingInfo: regionAccountingInfo
+                });
+                const regionKey = accounting.accountingRegionKey || (userManager.getActiveRegion ? userManager.getActiveRegion() : 'new_ao');
+                const runtime = getRegionRuntime(regionKey);
+                const userData = runtime.userData;
                 touchedRegionKeys.add(regionKey);
                 entryCountsByRegion.set(regionKey, (Number(entryCountsByRegion.get(regionKey)) || 0) + 1);
-                const payoutData = ensureRegionPayoutData(userData);
                 const entryOdds = this.normalizeOddsValue(entry.odds, defaultOdds);
                 const regionHitNumberAmounts = hitNumberAmountsByRegion.get(regionKey) || new Map();
                 entry.numbers.forEach(number => {
                     const formattedNumber = this.formatNumber(number);
-                    const dataItem = userData.data.find(item => item.number === formattedNumber);
-                    const payoutItem = Array.isArray(payoutData)
-                        ? payoutData.find(item => item.number === formattedNumber)
-                        : null;
+                    const dataItem = runtime.dataItemMap.get(formattedNumber) || null;
+                    const payoutItem = runtime.payoutItemMap.get(formattedNumber) || null;
                     if (dataItem) {
                         dataItem.value += entry.amount;
                         totalAdded += entry.amount;
@@ -5890,11 +5960,19 @@ class MessageProcessor {
                     hitNumberAmountsByRegion.set(regionKey, regionHitNumberAmounts);
                 }
             });
+            pushTimingStep('apply-entries', applyEntriesStartedAt, {
+                entryCount: parsedMessage.entries.length,
+                regionCount: touchedRegionKeys.size
+            });
 
+            const appendRowsStartedAt = getTimingNow();
             touchedRegionKeys.forEach(regionKey => {
-                const userData = userManager.getUserRegionData
-                    ? userManager.getUserRegionData(userName, regionKey)
-                    : userManager.getUserData(userName);
+                const runtime = regionRuntimeCache.get(regionKey);
+                const userData = runtime && runtime.userData
+                    ? runtime.userData
+                    : (userManager.getUserRegionData
+                        ? userManager.getUserRegionData(userName, regionKey)
+                        : userManager.getUserData(userName));
                 if (!userData) return;
                 const totalAmountForRegion = Number(orderTotalsByRegion.get(regionKey)) || 0;
                 const parseSummary = this.buildStoredOriginalParseSummary({
@@ -5919,18 +5997,29 @@ class MessageProcessor {
                 userData.originalData.push(originalDataEntry);
                 userData.totalCount = userData.data.reduce((sum, item) => sum + item.value, 0);
             });
+            pushTimingStep('append-original-data', appendRowsStartedAt, {
+                regionCount: touchedRegionKeys.size
+            });
 
+            const invalidateStartedAt = getTimingNow();
             if (userManager && typeof userManager.invalidateOriginalDataDerivedCaches === 'function' && touchedRegionKeys.size > 0) {
                 userManager.invalidateOriginalDataDerivedCaches();
             }
             if (userManager && typeof userManager.invalidateUserListDerivedCaches === 'function' && touchedRegionKeys.size > 0) {
                 userManager.invalidateUserListDerivedCaches();
             }
+            pushTimingStep('invalidate-caches', invalidateStartedAt, {
+                touchedRegionCount: touchedRegionKeys.size
+            });
 
             // 保存数据
+            const persistStartedAt = getTimingNow();
             if (!options || options.persist !== false) {
                 userManager.saveUserData();
             }
+            pushTimingStep('persist', persistStartedAt, {
+                persisted: !options || options.persist !== false
+            });
 
             let newTotal = 0;
             const userRecord = allUsers[userName];
@@ -5953,7 +6042,15 @@ class MessageProcessor {
                 blockingUnresolvedLineCount: blockingUnresolvedLines.length,
                 blockingUnresolvedLines,
                 totalAdded,
-                newTotal
+                newTotal,
+                ...(timing
+                    ? {
+                        timing: {
+                            ...timing,
+                            totalMs: roundTimingMs(getTimingNow() - Number(timing.startedAtMs || 0))
+                        }
+                    }
+                    : {})
             };
         } catch (error) {
             const response = {
@@ -5977,6 +6074,12 @@ class MessageProcessor {
             if (error && Array.isArray(error.blockingUnresolvedLines)) {
                 response.blockingUnresolvedLines = error.blockingUnresolvedLines;
                 response.blockingUnresolvedLineCount = error.blockingUnresolvedLines.length;
+            }
+            if (timing) {
+                response.timing = {
+                    ...timing,
+                    totalMs: roundTimingMs(getTimingNow() - Number(timing.startedAtMs || 0))
+                };
             }
             return response;
         }

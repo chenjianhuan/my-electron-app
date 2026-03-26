@@ -109,11 +109,22 @@ let regionWinningNumbers = {
 const activeBusyTaskKeys = new Set();
 const activeBusyNoticeMap = new Map();
 let busyNoticeSeq = 0;
+let recognizeTimingSeq = 0;
+const recognizeTimingHistory = [];
+const recognizePreviewCache = new Map();
+let clipboardDupLedgerCache = null;
+let clipboardDupLedgerDirty = false;
+let clipboardDupLedgerPersistTimer = null;
+let clipboardDupLedgerWarmupStarted = false;
 
 const CLIPBOARD_DUP_LEDGER_KEY = 'clipboardDupLedger.v1';
 const CLIPBOARD_DUP_KEEP_DAYS = 7;
+const CLIPBOARD_DUP_LEDGER_PERSIST_DELAY_MS = 180;
+const CLIPBOARD_DUP_LEDGER_MESSAGE_MAX_LENGTH = 1200;
 const CLIPBOARD_ASSIST_HINT_SHOWN_KEY = 'clipboardAssistHintShown.v1';
 const CLIPBOARD_ASSIST_ENABLED_KEY = 'clipboardAssistEnabled.v1';
+const RECOGNIZE_PREVIEW_CACHE_TTL_MS = 30 * 1000;
+const RECOGNIZE_PREVIEW_CACHE_LIMIT = 24;
 const RECOGNIZE_INPUT_MODE_KEY = 'recognizeInputMode.v1';
 const RECOGNIZE_ATTRIBUTE_PANEL_VISIBLE_KEY = 'recognizeAttributePanelVisible.v1';
 const RECOGNIZE_SIDE_GROUP_STATE_KEY = 'recognizeSideGroupState.v1';
@@ -295,6 +306,242 @@ function waitForNextPaint() {
             requestAnimationFrame(resolve);
         });
     });
+}
+
+function getPerfNow() {
+    return (typeof performance !== 'undefined' && typeof performance.now === 'function')
+        ? performance.now()
+        : Date.now();
+}
+
+function roundTimingMs(value) {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) return 0;
+    return Math.round(numericValue * 100) / 100;
+}
+
+function createRecognizeTimingSnapshot(action = 'add', meta = {}) {
+    return {
+        id: ++recognizeTimingSeq,
+        action: String(action || 'add'),
+        startedAt: new Date().toISOString(),
+        startedAtMs: getPerfNow(),
+        marks: [],
+        userStages: [],
+        ...meta
+    };
+}
+
+function pushRecognizeTimingMark(snapshot, label, startedAt, extra = {}) {
+    if (!snapshot || !label) return 0;
+    const durationMs = roundTimingMs(getPerfNow() - Number(startedAt || snapshot.startedAtMs || 0));
+    snapshot.marks.push({
+        label: String(label),
+        durationMs,
+        ...extra
+    });
+    return durationMs;
+}
+
+function buildRecognizeTimingPlainText(snapshot) {
+    if (!snapshot) return '';
+    const summary = `[recognize-timing] ${snapshot.action} total=${snapshot.totalMs}ms users=${Number(snapshot.userCount) || 0}${snapshot.success === false ? ' failed' : ''}`;
+    const plainLines = [summary];
+    if (Array.isArray(snapshot.marks) && snapshot.marks.length > 0) {
+        snapshot.marks.forEach((mark) => {
+            if (!mark || !mark.label) return;
+            const suffixParts = [];
+            if (mark.userName) suffixParts.push(`user=${mark.userName}`);
+            if (Number.isFinite(Number(mark.entryCount))) suffixParts.push(`entries=${Number(mark.entryCount)}`);
+            if (Number.isFinite(Number(mark.ledgerWrites))) suffixParts.push(`writes=${Number(mark.ledgerWrites)}`);
+            plainLines.push(`  mark ${mark.label}=${mark.durationMs}ms${suffixParts.length ? ` ${suffixParts.join(' ')}` : ''}`);
+        });
+    }
+    if (Array.isArray(snapshot.userStages) && snapshot.userStages.length > 0) {
+        snapshot.userStages.forEach((stage) => {
+            if (!stage) return;
+            plainLines.push(`  user ${stage.userName || '-'} resolve=${roundTimingMs(stage.resolveMs)}ms process=${roundTimingMs(stage.processMs)}ms`);
+            const processSteps = stage.processTiming && Array.isArray(stage.processTiming.steps)
+                ? stage.processTiming.steps
+                : [];
+            processSteps.forEach((step) => {
+                if (!step || !step.label) return;
+                plainLines.push(`    process ${step.label}=${step.durationMs}ms`);
+            });
+        });
+    }
+    return plainLines.join('\n');
+}
+
+function logRecognizeTimingSnapshot(snapshot) {
+    if (!snapshot) return;
+    const summary = `[recognize-timing] ${snapshot.action} total=${snapshot.totalMs}ms users=${Number(snapshot.userCount) || 0}${snapshot.success === false ? ' failed' : ''}`;
+    const plainText = buildRecognizeTimingPlainText(snapshot);
+    if (typeof console === 'undefined') return;
+    if (typeof console.groupCollapsed === 'function') {
+        console.groupCollapsed(summary);
+    } else if (typeof console.log === 'function') {
+        console.log(summary);
+    }
+
+    if (Array.isArray(snapshot.marks) && snapshot.marks.length > 0 && typeof console.table === 'function') {
+        console.table(snapshot.marks);
+    }
+
+    if (Array.isArray(snapshot.userStages) && snapshot.userStages.length > 0) {
+        const stageRows = [];
+        snapshot.userStages.forEach((stage) => {
+            stageRows.push({
+                userName: stage.userName,
+                phase: 'resolve',
+                durationMs: stage.resolveMs,
+                usedPreviewWorker: stage.usedPreviewWorker === true,
+                entryCount: '',
+                usedPreview: ''
+            });
+            stageRows.push({
+                userName: stage.userName,
+                phase: 'process(total)',
+                durationMs: stage.processMs,
+                usedPreviewWorker: '',
+                entryCount: stage.processTiming && Number.isFinite(Number(stage.processTiming.entryCount))
+                    ? Number(stage.processTiming.entryCount)
+                    : '',
+                usedPreview: stage.processTiming && stage.processTiming.usedPreview === true
+                    ? 'yes'
+                    : 'no'
+            });
+            const processSteps = stage.processTiming && Array.isArray(stage.processTiming.steps)
+                ? stage.processTiming.steps
+                : [];
+            processSteps.forEach((step) => {
+                stageRows.push({
+                    userName: stage.userName,
+                    phase: `process:${step.label}`,
+                    durationMs: step.durationMs,
+                    usedPreviewWorker: '',
+                    entryCount: '',
+                    usedPreview: ''
+                });
+            });
+        });
+        if (typeof console.table === 'function') {
+            console.table(stageRows);
+        } else if (typeof console.log === 'function') {
+            console.log(stageRows);
+        }
+    }
+
+    if (typeof console.log === 'function') {
+        console.log(plainText);
+        console.log(snapshot);
+    }
+    if (typeof console.groupEnd === 'function') {
+        console.groupEnd();
+    }
+}
+
+function finalizeRecognizeTimingSnapshot(snapshot, extra = {}) {
+    if (!snapshot) return null;
+    const finalized = {
+        ...snapshot,
+        ...extra,
+        totalMs: roundTimingMs(getPerfNow() - Number(snapshot.startedAtMs || 0))
+    };
+    delete finalized.startedAtMs;
+    recognizeTimingHistory.push(finalized);
+    if (recognizeTimingHistory.length > 30) {
+        recognizeTimingHistory.shift();
+    }
+    if (typeof window !== 'undefined') {
+        const plainText = buildRecognizeTimingPlainText(finalized);
+        window.__recognizeTimingHistory = recognizeTimingHistory.slice();
+        window.__lastRecognizeTiming = finalized;
+        window.__lastRecognizeTimingText = plainText;
+        const actionKey = String(finalized.action || '').trim();
+        const existingActionMap = window.__lastRecognizeTimingsByAction
+            && typeof window.__lastRecognizeTimingsByAction === 'object'
+            ? window.__lastRecognizeTimingsByAction
+            : {};
+        window.__lastRecognizeTimingsByAction = {
+            ...existingActionMap,
+            [actionKey]: finalized
+        };
+        if (actionKey === 'add') {
+            window.__lastRecognizeAddTiming = finalized;
+            window.__lastRecognizeAddTimingText = plainText;
+        } else if (actionKey === 'save') {
+            window.__lastRecognizeSaveTiming = finalized;
+        } else if (actionKey === 'recognize-close-refresh') {
+            window.__lastRecognizeCloseRefreshTiming = finalized;
+        }
+    }
+    logRecognizeTimingSnapshot(finalized);
+    return finalized;
+}
+
+function buildRecognizePreviewCacheKey(message, clientId = '', allowPartial = true) {
+    return `${String(clientId || '').trim()}\u0000${allowPartial ? 'partial' : 'strict'}\u0000${String(message || '')}`;
+}
+
+function pruneRecognizePreviewCache(now = Date.now()) {
+    recognizePreviewCache.forEach((entry, key) => {
+        const ts = Number(entry && entry.ts) || 0;
+        if (!ts || (now - ts) > RECOGNIZE_PREVIEW_CACHE_TTL_MS) {
+            recognizePreviewCache.delete(key);
+        }
+    });
+    while (recognizePreviewCache.size > RECOGNIZE_PREVIEW_CACHE_LIMIT) {
+        const oldestKey = recognizePreviewCache.keys().next().value;
+        if (!oldestKey) break;
+        recognizePreviewCache.delete(oldestKey);
+    }
+}
+
+function getCachedRecognizePreview(message, clientId = '', options = {}) {
+    pruneRecognizePreviewCache();
+    const key = buildRecognizePreviewCacheKey(message, clientId, !options || options.allowPartial !== false);
+    const cached = recognizePreviewCache.get(key);
+    if (!cached) return null;
+    recognizePreviewCache.delete(key);
+    recognizePreviewCache.set(key, {
+        ...cached,
+        ts: Date.now()
+    });
+    return cached.result || null;
+}
+
+function setCachedRecognizePreview(message, clientId = '', options = {}, result = null) {
+    const key = buildRecognizePreviewCacheKey(message, clientId, !options || options.allowPartial !== false);
+    recognizePreviewCache.set(key, {
+        ts: Date.now(),
+        result
+    });
+    pruneRecognizePreviewCache();
+    return result;
+}
+
+function clearRecognizePreviewCache() {
+    recognizePreviewCache.clear();
+}
+
+function scheduleClipboardDupLedgerWarmup() {
+    if (clipboardDupLedgerWarmupStarted) {
+        return;
+    }
+    clipboardDupLedgerWarmupStarted = true;
+    const warmup = () => {
+        try {
+            loadClipboardDupLedger();
+        } catch (error) {
+            // ignore ledger warmup failures
+        }
+    };
+    if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(() => warmup(), { timeout: 1200 });
+        return;
+    }
+    setTimeout(warmup, 400);
 }
 
 function resolveBusyTaskText(value, fallback = '') {
@@ -544,6 +791,15 @@ const ATTRIBUTE_GROUPS = [
 document.addEventListener('DOMContentLoaded', function() {
     console.log('页面加载完成，开始初始化...');
     window.addEventListener('message-processor-config-changed', handleMessageProcessorConfigChanged);
+    window.addEventListener('pagehide', () => {
+        flushClipboardDupLedger({ force: true });
+    });
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+            flushClipboardDupLedger({ force: true });
+        }
+    });
+    scheduleClipboardDupLedgerWarmup();
     migrateRecognizeLayoutProfile();
     initAppVersion();
     initAppAccessStatus();
@@ -10171,6 +10427,12 @@ async function requestRecognizePreview(message, clientId, options = {}) {
     const rawMessage = String(message || '');
     const safeClientId = String(clientId || '').trim();
     const allowPartial = !options || options.allowPartial !== false;
+    if (!options || options.useCache !== false) {
+        const cachedPreview = getCachedRecognizePreview(rawMessage, safeClientId, { allowPartial });
+        if (cachedPreview) {
+            return cachedPreview;
+        }
+    }
     if (options && options.preferWorker) {
         try {
             const workerPreview = await requestRealtimePreviewFromWorker(rawMessage, {
@@ -10178,25 +10440,26 @@ async function requestRecognizePreview(message, clientId, options = {}) {
                 allowPartial
             });
             if (workerPreview && !shouldFallbackToMainThreadPreview(workerPreview)) {
-                return workerPreview;
+                return setCachedRecognizePreview(rawMessage, safeClientId, { allowPartial }, workerPreview);
             }
         } catch (error) {
             console.warn('实时预览工作线程失败，回退主线程:', error);
         }
     }
     if (!window.messageProcessor || typeof window.messageProcessor.previewMessage !== 'function') {
-        return {
+        return setCachedRecognizePreview(rawMessage, safeClientId, { allowPartial }, {
             success: false,
             error: '解析器不可用'
-        };
+        });
     }
-    return window.messageProcessor.previewMessage(rawMessage, {
+    return setCachedRecognizePreview(rawMessage, safeClientId, { allowPartial }, window.messageProcessor.previewMessage(rawMessage, {
         clientId: safeClientId,
         allowPartial
-    });
+    }));
 }
 
 function handleMessageProcessorConfigChanged(event) {
+    clearRecognizePreviewCache();
     const config = event && event.detail && typeof event.detail === 'object' ? event.detail : null;
     syncRealtimePreviewWorkerConfig({
         config,
@@ -11614,17 +11877,37 @@ async function pullClipboardSnapshotOnce() {
         if (action !== 'import') return;
         if (!recognizeClipboardMonitoring || !isRecognizeModalOpen()) return;
         if (String(messageTextarea.value || '').trim()) return;
-
-        messageTextarea.value = content;
-        normalizeMessageTextareaWhitespace(messageTextarea, { preserveSelection: false });
-        clearMessageLineError();
-        syncRecognizeMessageAutoHeight();
-        renderMessageLineNumbers();
-        syncRecognizeRegionSelectionFromMessage(messageTextarea.value);
-        previewMessage({ silent: true });
+        await applyClipboardImportedRecognizeMessage(content);
     } catch (error) {
         // ignore clipboard snapshot failures
     }
+}
+
+async function applyClipboardImportedRecognizeMessage(content, options = {}) {
+    const messageTextarea = document.getElementById('message');
+    if (!messageTextarea) return;
+
+    const mode = options && options.mode === 'append' ? 'append' : 'replace';
+    const incomingText = normalizeEditorWhitespace(String(content || '')).trim();
+    if (!incomingText) return;
+
+    const currentText = String(messageTextarea.value || '').trim();
+    messageTextarea.value = mode === 'append'
+        ? [currentText, incomingText].filter(Boolean).join('\n')
+        : incomingText;
+
+    normalizeMessageTextareaWhitespace(messageTextarea, { preserveSelection: false });
+    clearMessageLineError();
+    syncRecognizeMessageAutoHeight();
+    renderMessageLineNumbers();
+    syncRecognizeRegionSelectionFromMessage(messageTextarea.value);
+
+    await waitForNextPaint();
+    if (!messageTextarea.isConnected || !isRecognizeModalOpen()) return;
+    void previewMessage({
+        silent: true,
+        preferWorker: true
+    });
 }
 
 function getTodayDateKey() {
@@ -11635,7 +11918,17 @@ function getTodayDateKey() {
     return `${y}-${m}-${d}`;
 }
 
-function canonicalizeMessageForDuplicate(rawText) {
+function canonicalizeMessageForDuplicate(rawText, options = {}) {
+    const previewCanonical = options
+        && options.previewResult
+        && options.previewResult.success
+        && options.previewResult.result
+        && typeof options.previewResult.result.canonicalMessage === 'string'
+        ? String(options.previewResult.result.canonicalMessage).trim()
+        : '';
+    if (previewCanonical) {
+        return previewCanonical;
+    }
     let text = String(rawText || '')
         .replace(/\r\n/g, '\n')
         .replace(/\r/g, '\n')
@@ -11670,17 +11963,35 @@ function hashMessageKey(text) {
 }
 
 function loadClipboardDupLedger() {
+    if (clipboardDupLedgerCache && typeof clipboardDupLedgerCache === 'object') {
+        return clipboardDupLedgerCache;
+    }
     try {
         const raw = localStorage.getItem(CLIPBOARD_DUP_LEDGER_KEY);
-        if (!raw) return {};
+        if (!raw) {
+            clipboardDupLedgerCache = {};
+            clipboardDupLedgerDirty = false;
+            return clipboardDupLedgerCache;
+        }
         const parsed = JSON.parse(raw);
-        return parsed && typeof parsed === 'object' ? parsed : {};
+        const normalized = pruneClipboardDupLedgerEntries(parsed);
+        clipboardDupLedgerCache = normalized;
+        clipboardDupLedgerDirty = false;
+        return clipboardDupLedgerCache;
     } catch (error) {
-        return {};
+        clipboardDupLedgerCache = {};
+        clipboardDupLedgerDirty = false;
+        return clipboardDupLedgerCache;
     }
 }
 
 function clearClipboardDupLedger() {
+    if (clipboardDupLedgerPersistTimer) {
+        clearTimeout(clipboardDupLedgerPersistTimer);
+        clipboardDupLedgerPersistTimer = null;
+    }
+    clipboardDupLedgerCache = {};
+    clipboardDupLedgerDirty = false;
     try {
         localStorage.removeItem(CLIPBOARD_DUP_LEDGER_KEY);
     } catch (error) {
@@ -11688,21 +11999,72 @@ function clearClipboardDupLedger() {
     }
 }
 
-function saveClipboardDupLedger(ledger) {
+function normalizeClipboardDupLedgerMessage(message) {
+    const text = String(message || '').trim();
+    if (!text) return '';
+    if (text.length <= CLIPBOARD_DUP_LEDGER_MESSAGE_MAX_LENGTH) {
+        return text;
+    }
+    return `${text.slice(0, CLIPBOARD_DUP_LEDGER_MESSAGE_MAX_LENGTH)}\n...`;
+}
+
+function pruneClipboardDupLedgerEntries(ledger, nowTs = Date.now()) {
+    const map = ledger && typeof ledger === 'object' ? { ...ledger } : {};
+    const minTs = nowTs - (CLIPBOARD_DUP_KEEP_DAYS * 24 * 60 * 60 * 1000);
+    Object.keys(map).forEach((key) => {
+        const dateKey = String(key).split('|')[0] || '';
+        const ts = Date.parse(`${dateKey}T00:00:00`);
+        if (!Number.isFinite(ts) || ts < minTs) {
+            delete map[key];
+            return;
+        }
+        const entry = map[key];
+        if (entry && typeof entry === 'object') {
+            map[key] = {
+                ...entry,
+                message: normalizeClipboardDupLedgerMessage(entry.message || entry.msg || '')
+            };
+        }
+    });
+    return map;
+}
+
+function flushClipboardDupLedger(options = {}) {
+    if (clipboardDupLedgerPersistTimer) {
+        clearTimeout(clipboardDupLedgerPersistTimer);
+        clipboardDupLedgerPersistTimer = null;
+    }
+    if (!clipboardDupLedgerDirty) {
+        return;
+    }
     try {
-        const map = ledger && typeof ledger === 'object' ? { ...ledger } : {};
-        const minTs = Date.now() - (CLIPBOARD_DUP_KEEP_DAYS * 24 * 60 * 60 * 1000);
-        Object.keys(map).forEach((key) => {
-            const dateKey = String(key).split('|')[0] || '';
-            const ts = Date.parse(`${dateKey}T00:00:00`);
-            if (!Number.isFinite(ts) || ts < minTs) {
-                delete map[key];
-            }
-        });
+        const map = pruneClipboardDupLedgerEntries(clipboardDupLedgerCache || {});
+        clipboardDupLedgerCache = map;
         localStorage.setItem(CLIPBOARD_DUP_LEDGER_KEY, JSON.stringify(map));
+        clipboardDupLedgerDirty = false;
     } catch (error) {
         // ignore storage failures
     }
+}
+
+function scheduleClipboardDupLedgerPersist(delayMs = CLIPBOARD_DUP_LEDGER_PERSIST_DELAY_MS) {
+    if (clipboardDupLedgerPersistTimer) {
+        return;
+    }
+    clipboardDupLedgerPersistTimer = setTimeout(() => {
+        clipboardDupLedgerPersistTimer = null;
+        flushClipboardDupLedger();
+    }, Math.max(0, Number(delayMs) || 0));
+}
+
+function saveClipboardDupLedger(ledger, options = {}) {
+    clipboardDupLedgerCache = ledger && typeof ledger === 'object' ? ledger : {};
+    clipboardDupLedgerDirty = true;
+    if (options && options.immediate === true) {
+        flushClipboardDupLedger({ force: true });
+        return;
+    }
+    scheduleClipboardDupLedgerPersist();
 }
 
 function buildClipboardDupKey(dateKey, userName, regionKey, canonicalText) {
@@ -11881,15 +12243,17 @@ function hasRecordedOriginalMessageForDuplicate(userName, regionKey, canonicalTe
     });
 }
 
-function markMessageRecordedForToday(message, userNames, regionKeys) {
-    const canonicalText = canonicalizeMessageForDuplicate(message);
+function markMessageRecordedForToday(message, userNames, regionKeys, options = {}) {
+    const canonicalText = options && typeof options.canonicalText === 'string' && options.canonicalText.trim()
+        ? String(options.canonicalText).trim()
+        : canonicalizeMessageForDuplicate(message, options);
     if (!canonicalText || !Array.isArray(userNames) || userNames.length === 0) return;
 
     const dateKey = getTodayDateKey();
     const activeRegions = Array.isArray(regionKeys) && regionKeys.length > 0 ? regionKeys : [getActiveRecognizeRegionKey()];
     const ledger = loadClipboardDupLedger();
     const now = Date.now();
-    const sourceMessage = String(message || '').trim().slice(0, 6000);
+    const sourceMessage = normalizeClipboardDupLedgerMessage(message);
     userNames.forEach((userName) => {
         activeRegions.forEach((regionKey) => {
             const key = buildClipboardDupKey(dateKey, userName, regionKey, canonicalText);
@@ -12113,18 +12477,9 @@ async function handleClipboardTextChanged(payload) {
         }
     }
     const latestCurrentText = String(messageTextarea.value || '').trim();
-    if (action === 'append') {
-        messageTextarea.value = [latestCurrentText, content].filter(Boolean).join('\n');
-    } else {
-        messageTextarea.value = content;
-    }
-    normalizeMessageTextareaWhitespace(messageTextarea, { preserveSelection: false });
-
-    clearMessageLineError();
-    syncRecognizeMessageAutoHeight();
-    renderMessageLineNumbers();
-    syncRecognizeRegionSelectionFromMessage(messageTextarea.value);
-    previewMessage({ silent: true });
+    await applyClipboardImportedRecognizeMessage(content, {
+        mode: action === 'append' || !!latestCurrentText ? 'append' : 'replace'
+    });
 }
 
 function updateMessageWithAttributeIntersection() {
@@ -14325,9 +14680,22 @@ function closeModal() {
     refreshRecognizePreviousMessagePreview();
     clearRecognizeEditContext();
     if (shouldRefreshMainSections && window.userManager && typeof window.userManager.renderAllSections === 'function') {
-        window.userManager.renderAllSections({
-            refreshRecognizePreviousMessagePreview: false,
-            refreshRecognizePanels: false
+        requestAnimationFrame(() => {
+            if (!window.userManager || typeof window.userManager.renderAllSections !== 'function') return;
+            const timingSnapshot = createRecognizeTimingSnapshot('recognize-close-refresh', {
+                userCount: 0,
+                messageLength: 0,
+                mode: 'close'
+            });
+            const refreshStartedAt = getPerfNow();
+            window.userManager.renderAllSections({
+                refreshRecognizePreviousMessagePreview: false,
+                refreshRecognizePanels: false
+            });
+            pushRecognizeTimingMark(timingSnapshot, 'render-all-sections', refreshStartedAt);
+            finalizeRecognizeTimingSnapshot(timingSnapshot, {
+                success: true
+            });
         });
     }
 }
@@ -15148,6 +15516,13 @@ function buildRecognizePreviewHtml(previewResult, rawValue) {
 async function previewMessage(options = {}) {
     const silent = !!(options && options.silent);
     const realtime = !!(options && options.realtime);
+    const interactive = options && Object.prototype.hasOwnProperty.call(options, 'interactive')
+        ? options.interactive !== false
+        : !realtime;
+    const updateTextarea = options && Object.prototype.hasOwnProperty.call(options, 'updateTextarea')
+        ? options.updateTextarea !== false
+        : !realtime;
+    const preferWorker = realtime || !!(options && options.preferWorker);
     try {
         const messageTextarea = document.getElementById('message');
         const resultElement = document.getElementById('result');
@@ -15189,9 +15564,9 @@ async function previewMessage(options = {}) {
 
         const previewClientId = getPreviewClientId();
         const resolved = await resolveMessageAmbiguityFlow(message, previewClientId, {
-            interactive: !realtime,
-            updateTextarea: !realtime,
-            preferWorker: realtime
+            interactive,
+            updateTextarea,
+            preferWorker
         });
         if (realtime) {
             const latestRawValue = messageTextarea ? String(messageTextarea.value || '') : '';
@@ -15283,6 +15658,7 @@ async function previewMessage(options = {}) {
 // 确认编辑
 async function confirmEdit() {
     return runBusyTask(async () => {
+        let timingSnapshot = null;
         try {
             const messageTextarea = document.getElementById('message');
             const rawInputMessage = messageTextarea
@@ -15350,11 +15726,34 @@ async function confirmEdit() {
                 return;
             }
 
+            timingSnapshot = createRecognizeTimingSnapshot(recognizeEditContext ? 'save' : 'add', {
+                userCount: selectedUsers.length,
+                messageLength: message.length,
+                mode: recognizeEditContext ? 'edit' : 'create'
+            });
+
+            const shouldYieldBetweenUsers = selectedUsers.length > 1;
+            let lastYieldAt = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+                ? performance.now()
+                : Date.now();
+            const maybeYieldBetweenUsers = async () => {
+                if (!shouldYieldBetweenUsers) return;
+                const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+                    ? performance.now()
+                    : Date.now();
+                if ((now - lastYieldAt) < 16) return;
+                await waitForNextPaint();
+                lastYieldAt = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+                    ? performance.now()
+                    : Date.now();
+            };
+
             let totalAdded = 0;
             let maxIgnoredLineCount = 0;
             const createdAt = new Date().toISOString();
             const preparedOperations = [];
             for (const userName of selectedUsers) {
+                const resolveStartedAt = getPerfNow();
                 const resolved = await resolveMessageAmbiguityFlow(message, userName, {
                     interactive: true,
                     updateTextarea: true,
@@ -15376,17 +15775,47 @@ async function confirmEdit() {
                     userName,
                     message,
                     originalMessageForStorage,
-                    previewResult
+                    previewResult,
+                    duplicateCanonicalText: previewResult
+                        && previewResult.success
+                        && previewResult.result
+                        && typeof previewResult.result.canonicalMessage === 'string'
+                        ? String(previewResult.result.canonicalMessage).trim()
+                        : '',
+                    regionKeys: (() => {
+                        const entries = collectPreviewStandardEntries((previewResult || {}).result || {});
+                        const keys = Array.from(new Set(
+                            entries
+                                .map((item) => String(item && item.regionKey ? item.regionKey : '').trim())
+                                .filter(Boolean)
+                        ));
+                        return keys.length > 0 ? keys : [getActiveRecognizeRegionKey()];
+                    })()
                 });
+                const resolveMs = pushRecognizeTimingMark(timingSnapshot, 'resolve-message', resolveStartedAt, {
+                    userName,
+                    preferWorker: true
+                });
+                timingSnapshot.userStages.push({
+                    userName,
+                    resolveMs,
+                    processMs: 0,
+                    usedPreviewWorker: true,
+                    processTiming: null
+                });
+                await maybeYieldBetweenUsers();
             }
 
             let appliedOperationCount = 0;
-            for (const operation of preparedOperations) {
+            for (let index = 0; index < preparedOperations.length; index += 1) {
+                const operation = preparedOperations[index];
+                const processStartedAt = getPerfNow();
                 const result = messageProcessor.processMessageForUser(operation.message, operation.userName, {
                     clientId: operation.userName,
                     originalMessage: operation.originalMessageForStorage,
                     createdAt,
                     previewResult: operation.previewResult,
+                    collectTiming: true,
                     persist: false
                 });
                 if (!result.success) {
@@ -15395,22 +15824,48 @@ async function confirmEdit() {
                     }
                     renderInlineParseError(result.message, { context: 'confirm', clientId: operation.userName });
                     showError('处理失败', `${operation.userName}: ${result.message}`);
+                    finalizeRecognizeTimingSnapshot(timingSnapshot, {
+                        success: false,
+                        failedUser: operation.userName,
+                        errorMessage: result.message,
+                        appliedOperationCount
+                    });
                     return;
+                }
+                const processMs = pushRecognizeTimingMark(timingSnapshot, 'process-message', processStartedAt, {
+                    userName: operation.userName,
+                    entryCount: result.timing && Number.isFinite(Number(result.timing.entryCount))
+                        ? Number(result.timing.entryCount)
+                        : ''
+                });
+                if (timingSnapshot.userStages[index]) {
+                    timingSnapshot.userStages[index].processMs = processMs;
+                    timingSnapshot.userStages[index].processTiming = result.timing || null;
                 }
                 appliedOperationCount += 1;
                 totalAdded += result.totalAdded || 0;
                 maxIgnoredLineCount = Math.max(maxIgnoredLineCount, Number(result.ignoredLineCount) || 0);
+                await maybeYieldBetweenUsers();
             }
             if (preparedOperations.length > 0 && userManager && typeof userManager.saveUserData === 'function') {
+                const saveStartedAt = getPerfNow();
                 userManager.saveUserData();
+                pushRecognizeTimingMark(timingSnapshot, 'save-user-data', saveStartedAt);
             }
 
-            selectedUsers.forEach((userName) => {
-                const regionKeys = extractRegionKeysForDuplicate(message, userName);
-                markMessageRecordedForToday(message, [userName], regionKeys);
+            const ledgerStartedAt = getPerfNow();
+            preparedOperations.forEach((operation) => {
+                markMessageRecordedForToday(operation.originalMessageForStorage, [operation.userName], operation.regionKeys, {
+                    previewResult: operation.previewResult,
+                    canonicalText: operation.duplicateCanonicalText
+                });
+            });
+            pushRecognizeTimingMark(timingSnapshot, 'mark-duplicate-ledger', ledgerStartedAt, {
+                ledgerWrites: preparedOperations.length
             });
 
             recognizeDeferredMainRefresh = true;
+            const refreshStartedAt = getPerfNow();
             userManager.renderAllSections({
                 refreshCurrentUserDisplay: false,
                 refreshTitles: false,
@@ -15424,7 +15879,9 @@ async function confirmEdit() {
                 refreshRecognizePreviousMessagePreview: 'auto',
                 refreshRecognizePanels: false
             });
+            pushRecognizeTimingMark(timingSnapshot, 'render-recognize-side-effects', refreshStartedAt);
             const resultElement = document.getElementById('result');
+            const resetUiStartedAt = getPerfNow();
             if (messageTextarea) {
                 messageTextarea.value = '';
                 syncRecognizeMessageAutoHeight();
@@ -15437,9 +15894,16 @@ async function confirmEdit() {
             setRecognizePreviewError('');
             clearMessageLineError();
             renderMessageLineNumbers();
+            pushRecognizeTimingMark(timingSnapshot, 'reset-recognize-ui', resetUiStartedAt);
             const ignoredHint = maxIgnoredLineCount > 0
                 ? `，另有 ${maxIgnoredLineCount} 行未识别内容已忽略`
                 : '';
+            finalizeRecognizeTimingSnapshot(timingSnapshot, {
+                success: true,
+                appliedOperationCount,
+                totalAdded,
+                ignoredLineCount: maxIgnoredLineCount
+            });
             showSuccess(`消息处理成功，已添加到 ${selectedUsers.length} 位客户，总数: ${totalAdded}${ignoredHint}`);
         } catch (error) {
             if (error && error.message) {
@@ -15448,6 +15912,10 @@ async function confirmEdit() {
                     clientId: recognizeEditContext ? recognizeEditContext.userName : getPreviewClientId()
                 });
             }
+            finalizeRecognizeTimingSnapshot(timingSnapshot, {
+                success: false,
+                errorMessage: error && error.message ? error.message : '确认失败'
+            });
             showError('确认失败', error.message);
         }
     }, {
