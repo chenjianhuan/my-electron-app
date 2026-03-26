@@ -75,6 +75,11 @@ let customerSettingsContext = {
     source: 'list',
     defaultTab: 'settlement'
 };
+let customerSettingsDeferredMainRefresh = false;
+let customerSettingsDeferredRefreshContext = {
+    scope: 'global',
+    clientId: ''
+};
 let customerSettingsReturnSideGroupState = null;
 let customerSettingsReturnRuleContext = null;
 let recognizeDetectedRegionKeys = [];
@@ -2206,6 +2211,7 @@ function closeCustomerSettingsModal() {
     if (window.userManager && typeof window.userManager.renderUserList === 'function') {
         window.userManager.renderUserList();
     }
+    flushCustomerSettingsDeferredMainRefresh({ refreshUserList: false });
 }
 
 function saveSharedCustomerSettlementSettings() {
@@ -5314,15 +5320,185 @@ function renderMessageTypeWhitelistExplain(info = {}) {
     `;
 }
 
-function recalculateAllUsersByRuleChange() {
-    if (!window.userManager || typeof window.userManager.recalculateAllUsersData !== 'function') {
+async function recalculateAllUsersByRuleChange(options = {}) {
+    if (!window.userManager) {
         return;
     }
-    window.userManager.recalculateAllUsersData();
-    if (typeof window.userManager.saveUserData === 'function') {
-        window.userManager.saveUserData();
+    const scope = options && options.scope === 'client' ? 'client' : 'global';
+    const clientId = String(options && options.clientId ? options.clientId : '').trim();
+    reportRendererStage('rule-change-recalc:start', { scope, clientId });
+    if (scope === 'client' && clientId) {
+        if (typeof requestRecognizePreview === 'function') {
+            reportRendererStage('rule-change-recalc:client-only-worker', { clientId });
+            await recalculateScopedUsersViaPreviewWorker([clientId], options);
+        } else if (typeof window.userManager.recalculateUsersDataAsync === 'function') {
+            reportRendererStage('rule-change-recalc:client-only-async', { clientId });
+            await window.userManager.recalculateUsersDataAsync([clientId], options);
+        } else if (typeof window.userManager.recalculateUsersData === 'function') {
+            reportRendererStage('rule-change-recalc:client-only', { clientId });
+            window.userManager.recalculateUsersData([clientId]);
+        } else if (typeof window.userManager.recalculateAllUsersData === 'function') {
+            reportRendererStage('rule-change-recalc:fallback-all', { clientId });
+            window.userManager.recalculateAllUsersData();
+        }
+    } else if (typeof window.userManager.recalculateUsersDataAsync === 'function') {
+        reportRendererStage('rule-change-recalc:all-users-async', {});
+        await window.userManager.recalculateUsersDataAsync(Object.keys(window.userManager.users || {}), options);
+    } else if (typeof window.userManager.recalculateAllUsersData === 'function') {
+        reportRendererStage('rule-change-recalc:all-users', {});
+        window.userManager.recalculateAllUsersData(options);
     }
+    reportRendererStage('rule-change-recalc:done', { scope, clientId });
     scheduleRecognizePreviewRefreshAfterConfigChange();
+}
+
+function normalizeRuleChangeRefreshContext(options = {}) {
+    return {
+        scope: options && options.scope === 'client' ? 'client' : 'global',
+        clientId: String(options && options.clientId ? options.clientId : '').trim()
+    };
+}
+
+function shouldRefreshVisibleMainScopeAfterRuleChange(scope = 'global', clientId = '') {
+    if (scope !== 'client' || !clientId) {
+        return true;
+    }
+    if (!window.userManager || typeof window.userManager.isUserInCurrentScope !== 'function') {
+        return true;
+    }
+    return window.userManager.isUserInCurrentScope(clientId);
+}
+
+function scheduleMainSectionsRefreshAfterRuleChange(options = {}) {
+    if (!window.userManager || typeof window.userManager.renderAllSections !== 'function') {
+        return;
+    }
+    const { scope, clientId } = normalizeRuleChangeRefreshContext(options);
+    const refreshUserList = options && options.refreshUserList !== false;
+    const refreshVisibleScope = shouldRefreshVisibleMainScopeAfterRuleChange(scope, clientId);
+    requestAnimationFrame(() => {
+        if (!window.userManager || typeof window.userManager.renderAllSections !== 'function') {
+            return;
+        }
+        window.userManager.renderAllSections({
+            refreshCurrentUserDisplay: refreshVisibleScope,
+            refreshTitles: refreshVisibleScope,
+            refreshSection: refreshVisibleScope,
+            refreshSortedResults: refreshVisibleScope,
+            refreshOriginalData: refreshVisibleScope,
+            refreshUserList,
+            refreshViewRegionBar: false,
+            refreshRegionPnlPanel: refreshVisibleScope,
+            refreshDashboardStatus: true,
+            refreshRecognizePreviousMessagePreview: false,
+            refreshRecognizePanels: false
+        });
+    });
+}
+
+function reportRendererStage(stage = '', meta = null) {
+    const safeStage = String(stage || '').trim();
+    if (!safeStage) return;
+    const payload = {
+        stage: safeStage,
+        at: new Date().toISOString(),
+        meta: meta && typeof meta === 'object' ? meta : null
+    };
+    try {
+        if (ipcRenderer && typeof ipcRenderer.send === 'function') {
+            ipcRenderer.send('debug:renderer-stage', payload);
+        }
+    } catch (error) {
+        // ignore debug channel failures
+    }
+    try {
+        window.__lastRendererStage = payload;
+    } catch (error) {
+        // ignore
+    }
+    console.log('[renderer-stage]', payload);
+}
+
+function queueCustomerSettingsDeferredMainRefresh(options = {}) {
+    const nextContext = normalizeRuleChangeRefreshContext(options);
+    if (!customerSettingsDeferredMainRefresh) {
+        customerSettingsDeferredMainRefresh = true;
+        customerSettingsDeferredRefreshContext = nextContext;
+        return;
+    }
+    if (customerSettingsDeferredRefreshContext.scope === 'global' || nextContext.scope === 'global') {
+        customerSettingsDeferredRefreshContext = {
+            scope: 'global',
+            clientId: ''
+        };
+        return;
+    }
+    if (customerSettingsDeferredRefreshContext.clientId !== nextContext.clientId) {
+        customerSettingsDeferredRefreshContext = {
+            scope: 'global',
+            clientId: ''
+        };
+        return;
+    }
+    customerSettingsDeferredRefreshContext = nextContext;
+}
+
+function flushCustomerSettingsDeferredMainRefresh(options = {}) {
+    if (!customerSettingsDeferredMainRefresh) {
+        return;
+    }
+    const pendingContext = customerSettingsDeferredRefreshContext || {
+        scope: 'global',
+        clientId: ''
+    };
+    customerSettingsDeferredMainRefresh = false;
+    customerSettingsDeferredRefreshContext = {
+        scope: 'global',
+        clientId: ''
+    };
+    scheduleMainSectionsRefreshAfterRuleChange({
+        ...pendingContext,
+        refreshUserList: options && options.refreshUserList !== false
+    });
+}
+
+function refreshAnchorRuleMutationUi(options = {}) {
+    reportRendererStage('anchor-ui-refresh:start', null);
+    renderDefaultOddsState();
+    reportRendererStage('anchor-ui-refresh:default-odds', null);
+    renderAnchorParseModeState();
+    reportRendererStage('anchor-ui-refresh:parse-mode', null);
+    renderAnchorAliasList();
+    reportRendererStage('anchor-ui-refresh:list', null);
+    if (typeof renderAnchorImpactPreview === 'function') {
+        renderAnchorImpactPreview();
+        reportRendererStage('anchor-ui-refresh:impact-preview', null);
+    }
+    const { scope, clientId } = normalizeRuleChangeRefreshContext(options);
+    const refreshRecognizePreview = options && options.refreshRecognizePreview !== false;
+    const refreshMainSections = !!(options && options.refreshMainSections);
+    if (refreshRecognizePreview) {
+        scheduleRecognizePreviewRefreshAfterConfigChange({
+            immediate: !!(options && options.immediateRecognizePreview)
+        });
+        reportRendererStage('anchor-ui-refresh:recognize-scheduled', { scope, clientId });
+    }
+    if (!refreshMainSections) {
+        reportRendererStage('anchor-ui-refresh:main-skipped', { scope, clientId });
+        return;
+    }
+    if (isRecognizeModalVisible()) {
+        recognizeDeferredMainRefresh = true;
+        reportRendererStage('anchor-ui-refresh:recognize-deferred', { scope, clientId });
+        return;
+    }
+    if (customerSettingsContext && customerSettingsContext.source === 'list') {
+        queueCustomerSettingsDeferredMainRefresh({ scope, clientId });
+        reportRendererStage('anchor-ui-refresh:list-deferred', { scope, clientId });
+        return;
+    }
+    scheduleMainSectionsRefreshAfterRuleChange({ scope, clientId });
+    reportRendererStage('anchor-ui-refresh:main-scheduled', { scope, clientId });
 }
 
 function isRecognizeModalVisible() {
@@ -7919,7 +8095,7 @@ function renderAnchorRuleDrawerPreview() {
     output.innerHTML = buildAnchorRuleDrawerCompareHtml(previewPair, sample);
 }
 
-function saveAnchorRuleFromDrawer() {
+async function saveAnchorRuleFromDrawer() {
     try {
         if (!window.messageProcessor || typeof window.messageProcessor.upsertAnchorAlias !== 'function') {
             throw new Error('当前版本不支持词义规则');
@@ -7941,19 +8117,58 @@ function saveAnchorRuleFromDrawer() {
         const enabled = !!enabledInput.checked;
         const drawerScope = scopeSelect.value === 'client' ? 'client' : 'global';
         const drawerClientId = String(scopeSelect.dataset.clientId || '').trim();
+        const originalToken = String(anchorRuleDrawerState && anchorRuleDrawerState.editToken ? anchorRuleDrawerState.editToken : '').trim();
+        const originalScope = String(anchorRuleDrawerState && anchorRuleDrawerState.editSource ? anchorRuleDrawerState.editSource : '').trim() === 'client'
+            ? 'client'
+            : 'global';
+        const originalClientId = originalScope === 'client'
+            ? String(anchorRuleDrawerState && anchorRuleDrawerState.editClientId ? anchorRuleDrawerState.editClientId : '').trim()
+            : '';
         if (drawerScope === 'client' && !drawerClientId) {
             throw new Error('请先选择当前客户后再保存到客户规则');
         }
         const scope = drawerScope;
         const clientId = drawerScope === 'client' ? drawerClientId : '';
+        reportRendererStage('anchor-save:ready', {
+            scope,
+            clientId,
+            source: customerSettingsContext && customerSettingsContext.source ? customerSettingsContext.source : '',
+            token,
+            mode
+        });
         const mappedMode = enabled ? mode : 'ignore';
+        const shouldRemoveOriginal = !!originalToken && (
+            originalToken !== token
+            || originalScope !== scope
+            || originalClientId !== clientId
+        );
+        if (shouldRemoveOriginal && typeof window.messageProcessor.removeAnchorAlias === 'function') {
+            reportRendererStage('anchor-save:before-remove-original', {
+                originalToken,
+                originalScope,
+                originalClientId
+            });
+            window.messageProcessor.removeAnchorAlias(originalToken, {
+                scope: originalScope,
+                clientId: originalClientId
+            });
+            reportRendererStage('anchor-save:after-remove-original', {
+                originalToken,
+                originalScope,
+                originalClientId
+            });
+        }
+        reportRendererStage('anchor-save:before-upsert', { scope, clientId, token, mappedMode });
         const result = window.messageProcessor.upsertAnchorAlias(token, mappedMode, {
             scope,
             clientId,
             odds: parsedOdds.empty ? null : parsedOdds.value
         });
+        reportRendererStage('anchor-save:after-upsert', { scope, clientId, token: result && result.token ? result.token : token });
         if (getAnchorRuleScope() !== scope) {
+            reportRendererStage('anchor-save:before-set-scope', { scope, clientId });
             setAnchorRuleScope(scope);
+            reportRendererStage('anchor-save:after-set-scope', { scope, clientId });
         }
         if (scope === 'client' && clientId && anchorRuleTargetClientId !== clientId) {
             anchorRuleTargetClientId = clientId;
@@ -7961,26 +8176,34 @@ function saveAnchorRuleFromDrawer() {
             if (selectInput) {
                 selectInput.value = clientId;
             }
+            reportRendererStage('anchor-save:before-handle-scope-change', { scope, clientId });
             handleAnchorRuleScopeChange();
+            reportRendererStage('anchor-save:after-handle-scope-change', { scope, clientId });
         }
         const oddsTip = result && result.odds != null && Number.isFinite(Number(result.odds))
             ? `，倍率 ${formatNumericAmount(Number(result.odds))}`
             : '，倍率跟随默认';
         showSuccess(`${getScopeDisplayName(scope)}词义规则已保存：${result.token} -> ${enabled ? getAnchorModeLabel(mode) : getAnchorModeLabel('ignore')}${oddsTip}`);
-        recalculateAllUsersByRuleChange();
+        reportRendererStage('anchor-save:history-refresh-skipped', { scope, clientId });
+        reportRendererStage('anchor-save:before-close-drawer', { scope, clientId });
         closeAnchorRuleDrawer();
-        if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
-            window.userManager.renderAllSections();
-        } else {
-            renderAnchorAliasList();
-            renderAnchorImpactPreview();
-            refreshRegionPnlPanel();
-        }
-        previewMessage({ silent: true });
+        reportRendererStage('anchor-save:after-close-drawer', { scope, clientId });
+        reportRendererStage('anchor-save:before-refresh-ui', { scope, clientId });
+        refreshAnchorRuleMutationUi({
+            scope,
+            clientId,
+            refreshMainSections: false,
+            refreshRecognizePreview: true
+        });
+        reportRendererStage('anchor-save:after-refresh-ui', { scope, clientId });
         if (scope === 'global') {
             markAnchorGuideStepCompleted('anchor');
         }
+        reportRendererStage('anchor-save:done', { scope, clientId });
     } catch (error) {
+        reportRendererStage('anchor-save:error', {
+            message: error && error.message ? error.message : '未知错误'
+        });
         showError('保存词义规则失败', error.message || '未知错误');
     }
 }
@@ -8038,24 +8261,37 @@ function batchSetAnchorRowsStatus(rows, shouldEnable) {
         if (!window.messageProcessor || typeof window.messageProcessor.upsertAnchorAlias !== 'function') {
             throw new Error('当前版本不支持词义规则');
         }
-        const { scope, clientId } = getRuleContext({ requireClientForClientScope: true });
-        const targetSource = scope === 'client' ? 'client' : 'global';
-        const editableRows = rows.filter(row => row && row.source === targetSource);
+        const editableRows = rows.filter(row => row && row.source !== 'system');
+        if (editableRows.length === 0) {
+            showError('批量操作失败', '系统默认规则为只读，不能批量修改');
+            return;
+        }
         editableRows.forEach((row) => {
+            const scope = row.source === 'client' ? 'client' : 'global';
+            const clientId = scope === 'client' ? String(row.clientId || '').trim() : '';
+            if (scope === 'client' && !clientId) return;
             const mode = shouldEnable ? row.mode : 'ignore';
             const odds = row && row.customOdds ? row.scopedOdds : null;
             window.messageProcessor.upsertAnchorAlias(row.token, mode, { scope, clientId, odds });
         });
-        recalculateAllUsersByRuleChange();
-        if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
-            window.userManager.renderAllSections();
-        } else {
-            renderAnchorAliasList();
-            renderAnchorImpactPreview();
-            refreshRegionPnlPanel();
-        }
-        previewMessage({ silent: true });
-        showSuccess(`${getScopeDisplayName(scope)}层已${shouldEnable ? '批量启用' : '批量停用'} ${editableRows.length} 条锚点`);
+        const affectedClientIds = Array.from(new Set(
+            editableRows
+                .filter(row => row.source === 'client' && row.clientId)
+                .map(row => String(row.clientId || '').trim())
+                .filter(Boolean)
+        ));
+        const affectsGlobal = editableRows.some(row => row.source === 'global');
+        const refreshContext = affectsGlobal
+            ? { scope: 'global', clientId: '' }
+            : (affectedClientIds.length === 1
+                ? { scope: 'client', clientId: affectedClientIds[0] }
+                : { scope: 'global', clientId: '' });
+        refreshAnchorRuleMutationUi({
+            ...refreshContext,
+            refreshMainSections: false,
+            refreshRecognizePreview: true
+        });
+        showSuccess(`已${shouldEnable ? '批量启用' : '批量停用'} ${editableRows.length} 条锚点`);
     } catch (error) {
         showError('批量操作失败', error.message || '未知错误');
     }
@@ -8076,15 +8312,12 @@ function copyAnchorRowsToClient(rows) {
             const odds = row && row.customOdds ? row.scopedOdds : null;
             window.messageProcessor.upsertAnchorAlias(row.token, mapped, { scope: 'client', clientId, odds });
         });
-        recalculateAllUsersByRuleChange();
-        if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
-            window.userManager.renderAllSections();
-        } else {
-            renderAnchorAliasList();
-            renderAnchorImpactPreview();
-            refreshRegionPnlPanel();
-        }
-        previewMessage({ silent: true });
+        refreshAnchorRuleMutationUi({
+            scope: 'client',
+            clientId,
+            refreshMainSections: false,
+            refreshRecognizePreview: true
+        });
         showSuccess(`已复制 ${rows.length} 条到客户 ${clientId}`);
     } catch (error) {
         showError('复制规则失败', error.message || '未知错误');
@@ -8116,14 +8349,12 @@ function renderAnchorAliasList() {
 
     const rows = window.messageProcessor.getAnchorAliasRows({ clientId });
     const allRows = Array.isArray(rows) ? rows.filter(Boolean) : [];
-    const targetSource = scope === 'client' ? 'client' : 'global';
     const filterState = getAnchorAliasFilterState();
     const activeMode = getAnchorStrategyConfig(anchorStrategyActiveTab).mode;
 
-    const displayRows = allRows.filter((row) => {
+    const baseFilteredRows = allRows.filter((row) => {
         if (!row) return false;
         if (row.mode !== activeMode) return false;
-        if (filterState.source !== 'all' && row.source !== filterState.source) return false;
         if (filterState.enabledOnly && !row.active) return false;
         if (!filterState.keyword) return true;
         const modeText = getAnchorModeLabel(row.mode);
@@ -8136,6 +8367,9 @@ function renderAnchorAliasList() {
             .join(' ');
         return haystack.includes(filterState.keyword);
     });
+    const displayRows = filterState.source !== 'all'
+        ? baseFilteredRows.filter((row) => row.source === filterState.source)
+        : baseFilteredRows;
 
     const conflictMap = computeAnchorRuleConflictMap(displayRows);
 
@@ -8153,6 +8387,7 @@ function renderAnchorAliasList() {
     container.appendChild(intro);
 
     ANCHOR_SOURCE_DISPLAY_ORDER.forEach((sourceKey) => {
+        const sourceCount = baseFilteredRows.filter((row) => row.source === sourceKey).length;
         const laneRows = displayRows
             .filter(row => row.source === sourceKey)
             .sort((a, b) => {
@@ -8180,10 +8415,10 @@ function renderAnchorAliasList() {
         right.className = 'anchor-strategy-lane-head-right';
         const count = document.createElement('span');
         count.className = 'anchor-strategy-lane-count';
-        count.textContent = `${laneRows.length} 条`;
+        count.textContent = `${sourceCount} 条`;
         right.appendChild(count);
 
-        if (laneRows.length > 0 && sourceKey === targetSource) {
+        if (laneRows.length > 0 && sourceKey !== 'system') {
             const enableAll = document.createElement('button');
             enableAll.type = 'button';
             enableAll.className = 'anchor-lane-action-btn';
@@ -8214,7 +8449,9 @@ function renderAnchorAliasList() {
         if (laneRows.length === 0) {
             const empty = document.createElement('div');
             empty.className = 'anchor-alias-empty';
-            empty.textContent = '该来源暂无匹配锚点';
+            empty.textContent = sourceCount > 0 && filterState.source !== 'all' && filterState.source !== sourceKey
+                ? '该来源有规则，但已被当前来源筛选隐藏'
+                : '该来源暂无匹配锚点';
             lane.appendChild(empty);
             container.appendChild(lane);
             return;
@@ -8224,7 +8461,7 @@ function renderAnchorAliasList() {
         cards.className = 'anchor-strategy-source-rows';
 
         laneRows.forEach((row) => {
-            const editable = row.source === targetSource;
+            const editable = row.source !== 'system';
             const card = document.createElement('div');
             card.className = `anchor-strategy-rule-card previewable source-${row.source} ${row.active ? '' : 'disabled'} ${editable ? '' : 'readonly'}`.trim();
             card.setAttribute('role', 'button');
@@ -8304,7 +8541,9 @@ function renderAnchorAliasList() {
                     row.token,
                     !!event.target.checked,
                     row.mode,
-                    row.customOdds ? row.scopedOdds : null
+                    row.customOdds ? row.scopedOdds : null,
+                    row.source,
+                    row.clientId || ''
                 );
             });
             const statusTrack = document.createElement('span');
@@ -8359,7 +8598,9 @@ function renderAnchorAliasList() {
                         row.token,
                         !row.active,
                         row.mode,
-                        row.customOdds ? row.scopedOdds : null
+                        row.customOdds ? row.scopedOdds : null,
+                        row.source,
+                        row.clientId || ''
                     );
                     menu.removeAttribute('open');
                 });
@@ -8369,7 +8610,7 @@ function renderAnchorAliasList() {
                 removeBtn.textContent = '删除本层规则';
                 removeBtn.addEventListener('click', (event) => {
                     event.stopPropagation();
-                    removeAnchorAliasRule(row.token);
+                    removeAnchorAliasRule(row.token, row.source, row.clientId || '');
                     menu.removeAttribute('open');
                 });
                 menuPanel.appendChild(toggleBtn);
@@ -8399,12 +8640,16 @@ function renderAnchorAliasList() {
     list.appendChild(container);
 }
 
-function toggleAnchorAliasStatus(token, shouldEnable, preferredMode = 'per_number', preferredOdds = null) {
+function toggleAnchorAliasStatus(token, shouldEnable, preferredMode = 'per_number', preferredOdds = null, source = '', explicitClientId = '') {
     try {
         if (!window.messageProcessor || typeof window.messageProcessor.upsertAnchorAlias !== 'function') {
             throw new Error('当前版本不支持词义规则');
         }
-        const { scope, clientId } = getRuleContext({ requireClientForClientScope: true });
+        const scope = String(source || '').trim() === 'client' ? 'client' : 'global';
+        const clientId = scope === 'client' ? String(explicitClientId || '').trim() : '';
+        if (scope === 'client' && !clientId) {
+            throw new Error('当前客户规则缺少客户标识，无法切换状态');
+        }
         const rawMode = String(preferredMode || '').trim();
         const targetMode = shouldEnable
             ? ((rawMode && rawMode !== 'ignore') ? rawMode : 'per_number')
@@ -8412,21 +8657,12 @@ function toggleAnchorAliasStatus(token, shouldEnable, preferredMode = 'per_numbe
         const parsedOdds = parsePositiveNumericInput(preferredOdds);
         const odds = parsedOdds.empty ? null : parsedOdds.value;
         window.messageProcessor.upsertAnchorAlias(token, targetMode, { scope, clientId, odds });
-        recalculateAllUsersByRuleChange();
-        if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
-            window.userManager.renderAllSections();
-        } else {
-            renderAnchorAliasList();
-            renderAnchorImpactPreview();
-            renderDefaultOddsState();
-            renderAnchorParseModeState();
-            renderAttributeCombinePolicyState();
-            renderRegionAccountingPolicyState();
-            renderBlockedPlayKeywordState();
-            renderMessageTypeWhitelistState();
-            refreshRegionPnlPanel();
-        }
-        previewMessage({ silent: true });
+        refreshAnchorRuleMutationUi({
+            scope,
+            clientId,
+            refreshMainSections: false,
+            refreshRecognizePreview: true
+        });
         showSuccess(`${getScopeDisplayName(scope)}词义规则已${shouldEnable ? '启用' : '禁用'}：${token}`);
     } catch (error) {
         showError('切换词义状态失败', error.message || '未知错误');
@@ -8475,21 +8711,12 @@ function saveAnchorAliasRule() {
         const mode = modeInput ? String(modeInput.value || '').trim() : '';
         const result = window.messageProcessor.upsertAnchorAlias(token, mode, { scope, clientId });
         if (tokenInput) tokenInput.value = '';
-        recalculateAllUsersByRuleChange();
-        if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
-            window.userManager.renderAllSections();
-        } else {
-            renderAnchorAliasList();
-            renderAnchorImpactPreview();
-            renderDefaultOddsState();
-            renderAnchorParseModeState();
-            renderAttributeCombinePolicyState();
-            renderRegionAccountingPolicyState();
-            renderBlockedPlayKeywordState();
-            renderMessageTypeWhitelistState();
-            refreshRegionPnlPanel();
-        }
-        previewMessage({ silent: true });
+        refreshAnchorRuleMutationUi({
+            scope,
+            clientId,
+            refreshMainSections: false,
+            refreshRecognizePreview: true
+        });
         const modeLabel = result && result.enabled === false
             ? getAnchorModeLabel('ignore')
             : getAnchorModeLabel((result && (result.amountDistribute || result.mode)) || mode);
@@ -8502,28 +8729,23 @@ function saveAnchorAliasRule() {
     }
 }
 
-function removeAnchorAliasRule(token) {
+function removeAnchorAliasRule(token, source = '', explicitClientId = '') {
     try {
         if (!window.messageProcessor || typeof window.messageProcessor.removeAnchorAlias !== 'function') {
             throw new Error('当前版本不支持词义规则');
         }
-        const { scope, clientId } = getRuleContext({ requireClientForClientScope: true });
-        window.messageProcessor.removeAnchorAlias(token, { scope, clientId });
-        recalculateAllUsersByRuleChange();
-        if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
-            window.userManager.renderAllSections();
-        } else {
-            renderAnchorAliasList();
-            renderAnchorImpactPreview();
-            renderDefaultOddsState();
-            renderAnchorParseModeState();
-            renderAttributeCombinePolicyState();
-            renderRegionAccountingPolicyState();
-            renderBlockedPlayKeywordState();
-            renderMessageTypeWhitelistState();
-            refreshRegionPnlPanel();
+        const scope = String(source || '').trim() === 'client' ? 'client' : 'global';
+        const clientId = scope === 'client' ? String(explicitClientId || '').trim() : '';
+        if (scope === 'client' && !clientId) {
+            throw new Error('当前客户规则缺少客户标识，无法删除');
         }
-        previewMessage({ silent: true });
+        window.messageProcessor.removeAnchorAlias(token, { scope, clientId });
+        refreshAnchorRuleMutationUi({
+            scope,
+            clientId,
+            refreshMainSections: false,
+            refreshRecognizePreview: true
+        });
     } catch (error) {
         showError('删除词义规则失败', error.message || '未知错误');
     }
@@ -8542,21 +8764,12 @@ function resetAnchorAliasRules() {
         const modeInput = document.getElementById('anchorAliasMode');
         if (tokenInput) tokenInput.value = '';
         if (modeInput) modeInput.value = 'per_number';
-        recalculateAllUsersByRuleChange();
-        if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
-            window.userManager.renderAllSections();
-        } else {
-            renderAnchorAliasList();
-            renderAnchorImpactPreview();
-            renderDefaultOddsState();
-            renderAnchorParseModeState();
-            renderAttributeCombinePolicyState();
-            renderRegionAccountingPolicyState();
-            renderBlockedPlayKeywordState();
-            renderMessageTypeWhitelistState();
-            refreshRegionPnlPanel();
-        }
-        previewMessage({ silent: true });
+        refreshAnchorRuleMutationUi({
+            scope,
+            clientId,
+            refreshMainSections: false,
+            refreshRecognizePreview: true
+        });
         showSuccess(`${getScopeDisplayName(scope)}层锚点规则已清空`);
     } catch (error) {
         showError('恢复默认失败', error.message || '未知错误');
@@ -8593,22 +8806,9 @@ function resetClientRuleProfile() {
         if (window.userManager && typeof window.userManager.syncStoredUserParsePreferencesToRules === 'function') {
             window.userManager.syncStoredUserParsePreferencesToRules();
         }
-        recalculateAllUsersByRuleChange();
+        recalculateAllUsersByRuleChange({ scope: 'client', clientId });
         closeAnchorRuleDrawer();
-        if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
-            window.userManager.renderAllSections();
-        } else {
-            renderAnchorAliasList();
-            renderAnchorImpactPreview();
-            renderDefaultOddsState();
-            renderAnchorParseModeState();
-            renderAttributeCombinePolicyState();
-            renderRegionAccountingPolicyState();
-            renderBlockedPlayKeywordState();
-            renderMessageTypeWhitelistState();
-            refreshRegionPnlPanel();
-        }
-        previewMessage({ silent: true });
+        refreshAnchorRuleMutationUi({ scope: 'client', clientId });
         renderSharedCustomerSettlementSettings(clientId);
         showSuccess(`已恢复 ${clientId} 的专属规则到全局`);
     } catch (error) {
@@ -10456,6 +10656,109 @@ async function requestRecognizePreview(message, clientId, options = {}) {
         clientId: safeClientId,
         allowPartial
     }));
+}
+
+async function recalculateScopedUsersViaPreviewWorker(userNames = [], options = {}) {
+    if (!window.userManager || !window.messageProcessor) {
+        return false;
+    }
+    const manager = window.userManager;
+    const processor = window.messageProcessor;
+    if (typeof manager.collectUserOriginalEntriesForRebuild !== 'function'
+        || typeof manager.resetUserAllRegionBuckets !== 'function'
+        || typeof processor.processMessageForUser !== 'function') {
+        return false;
+    }
+
+    const targetUsers = Array.isArray(userNames)
+        ? userNames
+            .map((userName) => String(userName || '').trim())
+            .filter((userName) => !!userName && !!manager.users && !!manager.users[userName])
+        : [];
+    if (targetUsers.length <= 0) {
+        return true;
+    }
+
+    const save = !(options && options.save === false);
+    const yieldAfterChunk = typeof manager.yieldAfterRuleRecalcChunk === 'function'
+        ? manager.yieldAfterRuleRecalcChunk.bind(manager)
+        : (() => new Promise((resolve) => setTimeout(resolve, 0)));
+    const stripUiChrome = typeof manager.stripOriginalMessageUiChrome === 'function'
+        ? manager.stripOriginalMessageUiChrome.bind(manager)
+        : (message) => String(message || '');
+
+    if (typeof manager.invalidateOriginalDataDerivedCaches === 'function') {
+        manager.invalidateOriginalDataDerivedCaches();
+    }
+    if (typeof manager.invalidateUserListDerivedCaches === 'function') {
+        manager.invalidateUserListDerivedCaches();
+    }
+
+    for (let userIndex = 0; userIndex < targetUsers.length; userIndex += 1) {
+        const userName = targetUsers[userIndex];
+        const originalEntries = manager.collectUserOriginalEntriesForRebuild(userName);
+        manager.resetUserAllRegionBuckets(userName, { clearOriginalData: true });
+
+        for (let entryIndex = 0; entryIndex < originalEntries.length; entryIndex += 1) {
+            const entry = originalEntries[entryIndex];
+            const rawMessage = stripUiChrome(
+                typeof manager.extractOriginalMessageText === 'function'
+                    ? manager.extractOriginalMessageText(entry && entry.message)
+                    : String(entry && entry.message ? entry.message : '')
+            );
+            if (!rawMessage.trim()) {
+                continue;
+            }
+
+            reportRendererStage(`rule-change-recalc:client-preview-${entryIndex + 1}/${originalEntries.length}`, {
+                userName
+            });
+            const previewResult = await requestRecognizePreview(rawMessage, userName, {
+                preferWorker: true,
+                allowPartial: true,
+                useCache: false
+            });
+            if (!previewResult || previewResult.success !== true) {
+                throw new Error(previewResult && previewResult.error
+                    ? previewResult.error
+                    : `第 ${entryIndex + 1} 条原始消息重算失败`);
+            }
+
+            reportRendererStage(`rule-change-recalc:client-apply-${entryIndex + 1}/${originalEntries.length}`, {
+                userName
+            });
+            const processResult = processor.processMessageForUser(rawMessage, userName, {
+                clientId: userName,
+                originalMessage: rawMessage,
+                createdAt: entry && entry.createdAt ? entry.createdAt : '',
+                editedAt: entry && entry.editedAt ? entry.editedAt : '',
+                previewResult,
+                allowPartial: true,
+                persist: false
+            });
+            if (!processResult || processResult.success !== true) {
+                throw new Error(processResult && processResult.message
+                    ? processResult.message
+                    : `第 ${entryIndex + 1} 条原始消息落账失败`);
+            }
+
+            if (entryIndex + 1 < originalEntries.length) {
+                await yieldAfterChunk();
+            }
+        }
+
+        if (userIndex + 1 < targetUsers.length) {
+            await yieldAfterChunk();
+        }
+    }
+
+    if (save && typeof manager.saveUserData === 'function') {
+        await yieldAfterChunk();
+        reportRendererStage('rule-change-recalc:before-save-user-data', { userCount: targetUsers.length });
+        manager.saveUserData();
+        reportRendererStage('rule-change-recalc:after-save-user-data', { userCount: targetUsers.length });
+    }
+    return true;
 }
 
 function handleMessageProcessorConfigChanged(event) {
@@ -12748,16 +13051,17 @@ function getCurrentSettlementScopeUsers() {
 function formatNumericAmount(value) {
     const num = Number(value);
     if (!Number.isFinite(num)) return '--';
-    if (Math.abs(num) < 1e-9) return '0';
-    if (Number.isInteger(num)) return `${num}`;
-    return num.toFixed(4).replace(/\.?0+$/, '');
+    const rounded = Math.round(num);
+    if (Math.abs(rounded) < 1e-9) return '0';
+    return `${rounded}`;
 }
 
 function formatSignedAmount(value) {
     const num = Number(value);
     if (!Number.isFinite(num)) return '--';
-    const plain = formatNumericAmount(num);
-    return num > 0 ? `+${plain}` : plain;
+    const rounded = Math.round(num);
+    const plain = formatNumericAmount(rounded);
+    return rounded > 0 ? `+${plain}` : plain;
 }
 
 function loadRegionWinningNumbersPreference() {
@@ -15017,11 +15321,23 @@ function applyRecognizeSuggestedLineRewrite(encodedLineNo, encodedNextText) {
     }
 }
 
-function refreshAfterRecognizeQuickRuleChange(lineNo = null) {
-    recalculateAllUsersByRuleChange();
-    if (window.userManager && typeof window.userManager.renderAllSections === 'function') {
-        window.userManager.renderAllSections();
-    }
+function refreshAfterRecognizeQuickRuleChange(lineNo = null, options = {}) {
+    Promise.resolve(recalculateAllUsersByRuleChange(options)).finally(() => {
+        recognizeDeferredMainRefresh = true;
+        return Promise.resolve(previewMessage({ silent: true }));
+    }).finally(() => {
+        if (Number.isFinite(Number(lineNo)) && Number(lineNo) > 0) {
+            focusRecognizeMessageLine(lineNo);
+        }
+    });
+}
+
+function refreshAfterRecognizeQuickAnchorChange(lineNo = null, options = {}) {
+    refreshAnchorRuleMutationUi({
+        ...options,
+        refreshMainSections: false,
+        refreshRecognizePreview: false
+    });
     Promise.resolve(previewMessage({ silent: true })).finally(() => {
         if (Number.isFinite(Number(lineNo)) && Number(lineNo) > 0) {
             focusRecognizeMessageLine(lineNo);
@@ -15046,7 +15362,7 @@ function handleRecognizeQuickAddAnchor(encodedToken, encodedScope, encodedClient
         }
         const mode = inferQuickAnchorModeFromToken(token);
         window.messageProcessor.upsertAnchorAlias(token, mode, { scope, clientId });
-        refreshAfterRecognizeQuickRuleChange(lineNo);
+        refreshAfterRecognizeQuickAnchorChange(lineNo, { scope, clientId });
         showSuccess(`${getScopeDisplayName(scope)}锚点已保存：${token}`);
     } catch (error) {
         showError('快捷保存锚点失败', error.message || '未知错误');
@@ -15069,7 +15385,7 @@ function handleRecognizeQuickAddAmountUnit(encodedToken, encodedScope, encodedCl
             throw new Error('当前没有可用的客户可保存专属金额单位');
         }
         window.messageProcessor.upsertAmountUnit(token, { scope, clientId });
-        refreshAfterRecognizeQuickRuleChange(lineNo);
+        refreshAfterRecognizeQuickRuleChange(lineNo, { scope, clientId });
         showSuccess(`${getScopeDisplayName(scope)}金额单位已保存：${token}`);
     } catch (error) {
         showError('快捷保存金额单位失败', error.message || '未知错误');

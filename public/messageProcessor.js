@@ -277,9 +277,6 @@ class MessageProcessor {
                 '个号码': { amountDistribute: 'per_number', enabled: true },
                 '个数': { amountDistribute: 'per_number', enabled: true },
                 '买': { amountDistribute: 'per_number', enabled: true },
-                '连': { amountDistribute: 'per_number', enabled: true },
-                'X': { amountDistribute: 'per_number', enabled: true },
-                'x': { amountDistribute: 'per_number', enabled: true },
                 '每个': { amountDistribute: 'per_number', enabled: true },
                 '每个号': { amountDistribute: 'per_number', enabled: true },
                 '每个码': { amountDistribute: 'per_number', enabled: true },
@@ -317,6 +314,9 @@ class MessageProcessor {
                 '全买': { amountDistribute: 'undetermined', enabled: true },
                 '全下': { amountDistribute: 'undetermined', enabled: true },
                 '通买': { amountDistribute: 'undetermined', enabled: true },
+                '连': { amountDistribute: 'per_number', enabled: true },
+                'X': { amountDistribute: 'per_number', enabled: true },
+                'x': { amountDistribute: 'per_number', enabled: true },
                 '每号': { amountDistribute: 'undetermined', enabled: true },
                 '每码': { amountDistribute: 'undetermined', enabled: true },
                 '每数': { amountDistribute: 'undetermined', enabled: true },
@@ -5563,8 +5563,9 @@ class MessageProcessor {
     formatAmount(amount) {
         const value = Number(amount);
         if (!Number.isFinite(value)) return String(amount);
-        if (Number.isInteger(value)) return `${value}`;
-        return value.toFixed(4).replace(/\.?0+$/, '');
+        const rounded = Math.round(value);
+        if (Math.abs(rounded) < 1e-9) return '0';
+        return `${rounded}`;
     }
 
     getRegionPrefixByKey(regionKey, options = {}) {

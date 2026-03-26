@@ -967,6 +967,53 @@ class UserManager {
         return String(entry).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     }
 
+    stripOriginalMessageUiChrome(message) {
+        const raw = String(message || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        if (!raw.trim()) return '';
+        const lines = raw.split('\n');
+        if (lines.length < 4) return raw;
+
+        const firstLine = String(lines[0] || '').trim();
+        if (!/^\d+\s+.+（.+）$/.test(firstLine)) {
+            return raw;
+        }
+
+        const statusLabels = new Set([
+            '已完整统计',
+            '部分统计',
+            '待处理',
+            '仅未开放玩法',
+            '仅噪音/摘要',
+            '仅噪音/摘要',
+            '仅噪音',
+            '仅未开放玩法'
+        ]);
+
+        let index = 1;
+        let matchedUiLines = 0;
+        while (index < lines.length) {
+            const line = String(lines[index] || '').trim();
+            const isUiLine = (
+                /^总：/.test(line)
+                || /^命中：/.test(line)
+                || /^添加时间：/.test(line)
+                || /^已计入\s+\d+\s+条\s*\/\s*/.test(line)
+                || statusLabels.has(line)
+                || /^(编辑|删除|继续处理)$/.test(line)
+            );
+            if (!isUiLine) break;
+            matchedUiLines += 1;
+            index += 1;
+        }
+
+        if (matchedUiLines < 3) {
+            return raw;
+        }
+
+        const cleaned = lines.slice(index).join('\n').replace(/^\n+/, '');
+        return cleaned.trim() ? cleaned : raw;
+    }
+
     extractOriginalMessageCreatedAt(entry) {
         if (!entry || typeof entry !== 'object') return '';
         const candidates = ['createdAt', 'addedAt', 'timestamp', 'time'];
@@ -1550,7 +1597,7 @@ class UserManager {
 
     buildStoredOriginalDataEntry(message, totalAmount = null, createdAt = '', editedAt = '', parseSummary = null, hitNumberAmounts = null) {
         const entry = {
-            message: this.extractOriginalMessageText(message)
+            message: this.stripOriginalMessageUiChrome(this.extractOriginalMessageText(message))
         };
         const normalizedTotal = Number(totalAmount);
         if (Number.isFinite(normalizedTotal) && normalizedTotal >= 0) {
@@ -1581,9 +1628,10 @@ class UserManager {
 
     formatAmountValue(value) {
         const amount = Number(value);
-        if (!Number.isFinite(amount) || Math.abs(amount) < 1e-9) return '0';
-        if (Number.isInteger(amount)) return `${amount}`;
-        return amount.toFixed(4).replace(/\.?0+$/, '');
+        if (!Number.isFinite(amount)) return '0';
+        const rounded = Math.round(amount);
+        if (Math.abs(rounded) < 1e-9) return '0';
+        return `${rounded}`;
     }
 
     calculateOriginalOrderTotalLegacy(sourceMessage) {
@@ -4052,7 +4100,7 @@ class UserManager {
             const regionData = userRecord.regions[region.key];
             if (!regionData || !Array.isArray(regionData.originalData)) return;
             regionData.originalData.forEach((entry) => {
-                const message = this.extractOriginalMessageText(entry);
+                const message = this.stripOriginalMessageUiChrome(this.extractOriginalMessageText(entry));
                 if (!message.trim()) return;
                 const createdAt = this.extractOriginalMessageCreatedAt(entry);
                 const editedAt = this.extractOriginalMessageEditedAt(entry);
@@ -4105,35 +4153,135 @@ class UserManager {
         });
     }
 
-    recalculateAllUsersData() {
-        this.invalidateOriginalDataDerivedCaches();
-        if (!window.messageProcessor || typeof window.messageProcessor.processMessageForUser !== 'function') {
-            const regionKeys = this.getRegionOptions().map(item => item.key);
-            Object.keys(this.users || {}).forEach((userName) => {
-                regionKeys.forEach((regionKey) => {
-                    this.recalculateUserData(userName, regionKey);
-                });
-            });
-            this.saveUserData();
+    rebuildUserDataFromOriginalEntries(userName) {
+        const safeUserName = String(userName || '').trim();
+        if (!safeUserName || !this.users || !this.users[safeUserName]) {
             return;
         }
-        Object.keys(this.users || {}).forEach((userName) => {
-            const originalEntries = this.collectUserOriginalEntriesForRebuild(userName);
-            this.resetUserAllRegionBuckets(userName, { clearOriginalData: true });
-            originalEntries.forEach((entry) => {
-                const rawMessage = this.extractOriginalMessageText(entry.message);
-                if (!rawMessage.trim()) return;
-                window.messageProcessor.processMessageForUser(rawMessage, userName, {
-                    clientId: userName,
+        const originalEntries = this.collectUserOriginalEntriesForRebuild(safeUserName);
+        this.resetUserAllRegionBuckets(safeUserName, { clearOriginalData: true });
+        originalEntries.forEach((entry) => {
+            const rawMessage = this.extractOriginalMessageText(entry.message);
+            if (!rawMessage.trim()) return;
+            window.messageProcessor.processMessageForUser(rawMessage, safeUserName, {
+                clientId: safeUserName,
+                originalMessage: rawMessage,
+                createdAt: entry.createdAt,
+                editedAt: entry.editedAt,
+                allowPartial: true,
+                persist: false
+            });
+        });
+    }
+
+    yieldAfterRuleRecalcChunk() {
+        return new Promise((resolve) => {
+            if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+                window.requestAnimationFrame(() => resolve());
+                return;
+            }
+            setTimeout(resolve, 0);
+        });
+    }
+
+    async rebuildUserDataFromOriginalEntriesAsync(userName, options = {}) {
+        const safeUserName = String(userName || '').trim();
+        if (!safeUserName || !this.users || !this.users[safeUserName]) {
+            return;
+        }
+        const originalEntries = this.collectUserOriginalEntriesForRebuild(safeUserName);
+        this.resetUserAllRegionBuckets(safeUserName, { clearOriginalData: true });
+        const yieldEvery = Number.isFinite(Number(options && options.yieldEvery))
+            ? Math.max(1, Number(options.yieldEvery))
+            : 6;
+        for (let index = 0; index < originalEntries.length; index += 1) {
+            const entry = originalEntries[index];
+            const rawMessage = this.extractOriginalMessageText(entry.message);
+            if (rawMessage.trim()) {
+                window.messageProcessor.processMessageForUser(rawMessage, safeUserName, {
+                    clientId: safeUserName,
                     originalMessage: rawMessage,
                     createdAt: entry.createdAt,
                     editedAt: entry.editedAt,
                     allowPartial: true,
                     persist: false
                 });
+            }
+            if ((index + 1) % yieldEvery === 0 && index + 1 < originalEntries.length) {
+                await this.yieldAfterRuleRecalcChunk();
+            }
+        }
+    }
+
+    recalculateUsersData(userNames = [], options = {}) {
+        const targetUsers = Array.isArray(userNames)
+            ? userNames.map((userName) => String(userName || '').trim()).filter((userName) => !!userName && !!this.users[userName])
+            : [];
+        const save = !(options && options.save === false);
+        this.invalidateOriginalDataDerivedCaches();
+        this.invalidateUserListDerivedCaches();
+        if (!window.messageProcessor || typeof window.messageProcessor.processMessageForUser !== 'function') {
+            const regionKeys = this.getRegionOptions().map(item => item.key);
+            targetUsers.forEach((userName) => {
+                regionKeys.forEach((regionKey) => {
+                    this.recalculateUserData(userName, regionKey);
+                });
             });
+            if (save) {
+                this.saveUserData();
+            }
+            return;
+        }
+        targetUsers.forEach((userName) => {
+            this.rebuildUserDataFromOriginalEntries(userName);
         });
-        this.saveUserData();
+        if (save) {
+            this.saveUserData();
+        }
+    }
+
+    async recalculateUsersDataAsync(userNames = [], options = {}) {
+        const targetUsers = Array.isArray(userNames)
+            ? userNames.map((userName) => String(userName || '').trim()).filter((userName) => !!userName && !!this.users[userName])
+            : [];
+        const save = !(options && options.save === false);
+        const yieldEveryUsers = Number.isFinite(Number(options && options.yieldEveryUsers))
+            ? Math.max(1, Number(options.yieldEveryUsers))
+            : 1;
+        this.invalidateOriginalDataDerivedCaches();
+        this.invalidateUserListDerivedCaches();
+        if (!window.messageProcessor || typeof window.messageProcessor.processMessageForUser !== 'function') {
+            const regionKeys = this.getRegionOptions().map(item => item.key);
+            for (let index = 0; index < targetUsers.length; index += 1) {
+                const userName = targetUsers[index];
+                regionKeys.forEach((regionKey) => {
+                    this.recalculateUserData(userName, regionKey);
+                });
+                if ((index + 1) % yieldEveryUsers === 0 && index + 1 < targetUsers.length) {
+                    await this.yieldAfterRuleRecalcChunk();
+                }
+            }
+            if (save) {
+                await this.yieldAfterRuleRecalcChunk();
+                this.saveUserData();
+            }
+            return;
+        }
+        for (let index = 0; index < targetUsers.length; index += 1) {
+            const userName = targetUsers[index];
+            await this.rebuildUserDataFromOriginalEntriesAsync(userName, options);
+            if ((index + 1) % yieldEveryUsers === 0 && index + 1 < targetUsers.length) {
+                await this.yieldAfterRuleRecalcChunk();
+            }
+        }
+        if (save) {
+            await this.yieldAfterRuleRecalcChunk();
+            this.saveUserData();
+        }
+    }
+
+    recalculateAllUsersData(options = {}) {
+        this.recalculateUsersData(Object.keys(this.users || {}), options);
     }
 
     getUserRegionPayoutByNumber(userName, regionKey = this.activeRegion, number = '') {

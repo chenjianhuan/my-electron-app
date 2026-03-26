@@ -30,6 +30,11 @@ let lastClipboardText = '';
 let unlockedModuleId = null;
 let unlockedModuleSecret = '';
 let activeModuleId = MODULE_IDS.AUTH;
+let lastRendererStage = {
+  stage: '',
+  at: '',
+  meta: null,
+};
 const MODULE_PASSWORD_OVERRIDE_FILE = 'module-password-overrides.json';
 const TRIAL_PLAN_PREFERENCE_FILE = 'trial-plan-preference.json';
 const TRIAL_DAYS = 7;
@@ -471,8 +476,11 @@ function createWindow() {
 
   // 监听未响应的渲染进程
   win.webContents.on('unresponsive', () => {
-    console.warn('Renderer process became unresponsive');
-    showErrorDialog('应用无响应', '应用暂时无响应，请稍后重试');
+    console.warn('Renderer process became unresponsive', lastRendererStage);
+    const stageText = lastRendererStage && lastRendererStage.stage
+      ? `\n最后阶段：${lastRendererStage.stage}${lastRendererStage.at ? `\n时间：${lastRendererStage.at}` : ''}`
+      : '';
+    showErrorDialog('应用无响应', `应用暂时无响应，请稍后重试${stageText}`);
   });
 
   const handleDisplayMetricsChange = () => fitWindowToDisplay(win);
@@ -788,6 +796,15 @@ function registerLicenseIpc() {
   });
   ipcMain.on('clipboard-monitor:stop', () => {
     stopClipboardMonitor();
+  });
+  ipcMain.on('debug:renderer-stage', (_event, payload) => {
+    const safePayload = payload && typeof payload === 'object' ? payload : {};
+    lastRendererStage = {
+      stage: String(safePayload.stage || '').trim(),
+      at: String(safePayload.at || '').trim(),
+      meta: safePayload.meta && typeof safePayload.meta === 'object' ? safePayload.meta : null,
+    };
+    console.log('[renderer-stage]', lastRendererStage);
   });
   ipcMain.handle('clipboard:read-text', () => {
     try {
