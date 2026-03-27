@@ -17947,6 +17947,7 @@ async function exportClientDataDocument() {
 
 // 生成复制内容
 function generateCopyContent(scopeData) {
+    const manager = typeof window !== 'undefined' && window.userManager ? window.userManager : null;
     const userTotals = Array.isArray(scopeData.userTotals) ? scopeData.userTotals : [];
     const scopeUsers = Array.isArray(scopeData.users) ? scopeData.users : [];
     const viewRegions = Array.isArray(scopeData.viewRegions) ? scopeData.viewRegions : [];
@@ -17975,7 +17976,39 @@ function generateCopyContent(scopeData) {
     const totalHitStake = pnlRows.reduce((sum, item) => sum + (Number(item && item.hitStake) || 0), 0);
     const totalPayout = pnlRows.reduce((sum, item) => sum + (Number(item && item.payout) || 0), 0);
     const totalPnl = (Number(scopeData.totalCount) || 0) - totalPayout - totalRebate;
-    return `总数${formatNumericAmount(scopeData.totalCount || 0)}/${formatNumericAmount(totalHitStake)}/${formatNumericAmount(totalRebate)}/${formatSignedAmount(totalPnl)}`;
+    const summaryLine = `总数${formatNumericAmount(scopeData.totalCount || 0)}/${formatNumericAmount(totalHitStake)}/${formatNumericAmount(totalRebate)}/${formatSignedAmount(totalPnl)}`;
+
+    const originalRows = [];
+    if (Array.isArray(scopeData.originalData) && scopeData.originalData.length > 0 && typeof scopeData.originalData[0] === 'object') {
+        scopeData.originalData.forEach((item, index) => {
+            const serialNo = index + 1;
+            const rowLike = {
+                ...item,
+                sourceSerial: serialNo,
+                message: item.message,
+                userName: item.userName,
+                regionKey: item.regionKey,
+                originalEntry: item.originalEntry
+            };
+            let totalText = '未识别';
+            let hitText = '';
+            if (manager && typeof manager.calculateOriginalOrderTotal === 'function') {
+                const orderTotal = manager.calculateOriginalOrderTotal(item.message, item.userName, item.regionKey);
+                totalText = orderTotal == null ? '未识别' : formatNumericAmount(orderTotal);
+            }
+            if (manager && typeof manager.getOriginalRowHitAmount === 'function') {
+                const hitAmount = Number(manager.getOriginalRowHitAmount(rowLike)) || 0;
+                if (hitAmount > 0) {
+                    hitText = ` 命中：${formatNumericAmount(hitAmount)}`;
+                }
+            }
+            originalRows.push(`${serialNo} 总：${totalText}${hitText}`);
+        });
+    }
+
+    return originalRows.length > 0
+        ? `${summaryLine}\n\n${originalRows.join('\n')}`
+        : summaryLine;
 }
 
 function getEditableUsersForCurrentSelection() {
