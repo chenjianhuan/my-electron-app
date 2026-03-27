@@ -3,7 +3,7 @@ const { app, BrowserWindow, ipcMain, dialog, clipboard, screen, systemPreference
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const MainController = require('./src/controllers/MainController');
 const { LicenseGuard, LICENSE_FILE_NAME } = require('./src/services/LicenseGuard');
 const { TrialGuard } = require('./src/services/TrialGuard');
@@ -27,6 +27,8 @@ let appAccessStatus = null;
 let exitingForLicense = false;
 let clipboardMonitorTimer = null;
 let lastClipboardText = '';
+let lastClipboardChangeToken = '';
+let clipboardChangeProbeInFlight = false;
 let unlockedModuleId = null;
 let unlockedModuleSecret = '';
 let activeModuleId = MODULE_IDS.AUTH;
@@ -56,6 +58,7 @@ const WINDOW_SIZE_CONFIG = {
   maxAutoWidth: 1920,
   maxAutoHeight: 1200,
 };
+const CLIPBOARD_CHANGECOUNT_JXA = 'ObjC.import("AppKit"); const pb = $.NSPasteboard.generalPasteboard; console.log(ObjC.unwrap(pb.changeCount));';
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -240,17 +243,60 @@ function startClipboardMonitor() {
   } catch (error) {
     lastClipboardText = '';
   }
+  lastClipboardChangeToken = '';
+  clipboardChangeProbeInFlight = false;
+  if (process.platform === 'darwin') {
+    clipboardChangeProbeInFlight = true;
+    execFile('/usr/bin/osascript', ['-l', 'JavaScript', '-e', CLIPBOARD_CHANGECOUNT_JXA], { timeout: 500 }, (error, stdout) => {
+      clipboardChangeProbeInFlight = false;
+      if (error) return;
+      lastClipboardChangeToken = String(stdout || '').trim();
+    });
+  }
   clipboardMonitorTimer = setInterval(() => {
     try {
       if (!win || win.isDestroyed()) return;
+      const emitClipboardTextChanged = (current) => {
+        if (!current || current.length > 12000) return;
+        win.webContents.send('clipboard:text-changed', {
+          text: current,
+          capturedAt: Date.now(),
+        });
+      };
+      if (process.platform === 'darwin') {
+        if (clipboardChangeProbeInFlight) return;
+        clipboardChangeProbeInFlight = true;
+        execFile('/usr/bin/osascript', ['-l', 'JavaScript', '-e', CLIPBOARD_CHANGECOUNT_JXA], { timeout: 500 }, (error, stdout) => {
+          clipboardChangeProbeInFlight = false;
+          try {
+            if (!win || win.isDestroyed()) return;
+            const current = String(clipboard.readText() || '');
+            const nextToken = String(stdout || '').trim();
+            if (nextToken) {
+              if (!lastClipboardChangeToken) {
+                lastClipboardChangeToken = nextToken;
+                lastClipboardText = current;
+                return;
+              }
+              if (nextToken === lastClipboardChangeToken) return;
+              lastClipboardChangeToken = nextToken;
+              lastClipboardText = current;
+              emitClipboardTextChanged(current);
+              return;
+            }
+            if (current === lastClipboardText) return;
+            lastClipboardText = current;
+            emitClipboardTextChanged(current);
+          } catch (readError) {
+            // ignore clipboard read/send failures
+          }
+        });
+        return;
+      }
       const current = String(clipboard.readText() || '');
-      if (!current || current.length > 12000) return;
       if (current === lastClipboardText) return;
       lastClipboardText = current;
-      win.webContents.send('clipboard:text-changed', {
-        text: current,
-        capturedAt: Date.now(),
-      });
+      emitClipboardTextChanged(current);
     } catch (error) {
       // ignore clipboard read/send failures
     }
@@ -262,6 +308,8 @@ function stopClipboardMonitor() {
     clearInterval(clipboardMonitorTimer);
     clipboardMonitorTimer = null;
   }
+  clipboardChangeProbeInFlight = false;
+  lastClipboardChangeToken = '';
 }
 
 function resolvePublicFilePath(fileName) {

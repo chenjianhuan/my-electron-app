@@ -12147,9 +12147,9 @@ function shouldAutoHandleClipboardText(content, currentText = '') {
     if (!text || text.length > 12000) return false;
     if (/^https?:\/\//i.test(text)) return false;
 
-    if (text === String(currentText || '').trim()) return false;
     if (isLikelyClipboardChatMessage(text)) return true;
     if (/[各号买肖数大小单双波鼠牛虎兔龙蛇马羊猴鸡狗猪]/.test(text)) return true;
+    if (/(?:^|[\n\r])\s*\d{1,2}(?:[.\s,，]\d{1,2})*\s*(?:(?:[零一二三四五六七八九十百千万两壹贰叁肆伍陆柒捌玖拾佰仟萬]+(?:元|块|毛|角|分|闷)?)|(?:(?:各|买|号|值|x|X|\*|=|:|：|\s+)\s*\d+(?:\.\d+)?(?:元|块|毛|角|分|闷)?))\s*(?:$|[\n\r])/.test(text)) return true;
     if (/\d{1,2}\s*[.,，。\-—/~～\s]\s*\d{1,2}/.test(text)) return true;
     if (/\n/.test(text) && /[\u4e00-\u9fa5]/.test(text) && /\d/.test(text)) return true;
     return false;
@@ -12757,28 +12757,8 @@ async function handleClipboardTextChanged(payload) {
         return;
     }
 
-    const canonicalIncoming = canonicalizeMessageForDuplicate(content);
-    if (!canonicalIncoming) return;
-
     const currentText = String(messageTextarea.value || '').trim();
-    const canonicalCurrent = canonicalizeMessageForDuplicate(currentText);
-    if (canonicalIncoming === canonicalCurrent) return;
-
     let action = currentText ? 'append' : 'replace';
-    const selectedUsers = getEditableUsersForCurrentSelection();
-    if (selectedUsers.length > 0) {
-        const regionKeys = Array.from(new Set(
-            selectedUsers.flatMap((userName) => extractRegionKeysForDuplicate(content, userName))
-        ));
-        const duplicateInfo = findTodayDuplicateInfo(canonicalIncoming, selectedUsers, regionKeys, content);
-        const duplicateUsers = duplicateInfo.users;
-        const duplicateMessages = duplicateInfo.messages;
-        if (duplicateUsers.length > 0) {
-            const duplicateAction = await showDuplicateClipboardActionDialog(duplicateUsers, regionKeys, duplicateMessages);
-            if (duplicateAction === 'cancel') return;
-            action = 'append';
-        }
-    }
     const latestCurrentText = String(messageTextarea.value || '').trim();
     await applyClipboardImportedRecognizeMessage(content, {
         mode: action === 'append' || !!latestCurrentText ? 'append' : 'replace'
@@ -17967,56 +17947,35 @@ async function exportClientDataDocument() {
 
 // 生成复制内容
 function generateCopyContent(scopeData) {
-    const userLabel = Array.isArray(scopeData.users) ? scopeData.users.join('，') : '无';
-    const regionLabel = Array.isArray(scopeData.viewRegionLabels) ? scopeData.viewRegionLabels.join('、') : '-';
     const userTotals = Array.isArray(scopeData.userTotals) ? scopeData.userTotals : [];
-    const userConfigs = Array.isArray(scopeData.userConfigs) ? scopeData.userConfigs : [];
-    const userConfigMap = new Map(userConfigs.map((item) => [item.userName, item]));
-    const groupedRows = buildGroupedByValueRows(scopeData.data || []);
+    const scopeUsers = Array.isArray(scopeData.users) ? scopeData.users : [];
+    const viewRegions = Array.isArray(scopeData.viewRegions) ? scopeData.viewRegions : [];
     const totalRebate = userTotals.reduce((sum, item) => {
-        const config = userConfigMap.get(item.userName) || {};
-        const rebateRate = Number(config.rebateRate) || 0;
-        return sum + ((Number(item.amount) || 0) * rebateRate / 100);
+        const config = Array.isArray(scopeData.userConfigs)
+            ? (scopeData.userConfigs.find((cfg) => cfg && cfg.userName === item.userName) || {})
+            : {};
+        const rebateRate = Number(config && config.rebateRate) || 0;
+        return sum + ((Number(item && item.amount) || 0) * rebateRate / 100);
     }, 0);
-
-    let content = `范围: ${scopeData.scopeLabel || '-'}\n`;
-    content += `区域: ${regionLabel}\n`;
-    content += `用户: ${userLabel}\n`;
-    content += `总数: ${scopeData.totalCount}\n`;
-    content += `总返利: ${formatNumericAmount(totalRebate)}\n`;
-    content += `导出时间: ${scopeData.exportedAt || new Date().toLocaleString('zh-CN')}\n`;
-    if (userConfigs.length > 0) {
-        content += `结算参数:\n`;
-        userConfigs.forEach((item) => {
-            content += `${item.userName}: 倍率 ${formatNumericAmount(item.odds)} / 返利 ${formatNumericAmount(item.rebateRate)}%\n`;
-        });
-    }
-    content += `数据统计:\n`;
-
-    groupedRows.forEach((row) => {
-        content += `${row.numbers.join('.')} 各 ${row.value}\n`;
-    });
-
-    const sortedData = (scopeData.data || [])
-        .filter(item => item.value > 0)
-        .sort((a, b) => b.value - a.value);
-    sortedData.forEach(item => {
-        content += `${item.number} ${item.text}: ${item.value}\n`;
-    });
-
-    content += `\n原始数据:\n`;
-    if (Array.isArray(scopeData.originalData) && scopeData.originalData.length > 0 && typeof scopeData.originalData[0] === 'object') {
-        scopeData.originalData.forEach(item => {
-            const region = item.regionLabel || item.regionKey || '-';
-            content += `${item.userName}（${region}）: ${item.message}\n`;
-        });
-    } else {
-        (scopeData.originalData || []).forEach(data => {
-            content += `${data}\n`;
-        });
-    }
-
-    return content;
+    const winningConfigs = typeof collectExportWinningConfigs === 'function'
+        ? collectExportWinningConfigs(viewRegions)
+        : {};
+    const pnlRows = viewRegions.map((regionKey) => {
+        const config = winningConfigs && winningConfigs[regionKey] ? winningConfigs[regionKey] : {};
+        const winningNumber = Number.isInteger(config.number) ? config.number : null;
+        if (!Number.isInteger(winningNumber) || typeof collectRegionPnlMetrics !== 'function') {
+            return null;
+        }
+        const metrics = collectRegionPnlMetrics(regionKey, winningNumber, scopeUsers);
+        return {
+            hitStake: Number(metrics && metrics.hitStake) || 0,
+            payout: Number(metrics && metrics.payout) || 0
+        };
+    }).filter(Boolean);
+    const totalHitStake = pnlRows.reduce((sum, item) => sum + (Number(item && item.hitStake) || 0), 0);
+    const totalPayout = pnlRows.reduce((sum, item) => sum + (Number(item && item.payout) || 0), 0);
+    const totalPnl = (Number(scopeData.totalCount) || 0) - totalPayout - totalRebate;
+    return `总数${formatNumericAmount(scopeData.totalCount || 0)}/${formatNumericAmount(totalHitStake)}/${formatNumericAmount(totalRebate)}/${formatSignedAmount(totalPnl)}`;
 }
 
 function getEditableUsersForCurrentSelection() {
