@@ -5563,9 +5563,8 @@ class MessageProcessor {
     formatAmount(amount) {
         const value = Number(amount);
         if (!Number.isFinite(value)) return String(amount);
-        const rounded = Math.round(value);
-        if (Math.abs(rounded) < 1e-9) return '0';
-        return `${rounded}`;
+        if (Number.isInteger(value)) return `${value}`;
+        return value.toFixed(4).replace(/\.?0+$/, '');
     }
 
     getRegionPrefixByKey(regionKey, options = {}) {

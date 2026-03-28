@@ -1628,10 +1628,9 @@ class UserManager {
 
     formatAmountValue(value) {
         const amount = Number(value);
-        if (!Number.isFinite(amount)) return '0';
-        const rounded = Math.round(amount);
-        if (Math.abs(rounded) < 1e-9) return '0';
-        return `${rounded}`;
+        if (!Number.isFinite(amount) || Math.abs(amount) < 1e-9) return '0';
+        if (Number.isInteger(amount)) return `${amount}`;
+        return amount.toFixed(4).replace(/\.?0+$/, '');
     }
 
     calculateOriginalOrderTotalLegacy(sourceMessage) {

@@ -13031,17 +13031,16 @@ function getCurrentSettlementScopeUsers() {
 function formatNumericAmount(value) {
     const num = Number(value);
     if (!Number.isFinite(num)) return '--';
-    const rounded = Math.round(num);
-    if (Math.abs(rounded) < 1e-9) return '0';
-    return `${rounded}`;
+    if (Math.abs(num) < 1e-9) return '0';
+    if (Number.isInteger(num)) return `${num}`;
+    return num.toFixed(4).replace(/\.?0+$/, '');
 }
 
 function formatSignedAmount(value) {
     const num = Number(value);
     if (!Number.isFinite(num)) return '--';
-    const rounded = Math.round(num);
-    const plain = formatNumericAmount(rounded);
-    return rounded > 0 ? `+${plain}` : plain;
+    const plain = formatNumericAmount(num);
+    return num > 0 ? `+${plain}` : plain;
 }
 
 function loadRegionWinningNumbersPreference() {
