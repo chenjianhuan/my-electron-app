@@ -16,6 +16,7 @@ class UserManager {
         this.originalParseSummaryCache = new Map();
         this.originalRowHitCache = new Map();
         this.originalRowHeightCache = new Map();
+        this.originalSearchTextCache = new Map();
         this.originalRowsSnapshotCache = {
             key: '',
             rows: []
@@ -1077,7 +1078,7 @@ class UserManager {
         this.userSearchTimer = null;
     }
 
-    scheduleOriginalDataSearchRender(delay = 140) {
+    scheduleOriginalDataSearchRender(delay = 220) {
         this.cancelPendingOriginalDataSearchRender();
         this.originalDataSearchTimer = setTimeout(() => {
             this.originalDataSearchTimer = null;
@@ -1099,6 +1100,7 @@ class UserManager {
         this.originalParseSummaryCache.clear();
         this.originalRowHitCache.clear();
         this.originalRowHeightCache.clear();
+        this.originalSearchTextCache.clear();
         this.originalRowsSnapshotVersion += 1;
         this.originalRowsSnapshotCache = {
             key: '',
@@ -1416,11 +1418,35 @@ class UserManager {
         container.appendChild(fragment);
     }
 
-    isOriginalMessageMatched(message, keyword = this.originalDataSearchKeyword) {
-        const raw = this.extractOriginalMessageText(message);
-        const needle = String(keyword || '').trim().toLocaleLowerCase();
+    normalizeSearchKeyword(value = '') {
+        return String(value || '').trim().toLowerCase();
+    }
+
+    getOriginalRowSearchText(rowOrMessage) {
+        if (rowOrMessage && typeof rowOrMessage === 'object') {
+            const cacheKey = this.getOriginalRowDerivedCacheKey(rowOrMessage);
+            if (cacheKey && this.originalSearchTextCache.has(cacheKey)) {
+                return this.originalSearchTextCache.get(cacheKey) || '';
+            }
+            const normalized = this.extractOriginalMessageText(rowOrMessage.message).toLowerCase();
+            if (cacheKey) {
+                this.originalSearchTextCache.set(cacheKey, normalized);
+                if (this.originalSearchTextCache.size > 8000) {
+                    const first = this.originalSearchTextCache.keys().next();
+                    if (!first.done) {
+                        this.originalSearchTextCache.delete(first.value);
+                    }
+                }
+            }
+            return normalized;
+        }
+        return this.extractOriginalMessageText(rowOrMessage).toLowerCase();
+    }
+
+    isOriginalMessageMatched(messageOrRow, keyword = this.originalDataSearchKeyword) {
+        const needle = this.normalizeSearchKeyword(keyword);
         if (!needle) return false;
-        return raw.toLocaleLowerCase().includes(needle);
+        return this.getOriginalRowSearchText(messageOrRow).includes(needle);
     }
 
     renderOriginalMessageHighlightHtml(message) {
@@ -1428,8 +1454,8 @@ class UserManager {
         const keyword = String(this.originalDataSearchKeyword || '').trim();
         if (!keyword) return this.escapeHtmlText(raw);
 
-        const lowerRaw = raw.toLocaleLowerCase();
-        const lowerKeyword = keyword.toLocaleLowerCase();
+        const lowerRaw = raw.toLowerCase();
+        const lowerKeyword = keyword.toLowerCase();
         if (!lowerKeyword) return this.escapeHtmlText(raw);
 
         let cursor = 0;
@@ -3560,7 +3586,7 @@ class UserManager {
             const matchedRows = [];
             const unmatchedRows = [];
             rows.forEach((row) => {
-                if (this.isOriginalMessageMatched(row && row.message, keyword)) {
+                if (this.isOriginalMessageMatched(row, keyword)) {
                     matchedRows.push(row);
                 } else {
                     unmatchedRows.push(row);

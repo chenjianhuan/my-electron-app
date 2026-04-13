@@ -865,20 +865,35 @@ function migrateRecognizeLayoutProfile() {
 }
 
 async function initAppVersion() {
+    const fallbackVersion = ipcRenderer && typeof ipcRenderer.getAppVersionSync === 'function'
+        ? String(ipcRenderer.getAppVersionSync() || '').trim()
+        : '';
+    const fallbackVersionText = fallbackVersion ? `v${fallbackVersion}` : 'v-';
+    const badge = document.getElementById('appVersionBadge');
+    if (badge) {
+        badge.textContent = fallbackVersionText;
+    }
+    const settingsVersion = document.getElementById('settingsVersionValue');
+    if (settingsVersion) {
+        settingsVersion.textContent = fallbackVersionText;
+    }
     if (!ipcRenderer || typeof ipcRenderer.invoke !== 'function') return;
     try {
         const version = await ipcRenderer.invoke('app:get-version');
         const versionText = version ? `v${version}` : 'v-';
-        const badge = document.getElementById('appVersionBadge');
         if (badge) {
             badge.textContent = versionText;
         }
-        const settingsVersion = document.getElementById('settingsVersionValue');
         if (settingsVersion) {
             settingsVersion.textContent = versionText;
         }
     } catch (error) {
-        // ignore
+        if (badge) {
+            badge.textContent = fallbackVersionText;
+        }
+        if (settingsVersion) {
+            settingsVersion.textContent = fallbackVersionText;
+        }
     }
 }
 
@@ -1544,6 +1559,38 @@ async function exportLotteryBackup() {
         showSuccess(`备份导出成功：${result.filePath}${countText}`);
     } catch (error) {
         showError('导出失败', error.message);
+    }
+}
+
+async function exportDiagnosticLogs() {
+    if (!ipcRenderer) {
+        showError('导出失败', 'IPC 不可用，请重启应用');
+        return;
+    }
+
+    try {
+        const result = typeof ipcRenderer.exportPerfLogs === 'function'
+            ? await ipcRenderer.exportPerfLogs()
+            : await ipcRenderer.invoke('perf:export-logs');
+
+        if (!result || !result.ok) {
+            if (result && result.canceled) {
+                showSuccess('已取消导出诊断日志');
+                return;
+            }
+            showError('导出失败', (result && result.reason) || '保存诊断日志失败');
+            return;
+        }
+
+        const summary = result.summary || {};
+        const stallCount = Number(summary.stallCount) || 0;
+        const longTaskCount = Number(summary.longTaskCount) || 0;
+        const entryCount = Number(result.entryCount) || 0;
+        const stallText = stallCount > 0 ? `，卡顿 ${stallCount} 次` : '';
+        const longTaskText = longTaskCount > 0 ? `，长任务 ${longTaskCount} 次` : '';
+        showSuccess(`诊断日志已导出：${result.filePath}（${entryCount} 条${stallText}${longTaskText}）`);
+    } catch (error) {
+        showError('导出失败', error && error.message ? error.message : '保存诊断日志失败');
     }
 }
 
@@ -2740,6 +2787,16 @@ function getFallbackOfflineLicenseRequest() {
             || access.machineFingerprint
             || ''
         ),
+        machineFingerprintSource: String(
+            status.machineFingerprintSource
+            || (access.license && access.license.machineFingerprintSource)
+            || ''
+        ),
+        machineFingerprintLabel: String(
+            status.machineFingerprintLabel
+            || (access.license && access.license.machineFingerprintLabel)
+            || ''
+        ),
         customerId: String(status.customerId || (access.license && access.license.customerId) || ''),
         tier: String(status.tier || plan.tier || 'plus'),
         tierName: String(status.tierName || plan.name || ''),
@@ -2763,27 +2820,18 @@ function getOfflineLicenseRequestData() {
 
 function renderLicenseOfflineAssist() {
     const hintEl = document.getElementById('licenseOfflineHint');
-    const pathsEl = document.getElementById('licenseOfflinePaths');
-    if (!hintEl || !pathsEl) return;
+    if (!hintEl) return;
 
     const request = getOfflineLicenseRequestData();
     const machineFingerprint = String(request.machineFingerprint || '').trim();
+    const machineFingerprintSource = formatMachineFingerprintSource(request);
     const tierLabel = request.tierName || (request.tier === 'pro' ? 'Pro' : request.tier === 'plus' ? 'Plus' : request.tier || '-');
     const cycleLabel = request.billingCycle ? formatBillingCycleLabel(request.billingCycle) : '-';
     const intro = currentLicenseStatus && currentLicenseStatus.authorized
         ? '如需改为离线授权，可复制下方离线授权信息发给管理员重新签发。'
         : '当前可复制本机离线授权信息发给管理员签发。管理员返回授权码后，直接粘贴到下方输入框激活即可。';
 
-    hintEl.textContent = `${intro}${machineFingerprint ? ` 设备码：${machineFingerprint}` : ''}${tierLabel ? `；当前套餐：${tierLabel}` : ''}${cycleLabel ? `；计费：${cycleLabel}` : ''}`;
-
-    const importPaths = Array.isArray(request.importPaths) ? request.importPaths.filter(Boolean) : [];
-    if (!importPaths.length) {
-        pathsEl.innerHTML = '<div class="license-offline-path">未获取到离线授权落地路径，可先复制离线授权信息发给管理员签发。</div>';
-        return;
-    }
-    pathsEl.innerHTML = importPaths
-        .map(item => `<div class="license-offline-path">导入位置：${escapeHtml(item)}</div>`)
-        .join('');
+    hintEl.textContent = `${intro}${machineFingerprint ? ` 设备码：${machineFingerprint}` : ''}${machineFingerprintSource ? `；设备码来源：${machineFingerprintSource}` : ''}${tierLabel ? `；当前套餐：${tierLabel}` : ''}${cycleLabel ? `；计费：${cycleLabel}` : ''}`;
 }
 
 function buildOfflineLicenseRequestText(request) {
@@ -2794,6 +2842,7 @@ function buildOfflineLicenseRequestText(request) {
         payload.version ? `版本：v${payload.version}` : '',
         `生成时间：${formatTime(payload.generatedAt)}`,
         `设备码：${payload.machineFingerprint || '-'}`,
+        `设备码来源：${formatMachineFingerprintSource(payload) || '-'}`,
         `客户编号：${payload.customerId || '待填写'}`,
         `当前套餐：${payload.tierName || payload.tier || '-'}`,
         `计费周期：${payload.billingCycle ? formatBillingCycleLabel(payload.billingCycle) : '-'}`,
@@ -2802,11 +2851,6 @@ function buildOfflineLicenseRequestText(request) {
         '签发说明：请按上面的设备码签发离线授权，并回传授权码（或 license.dat 内容）。',
     ].filter(Boolean);
 
-    const importPaths = Array.isArray(payload.importPaths) ? payload.importPaths.filter(Boolean) : [];
-    if (importPaths.length) {
-        lines.push('导入位置：');
-        importPaths.forEach(item => lines.push(`- ${item}`));
-    }
     return lines.join('\n');
 }
 
@@ -2836,6 +2880,7 @@ function renderLicenseStatusPanel() {
     setText('licenseRemainingDays', formatRemainingDays(currentLicenseStatus));
     setText('licenseUsbMountPath', currentLicenseStatus && currentLicenseStatus.usbMountPath ? currentLicenseStatus.usbMountPath : '-');
     setText('licenseMachineFingerprint', currentLicenseStatus && currentLicenseStatus.machineFingerprint ? currentLicenseStatus.machineFingerprint : '-');
+    setText('licenseMachineFingerprintSource', formatMachineFingerprintSource(currentLicenseStatus) || '-');
     setText('licenseFilePath', currentLicenseStatus && currentLicenseStatus.licensePath ? currentLicenseStatus.licensePath : '-');
     setText('licenseReason', currentLicenseStatus && currentLicenseStatus.reason ? currentLicenseStatus.reason : '-');
     setText('licenseLastUpdated', licenseLastUpdatedAt ? formatTime(licenseLastUpdatedAt.toISOString()) : '-');
@@ -2903,6 +2948,19 @@ function formatRemainingDays(status) {
     if (!status || !status.authorized) return '-';
     if (status.mode !== 'grace') return '不适用';
     return `${status.remainingDays || 0} 天`;
+}
+
+function formatMachineFingerprintSource(payload) {
+    if (!payload) return '';
+    if (payload.machineFingerprintLabel) return String(payload.machineFingerprintLabel);
+    const source = String(payload.machineFingerprintSource || '').trim();
+    if (!source) return '';
+    if (source === 'machine_guid') return 'Windows MachineGuid';
+    if (source === 'wmi_uuid') return 'Windows WMI UUID（兼容）';
+    if (source === 'io_platform_uuid') return 'macOS IOPlatformUUID';
+    if (source === 'machine_id') return 'Linux machine-id';
+    if (source === 'legacy_hostname') return '电脑名称（兼容）';
+    return source;
 }
 
 function formatTime(isoText) {
@@ -13731,6 +13789,10 @@ function handleSummary() {
 }
 
 function handleOriginalDataSearchInput(value) {
+    const eventArg = arguments.length > 1 ? arguments[1] : null;
+    if (eventArg && (eventArg.isComposing === true || String(eventArg.inputType || '').includes('Composition'))) {
+        return;
+    }
     if (!window.userManager || typeof window.userManager.setOriginalDataSearchKeyword !== 'function') {
         return;
     }
@@ -13738,6 +13800,10 @@ function handleOriginalDataSearchInput(value) {
 }
 
 function handleUserSearchInput(value) {
+    const eventArg = arguments.length > 1 ? arguments[1] : null;
+    if (eventArg && (eventArg.isComposing === true || String(eventArg.inputType || '').includes('Composition'))) {
+        return;
+    }
     if (!window.userManager || typeof window.userManager.setUserSearchKeyword !== 'function') {
         return;
     }
@@ -16443,20 +16509,20 @@ function getHedgeReportModeMeta(modeRaw) {
         return {
             key: mode,
             label: '同盘同率',
-            description: '同一个盘口内所有风险号统一抛出比例，不超过各号码当前总注。'
+            description: '同一个盘口内所有风险号统一抛出比例，并把整盘口总抛量成本一起算进去。'
         };
     }
     if (mode === 'global_uniform') {
         return {
             key: mode,
             label: '全局同率',
-            description: '当前范围所有风险号统一抛出比例，不超过各号码当前总注。'
+            description: '当前范围所有风险号统一抛出比例，并按各盘口整组抛量联动核算。'
         };
     }
     return {
         key: 'precise',
         label: '逐号最省',
-        description: '每个号码单独反推最小整数抛量，总抛量最省，且不超过该号码当前总注。'
+        description: '按整组同时抛出的真实成本联立反推，求出总抛量最省的整数方案。'
     };
 }
 
@@ -16558,53 +16624,7 @@ function collectHedgeScopeByRegion(scopeData) {
     return { regionRows, totalStake, totalRebate };
 }
 
-function buildHedgeSuggestions(regionScope, maxLoss) {
-    const lossLimit = Number(maxLoss);
-    if (!(lossLimit >= 0)) {
-        return [];
-    }
-
-    const suggestions = [];
-    (regionScope && Array.isArray(regionScope.regionRows) ? regionScope.regionRows : []).forEach((regionRow) => {
-        const regionTotalStake = Number(regionRow && regionRow.totalStake) || 0;
-        const regionRebate = Number(regionRow && regionRow.totalRebate) || 0;
-        (regionRow && Array.isArray(regionRow.numbers) ? regionRow.numbers : []).forEach((row) => {
-            const payout = Number(row && row.payout) || 0;
-            const stake = Number(row && row.stake) || 0;
-            const currentPnl = regionTotalStake - payout - regionRebate;
-            if (currentPnl >= -lossLimit) return;
-            const needImprove = (-lossLimit) - currentPnl;
-            const unitImprove = payout > 0 && stake > 0 ? (payout / stake) - 1 : 0;
-            if (!Number.isFinite(unitImprove) || unitImprove <= 0) return;
-            const requiredHedgeAmount = roundUpAmount(needImprove / unitImprove);
-            if (!(requiredHedgeAmount > 0)) return;
-            const maxHedgeAmount = roundUpAmount(stake);
-            const hedgeAmount = Math.min(requiredHedgeAmount, maxHedgeAmount);
-            if (!(hedgeAmount > 0)) return;
-            const postHedgePnl = currentPnl + (hedgeAmount * unitImprove);
-            suggestions.push({
-                regionKey: regionRow.regionKey,
-                regionLabel: regionRow.regionLabel,
-                number: String(row.number || '').padStart(2, '0'),
-                text: String(row.text || ''),
-                stake,
-                payout,
-                rebate: regionRebate,
-                odds: payout > 0 && stake > 0 ? payout / stake : 0,
-                currentPnl,
-                needImprove,
-                unitImprove,
-                requiredHedgeAmount,
-                maxHedgeAmount,
-                hedgeAmount,
-                hedgeRatio: stake > 0 ? (hedgeAmount / stake) : 0,
-                requiredRatio: stake > 0 ? (requiredHedgeAmount / stake) : 0,
-                cappedByStake: hedgeAmount + 1e-9 < requiredHedgeAmount,
-                postHedgePnl
-            });
-        });
-    });
-
+function sortHedgeSuggestions(suggestions = []) {
     const regionOrder = { new_ao: 0, old_ao: 1, hongkong: 2 };
     return suggestions.sort((a, b) => {
         const pnlDiff = (Number(a.currentPnl) || 0) - (Number(b.currentPnl) || 0);
@@ -16622,53 +16642,229 @@ function buildHedgeSuggestions(regionScope, maxLoss) {
     });
 }
 
+function buildHedgeBaseRows(regionScope, maxLoss) {
+    const lossLimit = Number(maxLoss);
+    if (!(lossLimit >= 0)) {
+        return [];
+    }
+
+    return (regionScope && Array.isArray(regionScope.regionRows) ? regionScope.regionRows : []).map((regionRow) => {
+        const regionTotalStake = Number(regionRow && regionRow.totalStake) || 0;
+        const regionRebate = Number(regionRow && regionRow.totalRebate) || 0;
+        const rebateRatio = regionTotalStake > 0 ? Math.min(1, Math.max(0, regionRebate / regionTotalStake)) : 0;
+        const hedgeCostFactor = 1 - rebateRatio;
+        const rows = (regionRow && Array.isArray(regionRow.numbers) ? regionRow.numbers : []).map((row) => {
+            const payout = Number(row && row.payout) || 0;
+            const stake = Number(row && row.stake) || 0;
+            const odds = payout > 0 && stake > 0 ? (payout / stake) : 0;
+            const currentPnl = regionTotalStake - payout - regionRebate;
+            const needImprove = (-lossLimit) - currentPnl;
+            const maxHedgeAmount = roundUpAmount(stake);
+            if (!(stake > 0) || !(odds > 0) || !(needImprove > 0) || !(maxHedgeAmount > 0)) {
+                return null;
+            }
+            return {
+                regionKey: String(regionRow.regionKey || 'new_ao'),
+                regionLabel: String(regionRow.regionLabel || ''),
+                number: String(row && row.number ? row.number : '').padStart(2, '0'),
+                text: String(row && row.text ? row.text : ''),
+                stake,
+                payout,
+                rebate: regionRebate,
+                odds,
+                currentPnl,
+                needImprove,
+                unitImprove: odds - 1,
+                maxHedgeAmount,
+                rebateRatio,
+                hedgeCostFactor
+            };
+        }).filter(Boolean);
+        return {
+            regionKey: String(regionRow && regionRow.regionKey ? regionRow.regionKey : 'new_ao'),
+            regionLabel: String(regionRow && regionRow.regionLabel ? regionRow.regionLabel : ''),
+            totalStake: regionTotalStake,
+            totalRebate: regionRebate,
+            rebateRatio,
+            hedgeCostFactor,
+            rows
+        };
+    }).filter((item) => Array.isArray(item.rows) && item.rows.length > 0);
+}
+
+function calculatePreciseRegionSuggestions(regionData = {}) {
+    const rows = Array.isArray(regionData && regionData.rows) ? regionData.rows.map((row) => ({ ...row })) : [];
+    if (!rows.length) return [];
+
+    const hedgeCostFactor = Number(regionData && regionData.hedgeCostFactor);
+    const safeCostFactor = Number.isFinite(hedgeCostFactor) ? hedgeCostFactor : 1;
+
+    let totalHedgeAmount = 0;
+    for (let i = 0; i < 256; i += 1) {
+        const nextTotal = rows.reduce((sum, row) => {
+            const required = roundUpAmount((Number(row.needImprove) + (safeCostFactor * totalHedgeAmount)) / Number(row.odds));
+            return sum + Math.min(Number(row.maxHedgeAmount) || 0, required);
+        }, 0);
+        if (Math.abs(nextTotal - totalHedgeAmount) < 1e-9) {
+            totalHedgeAmount = nextTotal;
+            break;
+        }
+        totalHedgeAmount = nextTotal;
+    }
+
+    return rows.map((row) => {
+        const requiredHedgeAmount = roundUpAmount((Number(row.needImprove) + (safeCostFactor * totalHedgeAmount)) / Number(row.odds));
+        const hedgeAmount = Math.min(Number(row.maxHedgeAmount) || 0, requiredHedgeAmount);
+        const postHedgePnl = Number(row.currentPnl) + (hedgeAmount * Number(row.odds)) - (safeCostFactor * totalHedgeAmount);
+        return {
+            ...row,
+            requiredHedgeAmount,
+            hedgeAmount,
+            hedgeRatio: (Number(row.stake) || 0) > 0 ? (hedgeAmount / Number(row.stake)) : 0,
+            requiredRatio: (Number(row.stake) || 0) > 0 ? (requiredHedgeAmount / Number(row.stake)) : 0,
+            cappedByStake: hedgeAmount + 1e-9 < requiredHedgeAmount,
+            regionTotalHedgeAmount: totalHedgeAmount,
+            postHedgePnl
+        };
+    });
+}
+
+function solveRegionUniformRatio(regionData = {}) {
+    const rows = Array.isArray(regionData && regionData.rows) ? regionData.rows : [];
+    if (!rows.length) return 0;
+    const safeCostFactor = Number.isFinite(Number(regionData && regionData.hedgeCostFactor))
+        ? Number(regionData.hedgeCostFactor)
+        : 1;
+    let alpha = 0;
+    for (let i = 0; i < 256; i += 1) {
+        const regionTotalHedgeAmount = rows.reduce((sum, row) => {
+            const maxHedgeAmount = Number(row && row.maxHedgeAmount) || 0;
+            return sum + Math.min(maxHedgeAmount, roundUpAmount(maxHedgeAmount * alpha));
+        }, 0);
+        const nextAlpha = rows.reduce((max, row) => {
+            const maxHedgeAmount = Number(row && row.maxHedgeAmount) || 0;
+            if (!(maxHedgeAmount > 0)) return max;
+            const required = roundUpAmount((Number(row.needImprove) + (safeCostFactor * regionTotalHedgeAmount)) / Number(row.odds));
+            const ratio = Math.min(1, required / maxHedgeAmount);
+            return ratio > max ? ratio : max;
+        }, 0);
+        if (Math.abs(nextAlpha - alpha) < 1e-9) {
+            return nextAlpha;
+        }
+        alpha = nextAlpha;
+    }
+    return Math.min(1, Math.max(0, alpha));
+}
+
+function applyUniformRatioToRegion(regionData = {}, ratioRaw = 0) {
+    const rows = Array.isArray(regionData && regionData.rows) ? regionData.rows.map((row) => ({ ...row })) : [];
+    if (!rows.length) return [];
+    const ratio = Math.min(1, Math.max(0, Number(ratioRaw) || 0));
+    const safeCostFactor = Number.isFinite(Number(regionData && regionData.hedgeCostFactor))
+        ? Number(regionData.hedgeCostFactor)
+        : 1;
+    const regionTotalHedgeAmount = rows.reduce((sum, row) => {
+        const maxHedgeAmount = Number(row && row.maxHedgeAmount) || 0;
+        return sum + Math.min(maxHedgeAmount, roundUpAmount(maxHedgeAmount * ratio));
+    }, 0);
+    return rows.map((row) => {
+        const maxHedgeAmount = Number(row.maxHedgeAmount) || 0;
+        const hedgeAmount = Math.min(maxHedgeAmount, roundUpAmount(maxHedgeAmount * ratio));
+        const requiredHedgeAmount = roundUpAmount((Number(row.needImprove) + (safeCostFactor * regionTotalHedgeAmount)) / Number(row.odds));
+        const postHedgePnl = Number(row.currentPnl) + (hedgeAmount * Number(row.odds)) - (safeCostFactor * regionTotalHedgeAmount);
+        return {
+            ...row,
+            requiredHedgeAmount,
+            hedgeAmount,
+            appliedRatio: ratio,
+            hedgeRatio: (Number(row.stake) || 0) > 0 ? (hedgeAmount / Number(row.stake)) : 0,
+            requiredRatio: (Number(row.stake) || 0) > 0 ? (requiredHedgeAmount / Number(row.stake)) : 0,
+            cappedByStake: hedgeAmount + 1e-9 < requiredHedgeAmount,
+            regionTotalHedgeAmount,
+            postHedgePnl
+        };
+    });
+}
+
+function solveGlobalUniformRatio(regionGroups = []) {
+    const groups = Array.isArray(regionGroups) ? regionGroups.filter((item) => Array.isArray(item && item.rows) && item.rows.length > 0) : [];
+    if (!groups.length) return 0;
+
+    let alpha = 0;
+    for (let i = 0; i < 256; i += 1) {
+        const regionTotals = new Map();
+        groups.forEach((group) => {
+            const total = group.rows.reduce((sum, row) => {
+                const maxHedgeAmount = Number(row && row.maxHedgeAmount) || 0;
+                return sum + Math.min(maxHedgeAmount, roundUpAmount(maxHedgeAmount * alpha));
+            }, 0);
+            regionTotals.set(group.regionKey, total);
+        });
+        let nextAlpha = 0;
+        groups.forEach((group) => {
+            const safeCostFactor = Number.isFinite(Number(group && group.hedgeCostFactor))
+                ? Number(group.hedgeCostFactor)
+                : 1;
+            const regionTotalHedgeAmount = Number(regionTotals.get(group.regionKey)) || 0;
+            group.rows.forEach((row) => {
+                const maxHedgeAmount = Number(row && row.maxHedgeAmount) || 0;
+                if (!(maxHedgeAmount > 0)) return;
+                const required = roundUpAmount((Number(row.needImprove) + (safeCostFactor * regionTotalHedgeAmount)) / Number(row.odds));
+                const ratio = Math.min(1, required / maxHedgeAmount);
+                if (ratio > nextAlpha) {
+                    nextAlpha = ratio;
+                }
+            });
+        });
+        if (Math.abs(nextAlpha - alpha) < 1e-9) {
+            return nextAlpha;
+        }
+        alpha = nextAlpha;
+    }
+    return Math.min(1, Math.max(0, alpha));
+}
+
+function buildHedgeSuggestions(regionScope, maxLoss) {
+    const regionGroups = buildHedgeBaseRows(regionScope, maxLoss);
+    const suggestions = regionGroups.flatMap((group) => calculatePreciseRegionSuggestions(group));
+    return sortHedgeSuggestions(suggestions);
+}
+
 function applyHedgeSuggestionMode(baseSuggestions = [], modeRaw = 'precise') {
     const mode = normalizeHedgeReportMode(modeRaw);
     const suggestions = Array.isArray(baseSuggestions)
         ? baseSuggestions.map((row) => ({ ...row }))
         : [];
     if (!suggestions.length || mode === 'precise') {
-        return suggestions;
+        return sortHedgeSuggestions(suggestions);
     }
+
+    const grouped = suggestions.reduce((map, row) => {
+        const regionKey = String(row && row.regionKey ? row.regionKey : 'new_ao');
+        if (!map.has(regionKey)) {
+            map.set(regionKey, {
+                regionKey,
+                regionLabel: String(row && row.regionLabel ? row.regionLabel : ''),
+                hedgeCostFactor: Number(row && row.hedgeCostFactor),
+                rows: []
+            });
+        }
+        map.get(regionKey).rows.push({ ...row });
+        return map;
+    }, new Map());
 
     if (mode === 'region_uniform') {
-        const regionRatioMap = new Map();
-        suggestions.forEach((row) => {
-            const regionKey = String(row && row.regionKey ? row.regionKey : 'new_ao');
-            const current = regionRatioMap.get(regionKey) || 0;
-            const ratio = Math.min(1, Math.max(0, Number(row && row.requiredRatio) || 0));
-            if (ratio > current) {
-                regionRatioMap.set(regionKey, ratio);
-            }
+        const next = Array.from(grouped.values()).flatMap((group) => {
+            const ratio = solveRegionUniformRatio(group);
+            return applyUniformRatioToRegion(group, ratio);
         });
-        suggestions.forEach((row) => {
-            const regionKey = String(row && row.regionKey ? row.regionKey : 'new_ao');
-            const appliedRatio = Number(regionRatioMap.get(regionKey) || 0);
-            const maxHedgeAmount = roundUpAmount(Number(row && row.maxHedgeAmount) || Number(row && row.stake) || 0);
-            const nextAmount = Math.min(maxHedgeAmount, roundUpAmount((Number(row && row.stake) || 0) * appliedRatio));
-            row.appliedRatio = appliedRatio;
-            row.hedgeAmount = nextAmount;
-            row.hedgeRatio = (Number(row && row.stake) || 0) > 0 ? (nextAmount / Number(row.stake)) : 0;
-            row.cappedByStake = nextAmount + 1e-9 < (Number(row && row.requiredHedgeAmount) || 0);
-            row.postHedgePnl = (Number(row.currentPnl) || 0) + (nextAmount * (Number(row.unitImprove) || 0));
-        });
-        return suggestions;
+        return sortHedgeSuggestions(next);
     }
 
-    const globalRatio = suggestions.reduce((max, row) => {
-        const ratio = Math.min(1, Math.max(0, Number(row && row.requiredRatio) || 0));
-        return ratio > max ? ratio : max;
-    }, 0);
-    suggestions.forEach((row) => {
-        const maxHedgeAmount = roundUpAmount(Number(row && row.maxHedgeAmount) || Number(row && row.stake) || 0);
-        const nextAmount = Math.min(maxHedgeAmount, roundUpAmount((Number(row && row.stake) || 0) * globalRatio));
-        row.appliedRatio = globalRatio;
-        row.hedgeAmount = nextAmount;
-        row.hedgeRatio = (Number(row && row.stake) || 0) > 0 ? (nextAmount / Number(row.stake)) : 0;
-        row.cappedByStake = nextAmount + 1e-9 < (Number(row && row.requiredHedgeAmount) || 0);
-        row.postHedgePnl = (Number(row.currentPnl) || 0) + (nextAmount * (Number(row.unitImprove) || 0));
-    });
-    return suggestions;
+    const groups = Array.from(grouped.values());
+    const globalRatio = solveGlobalUniformRatio(groups);
+    const next = groups.flatMap((group) => applyUniformRatioToRegion(group, globalRatio));
+    return sortHedgeSuggestions(next);
 }
 
 function buildHedgeReportMessage(suggestions = []) {
@@ -18237,6 +18433,7 @@ window.confirmEdit = confirmEdit;
 window.copyClientData = copyClientData;
 window.exportClientDataDocument = exportClientDataDocument;
 window.exportLotteryBackup = exportLotteryBackup;
+window.exportDiagnosticLogs = exportDiagnosticLogs;
 window.importLotteryBackup = importLotteryBackup;
 window.openCustomerSettings = openCustomerSettings;
 window.isCustomerSettingsListDockOpenForUser = isCustomerSettingsListDockOpenForUser;

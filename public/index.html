@@ -36,7 +36,8 @@
                             id="userSearchInput"
                             type="text"
                             placeholder="搜索客户名称"
-                            oninput="handleUserSearchInput(this.value)"
+                            oninput="handleUserSearchInput(this.value, event)"
+                            oncompositionend="handleUserSearchInput(this.value)"
                         >
                     </div>
                     <div class="user-sort-row" role="tablist" aria-label="客户列表排序">
@@ -155,7 +156,8 @@
                                     class="original-data-search"
                                     type="text"
                                     placeholder="搜索原始消息（命中高亮）"
-                                    oninput="handleOriginalDataSearchInput(this.value)"
+                                    oninput="handleOriginalDataSearchInput(this.value, event)"
+                                    oncompositionend="handleOriginalDataSearchInput(this.value)"
                                 >
                             </div>
                             <div class="original-data-sort-row" role="tablist" aria-label="原始消息排序">
@@ -927,6 +929,13 @@
                 </div>
                 <div class="settings-item">
                     <div class="settings-item-main">
+                        <div class="settings-item-title">导出诊断日志</div>
+                        <div class="settings-item-desc">导出本次运行的卡顿、慢操作和页面切换诊断日志，复现问题后可直接发给我定位。</div>
+                    </div>
+                    <button class="edit-button" type="button" onclick="exportDiagnosticLogs()">导出</button>
+                </div>
+                <div class="settings-item">
+                    <div class="settings-item-main">
                         <div class="settings-item-title">导入数据备份</div>
                         <div class="settings-item-desc">用备份文件覆盖当前本机客户数据、规则配置和本地偏好；导入前会自动留存当前数据备份。</div>
                     </div>
@@ -999,7 +1008,7 @@
                             <div id="hedgeReportScope" class="hedge-report-scope">范围：-</div>
                             <div class="hedge-report-odds">结算口径：<span id="hedgeReportOdds">按客户倍率 / 返水</span></div>
                         </div>
-                        <div class="hedge-report-formula">当前盈亏 = 当前总注 - 号码结果支出 - 当前返水；建议抛量按整数向上取整。</div>
+                        <div class="hedge-report-formula">当前盈亏 = 当前总注 - 号码结果支出 - 当前返水；抛后结果 = 当前盈亏 + 命中号外抛支出 - 整组总抛量 + 整组返水。</div>
                     </div>
 
                     <div class="hedge-report-panel">
@@ -1037,6 +1046,7 @@
                                 <ul class="hedge-report-explain-list">
                                     <li>先按当前范围汇总总注、结果支出和返水，再看每个号码一旦开出时，庄家当前会盈亏多少。</li>
                                     <li>你填的“最多可亏损”，意思是：任何一个号码开出来，最差也不要低于这条亏损线。</li>
+                                    <li>系统会把同一次上报里的全部号码一起算，命中号有外抛中奖额，其他外抛号码则都会变成整组成本，不再把每个号码当成彼此独立。</li>
                                     <li>系统会先找出超线的危险号码，再倒推这些号码至少要抛多少，建议抛量统一按整数向上取整。</li>
                                     <li>所有模式都不会让建议抛量超过该号码当前总注；如果某个号码就算抛满仍压不到目标线，会标成“抛满仍超线”。</li>
                                 </ul>
@@ -1044,7 +1054,7 @@
                             <section class="hedge-report-explain-section">
                                 <div class="hedge-report-explain-section-title">逐号最省</div>
                                 <ul class="hedge-report-explain-list">
-                                    <li>一个号码算一个号码，每个号都只给出刚好够用的最小抛量。</li>
+                                    <li>先把整组同时外抛的总成本联立进去，再给每个号码反推出刚好够用的最小整数抛量。</li>
                                     <li>优点是总抛量通常最省，不会把不需要多抛的号码一起抬高。</li>
                                     <li>缺点是不同号码的抛量可能差很多，生成出来的消息会更碎一些。</li>
                                     <li>适合你想先追求“总共少抛一点”，再去决定怎么发消息的时候用。</li>
@@ -1129,6 +1139,10 @@
                     <div id="licenseMachineFingerprint">-</div>
                 </div>
                 <div class="license-field full-width">
+                    <label>设备码来源</label>
+                    <div id="licenseMachineFingerprintSource">-</div>
+                </div>
+                <div class="license-field full-width">
                     <label>状态说明</label>
                     <div id="licenseReason">-</div>
                 </div>
@@ -1140,7 +1154,6 @@
             <div class="license-offline-box">
                 <div class="license-offline-title">离线授权协助</div>
                 <div id="licenseOfflineHint" class="license-offline-hint">可复制本机离线授权信息发给管理员签发。</div>
-                <div id="licenseOfflinePaths" class="license-offline-paths"></div>
             </div>
             <div class="license-activate-box">
                 <div class="license-activate-title">授权码激活</div>
