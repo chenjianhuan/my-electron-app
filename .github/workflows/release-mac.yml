@@ -7,6 +7,9 @@ on:
         description: Existing release tag to attach macOS assets to
         required: true
         default: v6.1.6
+  push:
+    tags:
+      - "mac-v*"
 
 permissions:
   contents: write
@@ -16,10 +19,22 @@ jobs:
     runs-on: macos-latest
 
     steps:
+      - name: Resolve release tag
+        id: release_tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME#mac-}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
       - name: Checkout tagged source
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ steps.release_tag.outputs.tag }}
 
       - name: Restore bundled AI model assets
         shell: bash
@@ -47,7 +62,7 @@ jobs:
       - name: Publish macOS assets
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag }}
+          tag_name: ${{ steps.release_tag.outputs.tag }}
           overwrite_files: true
           fail_on_unmatched_files: true
           files: |
