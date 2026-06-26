@@ -1,8 +1,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { getMachineFingerprintInfo, matchMachineFingerprint } = require('./MachineFingerprint');
 
 const TRIAL_DAYS = 7;
 const CLOCK_ROLLBACK_TOLERANCE_MS = 5 * 60 * 1000;
@@ -12,9 +11,27 @@ class TrialGuard {
   constructor(options) {
     this.app = options.app;
     this.trialDays = Number.isFinite(Number(options.trialDays)) ? Number(options.trialDays) : TRIAL_DAYS;
-    this.machineFingerprint = this.buildMachineFingerprint();
+    this.machineFingerprintInfo = getMachineFingerprintInfo();
+    this.machineFingerprint = this.getAnchorMachineFingerprint();
     this.anchorPaths = this.buildAnchorPaths();
     this.lastStatus = null;
+  }
+
+  refreshMachineFingerprintInfo() {
+    this.machineFingerprintInfo = getMachineFingerprintInfo();
+    this.machineFingerprint = this.getAnchorMachineFingerprint();
+    return this.machineFingerprintInfo;
+  }
+
+  getAnchorMachineFingerprint() {
+    if (this.machineFingerprintInfo && this.machineFingerprintInfo.machineFingerprint) {
+      return this.machineFingerprintInfo.machineFingerprint;
+    }
+    const candidates = this.machineFingerprintInfo && Array.isArray(this.machineFingerprintInfo.candidates)
+      ? this.machineFingerprintInfo.candidates
+      : [];
+    const fallback = candidates.find(item => item && item.fingerprint);
+    return fallback ? fallback.fingerprint : '';
   }
 
   getStatus() {
@@ -22,6 +39,7 @@ class TrialGuard {
   }
 
   checkTrialAccess() {
+    this.refreshMachineFingerprintInfo();
     const now = Date.now();
     const loaded = this.loadAnchors();
     if (loaded.tampered) {
@@ -137,7 +155,7 @@ class TrialGuard {
   validateAnchor(anchor) {
     if (!anchor || typeof anchor !== 'object') return false;
     if (anchor.version !== 1) return false;
-    if (anchor.machineFingerprint !== this.machineFingerprint) return false;
+    if (!matchMachineFingerprint(anchor.machineFingerprint, this.machineFingerprintInfo)) return false;
     if (!Number.isFinite(anchor.firstSeenAt) || !Number.isFinite(anchor.lastSeenAt)) return false;
     if (anchor.lastSeenAt < anchor.firstSeenAt) return false;
     return anchor.checksum === this.computeChecksum(anchor);
@@ -148,38 +166,6 @@ class TrialGuard {
     return crypto.createHash('sha256').update(plain).digest('hex');
   }
 
-  buildMachineFingerprint() {
-    const machineId = this.getPlatformMachineId();
-    const parts = [
-      process.platform,
-      os.arch(),
-      machineId || os.hostname(),
-    ].filter(Boolean);
-    return crypto.createHash('sha256').update(parts.join('|')).digest('hex');
-  }
-
-  getPlatformMachineId() {
-    try {
-      if (process.platform === 'darwin') {
-        const text = execFileSync('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice'], { encoding: 'utf8', timeout: 3000 });
-        const match = text.match(/"IOPlatformUUID"\s=\s"([^"]+)"/);
-        return match ? match[1] : '';
-      }
-      if (process.platform === 'win32') {
-        const ps = '(Get-CimInstance Win32_ComputerSystemProduct).UUID';
-        return execFileSync('powershell', ['-NoProfile', '-Command', ps], { encoding: 'utf8', timeout: 3000 }).trim();
-      }
-      if (process.platform === 'linux') {
-        const machineIdPath = '/etc/machine-id';
-        if (fs.existsSync(machineIdPath)) {
-          return fs.readFileSync(machineIdPath, 'utf8').trim();
-        }
-      }
-    } catch (error) {
-      return '';
-    }
-    return '';
-  }
 }
 
 module.exports = {

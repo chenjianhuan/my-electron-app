@@ -18,6 +18,9 @@ dist/*.yml
 .DS_Store
 Thumbs.db
 
+# Claude Code local data/worktrees
+.claude/
+
 # Local tooling/data artifacts
 .venv-ocr/
 dist-license-studio/

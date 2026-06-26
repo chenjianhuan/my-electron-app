@@ -37,8 +37,13 @@
           <input id="usbCustomerId" type="text" placeholder="例如 C001">
         </div>
         <div class="field">
-          <label for="usbExpireAt">到期日期</label>
-          <input id="usbExpireAt" type="date">
+          <label for="usbDurationMonths">续费时长</label>
+          <select id="usbDurationMonths">
+            <option value="" selected disabled>请手动选择续费时长</option>
+            <option value="1">从现在起 1 个月</option>
+            <option value="6">从现在起 6 个月</option>
+            <option value="12">从现在起 1 年</option>
+          </select>
         </div>
         <div class="field">
           <label for="usbGraceDays">宽限天数</label>
@@ -47,8 +52,9 @@
         <div class="field">
           <label for="usbTier">套餐</label>
           <select id="usbTier">
+            <option value="" selected disabled>请手动选择套餐</option>
             <option value="plus">Plus</option>
-            <option value="pro" selected>Pro</option>
+            <option value="pro">Pro</option>
           </select>
         </div>
         <div class="field">
@@ -56,6 +62,11 @@
           <select id="usbBillingCycle">
             <option value="lifetime" selected>lifetime</option>
           </select>
+        </div>
+        <div class="field field-full">
+          <label>预计到期时间</label>
+          <div id="usbExpirePreview" class="value-preview">-</div>
+          <div class="field-hint">签发时会按点击按钮那一刻的当前时间重新计算。</div>
         </div>
       </div>
       <div class="actions">
@@ -74,8 +85,13 @@
           <input id="offlineCustomerId" type="text" placeholder="例如 C001">
         </div>
         <div class="field">
-          <label for="offlineExpireAt">到期日期</label>
-          <input id="offlineExpireAt" type="date">
+          <label for="offlineDurationMonths">续费时长</label>
+          <select id="offlineDurationMonths">
+            <option value="" selected disabled>请手动选择续费时长</option>
+            <option value="1">从现在起 1 个月</option>
+            <option value="6">从现在起 6 个月</option>
+            <option value="12">从现在起 1 年</option>
+          </select>
         </div>
         <div class="field">
           <label for="offlineGraceDays">宽限天数</label>
@@ -84,7 +100,8 @@
         <div class="field">
           <label for="offlineTier">套餐</label>
           <select id="offlineTier">
-            <option value="plus" selected>Plus</option>
+            <option value="" selected disabled>请手动选择套餐</option>
+            <option value="plus">Plus</option>
             <option value="pro">Pro</option>
           </select>
         </div>
@@ -93,6 +110,11 @@
           <select id="offlineBillingCycle">
             <option value="lifetime" selected>lifetime</option>
           </select>
+        </div>
+        <div class="field field-full">
+          <label>预计到期时间</label>
+          <div id="offlineExpirePreview" class="value-preview">-</div>
+          <div class="field-hint">签发时会按点击按钮那一刻的当前时间重新计算。</div>
         </div>
       </div>
       <div class="row">

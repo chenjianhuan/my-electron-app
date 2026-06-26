@@ -1,7 +1,6 @@
 (function bootstrapReader() {
   const STORAGE_KEY = 'book-reader-state-v2';
   const CUSTOM_BOOKS_KEY = 'book-reader-custom-books-v1';
-  const A_MODULE_ID = 'lottery';
 
   const BUILT_IN_MANIFEST = [
     {
@@ -168,6 +167,33 @@
     el.searchTip.classList.remove('error', 'success');
     if (type) {
       el.searchTip.classList.add(type);
+    }
+  }
+
+  function getLocalAppVersionFallback() {
+    if (!window.electronAPI || typeof window.electronAPI.getAppVersionSync !== 'function') {
+      return '';
+    }
+    try {
+      return String(window.electronAPI.getAppVersionSync() || '').trim();
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function logReaderAutoRoute(eventType, payload = {}) {
+    if (!window.electronAPI || typeof window.electronAPI.send !== 'function') {
+      return;
+    }
+    try {
+      window.electronAPI.send('perf:log', {
+        type: String(eventType || 'reader-auto-route'),
+        processType: 'renderer',
+        page: 'reader.html',
+        payload,
+      });
+    } catch (error) {
+      // ignore diagnostic logging failures
     }
   }
 
@@ -341,6 +367,13 @@
         return result.text;
       }
       throw new Error((result && result.reason) || '读取内置书籍失败');
+    }
+
+    const currentProtocol = window.location && window.location.protocol
+      ? String(window.location.protocol)
+      : '';
+    if (currentProtocol === 'file:') {
+      throw new Error('IPC 不可用');
     }
 
     const response = await fetch(`./books/${fileName}`);
@@ -575,31 +608,71 @@
   async function tryEnterABusinessByPassword(passwordText) {
     const password = String(passwordText || '').trim();
     if (!password) {
-      return;
+      return { ok: false, reason: '密码为空' };
     }
 
     if (!window.electronAPI || typeof window.electronAPI.invoke !== 'function') {
-      return;
+      return { ok: false, reason: 'IPC 不可用' };
     }
 
-    if (state.autoRouteInFlight) return;
+    if (state.autoRouteInFlight) {
+      return { ok: false, reason: '自动跳转进行中' };
+    }
     state.autoRouteInFlight = true;
+    let jumped = false;
+    logReaderAutoRoute('reader-auto-route-attempt', {
+      candidateLength: password.length,
+    });
 
     try {
-      const unlockResult = await window.electronAPI.invoke('module-auth:unlock', { password });
-      if (!unlockResult || !unlockResult.ok) {
-        return;
+      const routeResult = await window.electronAPI.invoke('module-auth:unlock-and-open', { password });
+      if (!routeResult || !routeResult.ok) {
+        const reason = routeResult && routeResult.reason
+          ? String(routeResult.reason)
+          : '口令校验失败';
+        const failedResult = {
+          ok: false,
+          phase: routeResult && routeResult.phase ? String(routeResult.phase) : 'unlock',
+          reason,
+          code: routeResult && routeResult.code ? String(routeResult.code) : '',
+        };
+        logReaderAutoRoute('reader-auto-route-failure', {
+          candidateLength: password.length,
+          phase: failedResult.phase,
+          code: failedResult.code,
+          reason,
+        });
+        return failedResult;
       }
 
-      if (unlockResult.moduleId !== A_MODULE_ID) {
-        return;
-      }
-
-      await window.electronAPI.invoke('module-router:open', { moduleId: A_MODULE_ID });
+      jumped = true;
+      logReaderAutoRoute('reader-auto-route-success', {
+        candidateLength: password.length,
+        moduleId: routeResult && routeResult.moduleId ? String(routeResult.moduleId) : '',
+        moduleName: routeResult && routeResult.moduleName ? String(routeResult.moduleName) : '',
+      });
+      return {
+        ok: true,
+        moduleId: routeResult && routeResult.moduleId ? String(routeResult.moduleId) : '',
+        moduleName: routeResult && routeResult.moduleName ? String(routeResult.moduleName) : '',
+      };
     } catch (error) {
-      // ignore auto-routing errors
+      const failedResult = {
+        ok: false,
+        phase: 'exception',
+        reason: error && error.message ? error.message : '自动跳转异常',
+      };
+      logReaderAutoRoute('reader-auto-route-failure', {
+        candidateLength: password.length,
+        phase: 'exception',
+        reason: failedResult.reason,
+      });
+      return failedResult;
     } finally {
       state.autoRouteInFlight = false;
+      if (!jumped) {
+        state.autoAttemptedPassword = '';
+      }
     }
   }
 
@@ -652,7 +725,16 @@
         return;
       }
       state.autoAttemptedPassword = candidate;
-      tryEnterABusinessByPassword(candidate);
+      tryEnterABusinessByPassword(candidate).then((result) => {
+        if (!result || result.ok) {
+          return;
+        }
+        const reason = String(result.reason || '').trim();
+        if (!reason) {
+          return;
+        }
+        setSearchTip(`自动跳转未触发：${reason}`, 'error');
+      });
     });
 
     el.searchInput.addEventListener('keydown', (event) => {
@@ -719,6 +801,10 @@
   }
 
   async function initVersion() {
+    const fallbackVersion = getLocalAppVersionFallback();
+    if (fallbackVersion) {
+      el.appVersionBadge.textContent = `v${fallbackVersion}`;
+    }
     try {
       if (!window.electronAPI || typeof window.electronAPI.invoke !== 'function') {
         return;
@@ -728,7 +814,9 @@
         el.appVersionBadge.textContent = `v${version}`;
       }
     } catch (error) {
-      // ignore version loading errors
+      if (!fallbackVersion) {
+        el.appVersionBadge.textContent = 'v-';
+      }
     }
   }
 
@@ -738,11 +826,17 @@
     }
     try {
       const authState = await window.electronAPI.invoke('module-auth:get-state');
-      const fromState = authState && authState.defaultPasswords && authState.defaultPasswords.lottery;
-      if (typeof fromState === 'string' && fromState.trim()) {
-        const merged = new Set([fromState.trim(), ...state.passwordCandidates]);
-        state.passwordCandidates = Array.from(merged);
-      }
+      const defaultPasswords = authState && authState.defaultPasswords && typeof authState.defaultPasswords === 'object'
+        ? authState.defaultPasswords
+        : null;
+      const merged = new Set(state.passwordCandidates);
+      ['lottery', 'wechat'].forEach((moduleId) => {
+        const candidate = defaultPasswords && defaultPasswords[moduleId];
+        if (typeof candidate === 'string' && candidate.trim()) {
+          merged.add(candidate.trim());
+        }
+      });
+      state.passwordCandidates = Array.from(merged);
     } catch (error) {
       // ignore and use fallback candidate
     }

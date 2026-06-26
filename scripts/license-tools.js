@@ -2,11 +2,14 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const readline = require('readline');
 const { encodeLicenseCodeFromString } = require('../src/services/LicenseCodec');
+const {
+  buildMachineFingerprint: buildStableMachineFingerprint,
+  getMachineFingerprintInfo: getStableMachineFingerprintInfo,
+} = require('../src/services/MachineFingerprint');
 
 const LICENSE_NAME = 'license.dat';
 const PLAN_TIERS = ['plus', 'pro'];
@@ -316,37 +319,8 @@ async function cmdIssueWizard(args) {
   console.log(`授权文件: ${output}`);
 }
 
-function getPlatformMachineId() {
-  try {
-    if (process.platform === 'darwin') {
-      const text = execFileSync('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice'], { encoding: 'utf8', timeout: 3000 });
-      const match = text.match(/"IOPlatformUUID"\s=\s"([^"]+)"/);
-      return match ? match[1] : '';
-    }
-    if (process.platform === 'win32') {
-      const ps = '(Get-CimInstance Win32_ComputerSystemProduct).UUID';
-      return execFileSync('powershell', ['-NoProfile', '-Command', ps], { encoding: 'utf8', timeout: 3000 }).trim();
-    }
-    if (process.platform === 'linux') {
-      const machineIdPath = '/etc/machine-id';
-      if (fs.existsSync(machineIdPath)) {
-        return fs.readFileSync(machineIdPath, 'utf8').trim();
-      }
-    }
-  } catch (error) {
-    return '';
-  }
-  return '';
-}
-
 function buildMachineFingerprint() {
-  const machineId = getPlatformMachineId();
-  const parts = [
-    process.platform,
-    os.arch(),
-    machineId || os.hostname(),
-  ].filter(Boolean);
-  return hashFingerprint(parts.join('|'));
+  return buildStableMachineFingerprint();
 }
 
 function cmdMachineFingerprint() {
@@ -440,13 +414,7 @@ function issueOfflineLicense(options) {
 }
 
 function getMachineFingerprintInfo() {
-  const machineId = getPlatformMachineId();
-  return {
-    platform: process.platform,
-    arch: os.arch(),
-    machineId: machineId || '(fallback-hostname)',
-    machineFingerprint: buildMachineFingerprint(),
-  };
+  return getStableMachineFingerprintInfo();
 }
 
 async function main() {

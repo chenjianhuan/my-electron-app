@@ -22,6 +22,72 @@ function requireValue(value, label) {
   return text;
 }
 
+function parseDurationMonths(rawValue, fallback = NaN) {
+  const value = Number.parseInt(rawValue, 10);
+  if (value === 1 || value === 6 || value === 12) {
+    return value;
+  }
+  return fallback;
+}
+
+function addMonthsKeepingLocalClock(baseDate, months) {
+  const source = baseDate instanceof Date ? new Date(baseDate.getTime()) : new Date(baseDate);
+  if (!Number.isFinite(source.getTime())) {
+    throw new Error('当前时间无效');
+  }
+
+  const target = new Date(source.getTime());
+  const originalDay = target.getDate();
+  target.setDate(1);
+  target.setMonth(target.getMonth() + months);
+  const lastDayOfTargetMonth = new Date(
+    target.getFullYear(),
+    target.getMonth() + 1,
+    0
+  ).getDate();
+  target.setDate(Math.min(originalDay, lastDayOfTargetMonth));
+  return target;
+}
+
+function formatDateTimeForPreview(date) {
+  const target = date instanceof Date ? date : new Date(date);
+  if (!Number.isFinite(target.getTime())) {
+    return '-';
+  }
+  return target.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+}
+
+function computeExpireAtFromNow(months) {
+  const durationMonths = parseDurationMonths(months);
+  if (!Number.isInteger(durationMonths)) {
+    throw new Error('续费时长不能为空');
+  }
+  const expireAt = addMonthsKeepingLocalClock(new Date(), durationMonths);
+  return expireAt.toISOString();
+}
+
+function updateExpirePreview(prefix) {
+  const select = $(`${prefix}DurationMonths`);
+  const preview = $(`${prefix}ExpirePreview`);
+  if (!select || !preview) return;
+  const durationMonths = parseDurationMonths(select.value);
+  if (!Number.isInteger(durationMonths)) {
+    preview.textContent = '请先选择续费时长';
+    return;
+  }
+  const expireAt = addMonthsKeepingLocalClock(new Date(), durationMonths);
+  const durationText = durationMonths === 12 ? '1 年' : `${durationMonths} 个月`;
+  preview.textContent = `${formatDateTimeForPreview(expireAt)}（从现在起 ${durationText}）`;
+}
+
 async function copyOfflineCode() {
   const code = String(($('offlineLicenseCode') && $('offlineLicenseCode').value) || '').trim();
   if (!code) {
@@ -51,8 +117,8 @@ async function loadDefaults() {
   const defaults = await window.licenseStudio.getDefaults();
   $('privateKeyPath').value = defaults.privateKeyPath || '';
   $('offlineOutputPath').value = defaults.offlineOutputPath || '';
-  $('usbExpireAt').value = defaults.defaultExpireAt || '';
-  $('offlineExpireAt').value = defaults.defaultExpireAt || '';
+  updateExpirePreview('usb');
+  updateExpirePreview('offline');
 }
 
 async function refreshUsbList() {
@@ -100,31 +166,34 @@ async function loadMachineFingerprint() {
 }
 
 async function issueUsb() {
+  const expireAt = computeExpireAtFromNow(requireValue($('usbDurationMonths').value, '续费时长'));
   const payload = {
     privateKeyPath: requireValue($('privateKeyPath').value, '私钥路径'),
     customerId: requireValue($('usbCustomerId').value, '客户编号'),
     mountPath: requireValue($('usbMountPath').value, 'U盘路径'),
-    expireAt: requireValue($('usbExpireAt').value, '到期日期'),
+    expireAt,
     graceDays: $('usbGraceDays').value,
-    tier: $('usbTier').value,
+    tier: requireValue($('usbTier').value, '套餐'),
     billingCycle: $('usbBillingCycle').value,
   };
 
   const result = await window.licenseStudio.issueUsb(payload);
   appendLog(`U盘签发成功 -> ${result.outputPath}`);
   appendLog(`客户编号: ${result.payload.customerId} | 套餐: ${result.payload.tier} | 指纹: ${result.usbFingerprint}`);
+  appendLog(`到期时间: ${result.payload.expireAt}`);
   alert(`U盘签发成功\n${result.outputPath}`);
 }
 
 async function issueOffline() {
+  const expireAt = computeExpireAtFromNow(requireValue($('offlineDurationMonths').value, '续费时长'));
   const payload = {
     privateKeyPath: requireValue($('privateKeyPath').value, '私钥路径'),
     customerId: requireValue($('offlineCustomerId').value, '客户编号'),
     machineFingerprint: requireValue($('machineFingerprint').value, '机器指纹'),
-    expireAt: requireValue($('offlineExpireAt').value, '到期日期'),
+    expireAt,
     outputPath: requireValue($('offlineOutputPath').value, '输出路径'),
     graceDays: $('offlineGraceDays').value,
-    tier: $('offlineTier').value,
+    tier: requireValue($('offlineTier').value, '套餐'),
     billingCycle: $('offlineBillingCycle').value,
   };
 
@@ -132,6 +201,7 @@ async function issueOffline() {
   $('offlineLicenseCode').value = result.licenseCode || '';
   appendLog(`离线签发成功 -> ${result.outputPath}`);
   appendLog(`客户编号: ${result.payload.customerId} | 套餐: ${result.payload.tier} | 机器指纹: ${result.payload.machineFingerprint}`);
+  appendLog(`到期时间: ${result.payload.expireAt}`);
   if (result.licenseCode) {
     appendLog('已生成可直接发送给用户的授权码');
   }
@@ -143,6 +213,8 @@ function bindEvents() {
   $('pickPrivateKeyBtn').addEventListener('click', () => withErrorGuard(pickPrivateKey));
   $('pickOutputBtn').addEventListener('click', () => withErrorGuard(pickOutputPath));
   $('loadMachineFingerprintBtn').addEventListener('click', () => withErrorGuard(loadMachineFingerprint));
+  $('usbDurationMonths').addEventListener('change', () => updateExpirePreview('usb'));
+  $('offlineDurationMonths').addEventListener('change', () => updateExpirePreview('offline'));
   $('copyOfflineCodeBtn').addEventListener('click', () => withErrorGuard(copyOfflineCode));
   $('issueUsbBtn').addEventListener('click', () => withErrorGuard(issueUsb));
   $('issueOfflineBtn').addEventListener('click', () => withErrorGuard(issueOffline));

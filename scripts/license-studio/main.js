@@ -4,17 +4,17 @@ const path = require('path');
 const licenseTools = require('../license-tools');
 
 let win = null;
-
-function getDefaultExpireDate() {
-  const date = new Date();
-  date.setFullYear(date.getFullYear() + 1);
-  return date.toISOString().slice(0, 10);
-}
+const PREFERRED_PRIVATE_KEY_PATH = '/Users/wangci/私钥/my-electron-app/license-private.pem';
 
 function getDefaultPrivateKeyPath() {
+  if (fs.existsSync(PREFERRED_PRIVATE_KEY_PATH)) {
+    return PREFERRED_PRIVATE_KEY_PATH;
+  }
   const configuredPath = String(licenseTools.getPrivateKeyFromEnv() || '').trim();
-  if (!configuredPath) return '';
-  return path.resolve(configuredPath);
+  if (configuredPath) {
+    return path.resolve(configuredPath);
+  }
+  return PREFERRED_PRIVATE_KEY_PATH;
 }
 
 function getDefaultOutputPath() {
@@ -43,7 +43,6 @@ function registerIpc() {
   ipcMain.handle('studio:get-defaults', () => ({
     privateKeyPath: getDefaultPrivateKeyPath(),
     offlineOutputPath: getDefaultOutputPath(),
-    defaultExpireAt: getDefaultExpireDate(),
   }));
 
   ipcMain.handle('studio:list-usb', () => licenseTools.listUsb());

@@ -85,6 +85,10 @@ body {
   gap: 6px;
 }
 
+.field-full {
+  grid-column: 1 / -1;
+}
+
 label {
   font-size: 13px;
   color: var(--muted);
@@ -112,6 +116,23 @@ textarea {
   resize: vertical;
   min-height: 96px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.45;
+}
+
+.value-preview {
+  min-height: 42px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #f8fafc;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.field-hint {
+  color: var(--muted);
+  font-size: 12px;
   line-height: 1.45;
 }
 
