@@ -2855,14 +2855,20 @@ function buildOfflineLicenseRequestText(request) {
 }
 
 async function copyOfflineLicenseRequest() {
+    const hasFingerprint = (req) => Boolean(req && String(req.machineFingerprint || '').trim());
     try {
         let request = currentOfflineLicenseRequest;
-        if (!request && ipcRenderer && typeof ipcRenderer.invoke === 'function') {
+        // 缓存里没有、或设备码为空时，按需向主进程“等到拿到”再复制，绝不复用空设备码。
+        if (!hasFingerprint(request) && ipcRenderer && typeof ipcRenderer.invoke === 'function') {
             request = await ipcRenderer.invoke('license:build-offline-request');
             currentOfflineLicenseRequest = request || null;
             renderLicenseOfflineAssist();
         }
-        const text = buildOfflineLicenseRequestText(request || null);
+        if (!hasFingerprint(request)) {
+            showError('设备码读取失败', '请点“复制”重试，多次失败请联系管理员');
+            return;
+        }
+        const text = buildOfflineLicenseRequestText(request);
         await copyPlainText(text);
         showSuccess('离线授权信息已复制');
     } catch (error) {
@@ -2956,7 +2962,9 @@ function formatMachineFingerprintSource(payload) {
     const source = String(payload.machineFingerprintSource || '').trim();
     if (!source) return '';
     if (source === 'machine_guid') return 'Windows MachineGuid';
-    if (source === 'wmi_uuid') return 'Windows WMI UUID（兼容）';
+    if (source === 'wmi_uuid') return 'Windows 主板UUID';
+    if (source === 'disk_serial') return '系统磁盘序列号';
+    if (source === 'mac') return '网卡MAC地址';
     if (source === 'io_platform_uuid') return 'macOS IOPlatformUUID';
     if (source === 'machine_id') return 'Linux machine-id';
     if (source === 'legacy_hostname') return '电脑名称（兼容）';

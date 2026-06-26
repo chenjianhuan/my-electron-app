@@ -3,6 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { getMachineFingerprintInfo, getMachineFingerprintInfoAsync, matchMachineFingerprint } = require('./MachineFingerprint');
 const { normalizeTier, normalizeBillingCycle, getPlanDefinition } = require('./PlanCatalog');
 
 const LICENSE_FILE_NAME = 'license.dat';
@@ -19,10 +20,65 @@ class LicenseGuard {
     this.onRevoked = options.onRevoked;
     this.onStatusChange = options.onStatusChange;
     this.publicKey = this.loadPublicKey(options.publicKeyPath);
-    this.machineFingerprint = this.buildMachineFingerprint();
+    this.machineFingerprintInfo = getMachineFingerprintInfo();
+    this.machineFingerprint = this.machineFingerprintInfo.machineFingerprint;
+    this._machineFingerprintInFlight = null;
     this.timer = null;
     this.lastStatus = null;
+    this.lastUsbScanError = '';
     this.lastTrustedTimePath = path.join(this.app.getPath('userData'), 'license-clock.json');
+    // 后台预热：异步把所有硬件来源读一遍，升级到更稳的设备码候选集，不阻塞启动。
+    this.ensureMachineFingerprintInfo().catch(() => {});
+  }
+
+  refreshMachineFingerprintInfo() {
+    this.machineFingerprintInfo = getMachineFingerprintInfo();
+    this.machineFingerprint = this.machineFingerprintInfo.machineFingerprint;
+    return this.machineFingerprintInfo;
+  }
+
+  // 异步“等到拿到”：彻底读取所有硬件来源（并行 + 重试），拿到更优来源就升级内存缓存。
+  // 并发调用共享同一个在途 Promise；全程实时计算、绝不落盘。
+  ensureMachineFingerprintInfo(options = {}) {
+    // 已经拿到可用设备码就直接复用（硬件标识本会话内不变），不再重复派生命令。
+    if (!options.force && this.machineFingerprintInfo && this.machineFingerprintInfo.available) {
+      return Promise.resolve(this.machineFingerprintInfo);
+    }
+    if (this._machineFingerprintInFlight) {
+      return this._machineFingerprintInFlight;
+    }
+    this._machineFingerprintInFlight = Promise.resolve()
+      .then(() => getMachineFingerprintInfoAsync(options))
+      .then((info) => {
+        if (info && (info.available || !this.machineFingerprintInfo)) {
+          this.machineFingerprintInfo = info;
+          this.machineFingerprint = info.machineFingerprint;
+        }
+        return this.machineFingerprintInfo;
+      })
+      .catch(() => this.machineFingerprintInfo)
+      .finally(() => {
+        this._machineFingerprintInFlight = null;
+      });
+    return this._machineFingerprintInFlight;
+  }
+
+  // 设备码实时快照（供离线授权请求、界面读取与诊断导出）。
+  getMachineFingerprintSnapshot() {
+    const info = this.machineFingerprintInfo || {};
+    const candidates = Array.isArray(info.candidates) ? info.candidates : [];
+    return {
+      machineFingerprint: info.machineFingerprint || '',
+      machineFingerprintSource: info.fingerprintSource || '',
+      machineFingerprintLabel: info.fingerprintLabel || '',
+      available: Boolean(info.available),
+      diagnostics: Array.isArray(info.diagnostics) ? info.diagnostics : [],
+      candidateSources: candidates.map(item => ({
+        source: item.source,
+        legacy: Boolean(item.legacy),
+        fingerprintPrefix: String(item.fingerprint || '').slice(0, 12),
+      })),
+    };
   }
 
   loadPublicKey(publicKeyPath) {
@@ -100,6 +156,12 @@ class LicenseGuard {
   }
 
   checkAuthorization() {
+    // 设备码一次算好后缓存复用：硬件标识本会话内不会变，无需每 3 秒重新派生 reg。
+    // 仅当还没拿到可用设备码时，才做一次轻量同步兜底，并触发异步彻底读取。
+    if (!this.machineFingerprintInfo || !this.machineFingerprintInfo.available) {
+      this.refreshMachineFingerprintInfo();
+      this.ensureMachineFingerprintInfo().catch(() => {});
+    }
     const candidates = this.buildLicenseCandidates();
     let bestReason = '未检测到授权文件（U盘或离线）';
     let foundLicenseFile = false;
@@ -135,7 +197,14 @@ class LicenseGuard {
   }
 
   buildUsbLicenseCandidates() {
-    const drives = this.listRemovableDrives();
+    let drives = [];
+    try {
+      drives = this.listRemovableDrives();
+      this.lastUsbScanError = '';
+    } catch (error) {
+      this.lastUsbScanError = error && error.message ? error.message : String(error);
+      drives = [];
+    }
     return drives.map(drive => ({
       source: LICENSE_SOURCE_USB,
       sourceLabel: this.getSourceLabel(LICENSE_SOURCE_USB),
@@ -295,6 +364,8 @@ class LicenseGuard {
       bindType: bindingCheck.bindType,
       usbMountPath: candidate.drive ? candidate.drive.mountPath : '',
       machineFingerprint: this.machineFingerprint,
+      machineFingerprintSource: this.machineFingerprintInfo ? this.machineFingerprintInfo.fingerprintSource : '',
+      machineFingerprintLabel: this.machineFingerprintInfo ? this.machineFingerprintInfo.fingerprintLabel : '',
       reason: inGrace
         ? `${planDef.name} ${bindingCheck.sourceLabel}处于宽限期，剩余 ${remainingDays} 天`
         : `${planDef.name} ${bindingCheck.sourceLabel}有效`,
@@ -320,7 +391,11 @@ class LicenseGuard {
 
     if (hasMachineFingerprint) {
       const expectedMachineFingerprint = String(payload.machineFingerprint);
-      if (expectedMachineFingerprint !== this.machineFingerprint) {
+      const matchedFingerprint = matchMachineFingerprint(expectedMachineFingerprint, this.machineFingerprintInfo);
+      if (!matchedFingerprint) {
+        if (!this.machineFingerprint) {
+          return { ok: false, reason: '未能获取稳定机器码，请稍后重试或联系管理员' };
+        }
         return { ok: false, reason: '机器指纹不匹配' };
       }
     }
@@ -369,6 +444,8 @@ class LicenseGuard {
       mode: 'blocked',
       reason,
       machineFingerprint: this.machineFingerprint,
+      machineFingerprintSource: this.machineFingerprintInfo ? this.machineFingerprintInfo.fingerprintSource : '',
+      machineFingerprintLabel: this.machineFingerprintInfo ? this.machineFingerprintInfo.fingerprintLabel : '',
       ...extra,
     };
   }
@@ -482,38 +559,6 @@ class LicenseGuard {
     return crypto.createHash('sha256').update(input).digest('hex');
   }
 
-  buildMachineFingerprint() {
-    const machineId = this.getPlatformMachineId();
-    const parts = [
-      process.platform,
-      os.arch(),
-      machineId || os.hostname(),
-    ].filter(Boolean);
-    return this.hashFingerprint(parts.join('|'));
-  }
-
-  getPlatformMachineId() {
-    try {
-      if (process.platform === 'darwin') {
-        const text = execFileSync('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice'], { encoding: 'utf8', timeout: 3000 });
-        const match = text.match(/"IOPlatformUUID"\s=\s"([^"]+)"/);
-        return match ? match[1] : '';
-      }
-      if (process.platform === 'win32') {
-        const ps = '(Get-CimInstance Win32_ComputerSystemProduct).UUID';
-        return execFileSync('powershell', ['-NoProfile', '-Command', ps], { encoding: 'utf8', timeout: 3000 }).trim();
-      }
-      if (process.platform === 'linux') {
-        const machineIdPath = '/etc/machine-id';
-        if (fs.existsSync(machineIdPath)) {
-          return fs.readFileSync(machineIdPath, 'utf8').trim();
-        }
-      }
-    } catch (error) {
-      return '';
-    }
-    return '';
-  }
 }
 
 module.exports = {

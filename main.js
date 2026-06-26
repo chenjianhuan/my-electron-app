@@ -17,6 +17,7 @@ const {
   DEFAULT_PASSWORD_A,
   DEFAULT_PASSWORD_B,
 } = require('./src/services/ModulePasswordRouter');
+const { PerfLogger } = require('./src/services/PerfLogger');
 const { initAutoUpdater } = require('./src/updater/autoUpdater');
 
 let win;
@@ -37,10 +38,12 @@ let lastRendererStage = {
   at: '',
   meta: null,
 };
+let perfLogger = null;
 const MODULE_PASSWORD_OVERRIDE_FILE = 'module-password-overrides.json';
 const TRIAL_PLAN_PREFERENCE_FILE = 'trial-plan-preference.json';
 const TRIAL_DAYS = 7;
 const basePasswordRoutes = buildPasswordRoutesFromEnv(process.env);
+const PERF_IPC_LOG_THRESHOLD_MS = 24;
 
 const modulePasswordRouter = new ModulePasswordRouter({
   passwordRoutes: basePasswordRoutes,
@@ -59,6 +62,230 @@ const WINDOW_SIZE_CONFIG = {
   maxAutoHeight: 1200,
 };
 const CLIPBOARD_CHANGECOUNT_JXA = 'ObjC.import("AppKit"); const pb = $.NSPasteboard.generalPasteboard; console.log(ObjC.unwrap(pb.changeCount));';
+
+function getPerfLogger() {
+  if (!perfLogger) {
+    perfLogger = new PerfLogger(app);
+  }
+  return perfLogger;
+}
+
+function roundPerfDuration(value) {
+  return Math.round(Number(value || 0) * 10) / 10;
+}
+
+function normalizePageLabel(rawValue) {
+  const text = String(rawValue || '').trim();
+  if (!text) return '';
+  const parts = text.split(/[\\/]/).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : text;
+}
+
+function getEventSenderPage(event) {
+  try {
+    if (event && event.senderFrame && event.senderFrame.url) {
+      const frameUrl = String(event.senderFrame.url || '');
+      if (frameUrl.startsWith('file://')) {
+        const parsed = new URL(frameUrl);
+        return normalizePageLabel(parsed.pathname);
+      }
+      return normalizePageLabel(frameUrl);
+    }
+  } catch (error) {
+    // ignore
+  }
+
+  try {
+    if (event && event.sender && typeof event.sender.getURL === 'function') {
+      return normalizePageLabel(event.sender.getURL());
+    }
+  } catch (error) {
+    // ignore
+  }
+
+  return '';
+}
+
+function summarizePerfValue(value, depth = 0) {
+  return getPerfLogger().summarize(value, depth);
+}
+
+function shouldLogIpcPerf(channel, durationMs) {
+  const safeChannel = String(channel || '').trim();
+  if (!safeChannel) return false;
+  if (safeChannel.startsWith('perf:')) return false;
+  return Number(durationMs || 0) >= PERF_IPC_LOG_THRESHOLD_MS;
+}
+
+function formatExportTimestamp(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hour = String(date.getHours()).padStart(2, '0');
+  const minute = String(date.getMinutes()).padStart(2, '0');
+  const second = String(date.getSeconds()).padStart(2, '0');
+  return `${year}${month}${day}-${hour}${minute}${second}`;
+}
+
+function buildPerfExportSummary(entries) {
+  const typeCounts = {};
+  let stallCount = 0;
+  let longTaskCount = 0;
+  let maxRendererStallMs = 0;
+  let maxMainIpcMs = 0;
+  let maxRendererInvokeMs = 0;
+
+  (Array.isArray(entries) ? entries : []).forEach((entry) => {
+    const type = String(entry && entry.type || '');
+    if (!type) return;
+    typeCounts[type] = (typeCounts[type] || 0) + 1;
+    const payload = entry && entry.payload ? entry.payload : {};
+    const durationMs = Number(payload && payload.durationMs || 0);
+    if (type === 'renderer-stall') {
+      stallCount += 1;
+      maxRendererStallMs = Math.max(maxRendererStallMs, durationMs);
+    } else if (type === 'renderer-long-task') {
+      longTaskCount += 1;
+    } else if (type === 'main-ipc-handle' || type === 'main-ipc-event') {
+      maxMainIpcMs = Math.max(maxMainIpcMs, durationMs);
+    } else if (type === 'renderer-ipc-invoke' || type === 'renderer-ipc-invoke-error') {
+      maxRendererInvokeMs = Math.max(maxRendererInvokeMs, durationMs);
+    }
+  });
+
+  return {
+    totalEntries: Array.isArray(entries) ? entries.length : 0,
+    stallCount,
+    longTaskCount,
+    maxRendererStallMs: roundPerfDuration(maxRendererStallMs),
+    maxMainIpcMs: roundPerfDuration(maxMainIpcMs),
+    maxRendererInvokeMs: roundPerfDuration(maxRendererInvokeMs),
+    typeCounts,
+  };
+}
+
+async function exportPerfLogs(options = {}) {
+  const logger = getPerfLogger();
+  logger.flushSync();
+  const entries = logger.getRecentEntries({
+    sessionId: logger.getInfo().sessionId,
+    maxEntries: Number(options.maxEntries) || 4000,
+    fileLimit: 7,
+  });
+  const suggestedFileName = `messagecounter-diagnostics-${formatExportTimestamp()}.json`;
+  const defaultPath = path.join(app.getPath('desktop'), suggestedFileName);
+  const targetWindow = options.window && !options.window.isDestroyed() ? options.window : win;
+
+  const dialogResult = await dialog.showSaveDialog(targetWindow || undefined, {
+    title: '导出诊断日志',
+    defaultPath,
+    filters: [
+      { name: '诊断日志', extensions: ['json'] },
+      { name: '所有文件', extensions: ['*'] },
+    ],
+    properties: ['createDirectory', 'showOverwriteConfirmation'],
+  });
+
+  if (!dialogResult || dialogResult.canceled || !dialogResult.filePath) {
+    return { ok: false, canceled: true };
+  }
+
+  // 设备码诊断：强制重新彻底读取一次各硬件来源，记录“哪一档生效 / 各花多久”，便于远程定位。
+  let machineFingerprintDiag = null;
+  try {
+    if (licenseGuard && typeof licenseGuard.ensureMachineFingerprintInfo === 'function') {
+      await licenseGuard.ensureMachineFingerprintInfo({ force: true });
+      machineFingerprintDiag = licenseGuard.getMachineFingerprintSnapshot();
+    }
+  } catch (error) {
+    machineFingerprintDiag = { error: String((error && error.message) || error) };
+  }
+
+  const exportPayload = {
+    exportedAt: new Date().toISOString(),
+    app: {
+      name: app.getName(),
+      version: app.getVersion(),
+      platform: process.platform,
+      arch: os.arch(),
+      electron: process.versions && process.versions.electron ? process.versions.electron : '',
+      chrome: process.versions && process.versions.chrome ? process.versions.chrome : '',
+      node: process.versions && process.versions.node ? process.versions.node : '',
+    },
+    machine: {
+      hostname: os.hostname(),
+      release: os.release(),
+      totalMemoryMb: Math.round(os.totalmem() / 1024 / 1024),
+      cpuCount: Array.isArray(os.cpus()) ? os.cpus().length : 0,
+      cpuModel: Array.isArray(os.cpus()) && os.cpus()[0] ? String(os.cpus()[0].model || '') : '',
+    },
+    machineFingerprint: machineFingerprintDiag || { note: 'licenseGuard 未就绪' },
+    perf: {
+      ...logger.getInfo(),
+      activeModuleId,
+      lastRendererStage,
+      summary: buildPerfExportSummary(entries),
+      entries,
+    },
+  };
+
+  await fs.promises.writeFile(dialogResult.filePath, `${JSON.stringify(exportPayload, null, 2)}\n`, 'utf8');
+  logger.log('main-perf-export', {
+    filePath: dialogResult.filePath,
+    entryCount: entries.length,
+    source: options.source || 'unknown',
+  });
+
+  return {
+    ok: true,
+    filePath: dialogResult.filePath,
+    entryCount: entries.length,
+    summary: exportPayload.perf.summary,
+  };
+}
+
+function installIpcPerfInstrumentation() {
+  if (ipcMain.__perfInstrumentationInstalled) {
+    return;
+  }
+
+  const rawHandle = ipcMain.handle.bind(ipcMain);
+  ipcMain.handle = (channel, listener) => rawHandle(channel, async (event, ...args) => {
+    const startedAt = process.hrtime.bigint();
+    try {
+      return await listener(event, ...args);
+    } finally {
+      const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+      if (shouldLogIpcPerf(channel, durationMs)) {
+        getPerfLogger().log('main-ipc-handle', {
+          channel: String(channel || ''),
+          durationMs: roundPerfDuration(durationMs),
+          page: getEventSenderPage(event),
+          args: summarizePerfValue(args),
+        });
+      }
+    }
+  });
+
+  const rawOn = ipcMain.on.bind(ipcMain);
+  ipcMain.on = (channel, listener) => rawOn(channel, (event, ...args) => {
+    const startedAt = process.hrtime.bigint();
+    try {
+      return listener(event, ...args);
+    } finally {
+      const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+      if (!shouldLogIpcPerf(channel, durationMs)) return;
+      getPerfLogger().log('main-ipc-event', {
+        channel: String(channel || ''),
+        durationMs: roundPerfDuration(durationMs),
+        page: getEventSenderPage(event),
+        args: summarizePerfValue(args),
+      });
+    }
+  });
+
+  ipcMain.__perfInstrumentationInstalled = true;
+}
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -390,6 +617,7 @@ async function loadModulePage(moduleId) {
 
   const pagePath = resolvePublicFilePath(target.file);
   console.log(`Loading module [${moduleId}] from:`, pagePath);
+  const startedAt = process.hrtime.bigint();
 
   const previousModuleId = activeModuleId;
   // 先更新当前模块，避免新页面初始化时读取到旧模块产生误判重定向。
@@ -404,10 +632,25 @@ async function loadModulePage(moduleId) {
       win.setTitle(target.title);
     }
     fitWindowToDisplay(win);
+    getPerfLogger().log('main-module-load', {
+      moduleId,
+      moduleName: target.name,
+      page: target.file,
+      durationMs: roundPerfDuration(Number(process.hrtime.bigint() - startedAt) / 1e6),
+      ok: true,
+    });
     return { ok: true, moduleId, moduleName: target.name };
   } catch (error) {
     activeModuleId = previousModuleId;
     console.error(`Failed to load module [${moduleId}]:`, error);
+    getPerfLogger().log('main-module-load', {
+      moduleId,
+      moduleName: target.name,
+      page: target.file,
+      durationMs: roundPerfDuration(Number(process.hrtime.bigint() - startedAt) / 1e6),
+      ok: false,
+      reason: error && error.message ? error.message : String(error),
+    });
     showErrorDialog('加载页面失败', error.message);
     return { ok: false, reason: error.message || '页面加载失败' };
   }
@@ -471,6 +714,7 @@ function configureMediaPermissionHandlers(targetWindow) {
 
 function createWindow() {
   const adaptiveBounds = computeAdaptiveWindowBounds();
+  let mainFrameLoadStartedAt = 0n;
   win = new BrowserWindow({
     x: adaptiveBounds.x,
     y: adaptiveBounds.y,
@@ -495,6 +739,25 @@ function createWindow() {
 
   configureMediaPermissionHandlers(win);
 
+  win.webContents.on('did-start-loading', () => {
+    mainFrameLoadStartedAt = process.hrtime.bigint();
+    getPerfLogger().log('main-page-loading-start', {
+      page: normalizePageLabel(win.webContents.getURL()),
+      activeModuleId,
+    });
+  });
+
+  win.webContents.on('did-finish-load', () => {
+    const durationMs = mainFrameLoadStartedAt
+      ? Number(process.hrtime.bigint() - mainFrameLoadStartedAt) / 1e6
+      : 0;
+    getPerfLogger().log('main-page-loading-finish', {
+      page: normalizePageLabel(win.webContents.getURL()),
+      activeModuleId,
+      durationMs: roundPerfDuration(durationMs),
+    });
+  });
+
   loadModulePage(MODULE_IDS.AUTH);
 
   // 默认不自动打开开发者工具；需要时通过环境变量显式开启
@@ -512,23 +775,80 @@ function createWindow() {
     if (isMainFrame === false) {
       return;
     }
+    const durationMs = mainFrameLoadStartedAt
+      ? Number(process.hrtime.bigint() - mainFrameLoadStartedAt) / 1e6
+      : 0;
+    getPerfLogger().log('main-page-loading-fail', {
+      page: normalizePageLabel(validatedURL || win.webContents.getURL()),
+      activeModuleId,
+      durationMs: roundPerfDuration(durationMs),
+      errorCode,
+      errorDescription,
+      isMainFrame,
+    });
     console.error('Failed to load page:', { errorCode, errorDescription, validatedURL, isMainFrame });
     showErrorDialog('页面加载失败', `${errorDescription}${validatedURL ? `\n${validatedURL}` : ''}`);
   });
 
   // 监听渲染进程崩溃
   win.webContents.on('crashed', (event) => {
+    getPerfLogger().log('main-renderer-crashed', {
+      activeModuleId,
+      page: normalizePageLabel(win.webContents.getURL()),
+    });
     console.error('Renderer process crashed');
     showErrorDialog('渲染进程崩溃', '应用遇到问题，请重启应用');
   });
 
   // 监听未响应的渲染进程
   win.webContents.on('unresponsive', () => {
+    getPerfLogger().log('main-renderer-unresponsive', {
+      activeModuleId,
+      page: normalizePageLabel(win.webContents.getURL()),
+      lastRendererStage,
+    });
     console.warn('Renderer process became unresponsive', lastRendererStage);
     const stageText = lastRendererStage && lastRendererStage.stage
       ? `\n最后阶段：${lastRendererStage.stage}${lastRendererStage.at ? `\n时间：${lastRendererStage.at}` : ''}`
       : '';
     showErrorDialog('应用无响应', `应用暂时无响应，请稍后重试${stageText}`);
+  });
+
+  win.webContents.on('responsive', () => {
+    getPerfLogger().log('main-renderer-responsive', {
+      activeModuleId,
+      page: normalizePageLabel(win.webContents.getURL()),
+    });
+  });
+
+  win.webContents.on('before-input-event', (event, input) => {
+    const key = String((input && input.key) || '').toLowerCase();
+    const isExportShortcut = input
+      && input.type === 'keyDown'
+      && !!input.shift
+      && !!(input.control || input.meta)
+      && key === 'l';
+
+    if (!isExportShortcut) {
+      return;
+    }
+
+    event.preventDefault();
+    void exportPerfLogs({ window: win, source: 'window-shortcut' })
+      .then((result) => {
+        if (!result || !result.ok || result.canceled) return;
+        dialog.showMessageBox(win, {
+          type: 'info',
+          title: '诊断日志已导出',
+          message: '诊断日志已导出',
+          detail: `文件位置：${result.filePath}\n记录条数：${result.entryCount}`,
+          buttons: ['知道了'],
+          defaultId: 0,
+        }).catch(() => {});
+      })
+      .catch((error) => {
+        dialog.showErrorBox('导出诊断日志失败', error && error.message ? error.message : String(error));
+      });
   });
 
   const handleDisplayMetricsChange = () => fitWindowToDisplay(win);
@@ -738,6 +1058,39 @@ function isSharpRuntimeLoadError(reason) {
     || /sharp\.pixelplumbing\.com\/install/i.test(text);
 }
 
+function registerPerfIpc() {
+  ipcMain.on('perf:log', (event, payload) => {
+    const safePayload = payload && typeof payload === 'object' ? payload : { message: String(payload || '') };
+    const type = String(safePayload.type || 'renderer-perf');
+    const nextPayload = { ...safePayload };
+    delete nextPayload.type;
+
+    getPerfLogger().log(type, {
+      processType: 'renderer',
+      page: getEventSenderPage(event) || nextPayload.page || '',
+      ...nextPayload,
+    });
+  });
+
+  ipcMain.handle('perf:get-log-info', () => {
+    return {
+      ...getPerfLogger().getInfo(),
+      exportShortcut: 'CmdOrCtrl+Shift+L',
+    };
+  });
+
+  ipcMain.handle('perf:export-logs', async () => {
+    try {
+      return await exportPerfLogs({ source: 'renderer-ipc' });
+    } catch (error) {
+      return {
+        ok: false,
+        reason: error && error.message ? error.message : String(error),
+      };
+    }
+  });
+}
+
 function registerLicenseIpc() {
   ipcMain.handle('license:get-status', () => {
     return licenseGuard ? licenseGuard.getStatus() : { authorized: false, reason: '授权未初始化' };
@@ -769,14 +1122,37 @@ function registerLicenseIpc() {
       };
     }
   });
-  ipcMain.handle('license:build-offline-request', () => {
+  ipcMain.handle('license:build-offline-request', async () => {
+    // 按需“等到拿到”：先异步彻底读取设备码（多硬件源 + 重试），避免慢机器复制出空设备码。
+    let fpSnapshot = null;
+    if (licenseGuard && typeof licenseGuard.ensureMachineFingerprintInfo === 'function') {
+      try {
+        await licenseGuard.ensureMachineFingerprintInfo();
+        fpSnapshot = licenseGuard.getMachineFingerprintSnapshot();
+      } catch (error) {
+        fpSnapshot = null;
+      }
+    }
     const status = licenseGuard ? (licenseGuard.getStatus() || {}) : {};
     const access = appAccessStatus || {};
     const plan = access.plan || {};
     const machineFingerprint = String(
-      status.machineFingerprint
+      (fpSnapshot && fpSnapshot.machineFingerprint)
+      || status.machineFingerprint
       || (access.license && access.license.machineFingerprint)
       || access.machineFingerprint
+      || ''
+    );
+    const machineFingerprintSource = String(
+      (fpSnapshot && fpSnapshot.machineFingerprintSource)
+      || status.machineFingerprintSource
+      || (access.license && access.license.machineFingerprintSource)
+      || ''
+    );
+    const machineFingerprintLabel = String(
+      (fpSnapshot && fpSnapshot.machineFingerprintLabel)
+      || status.machineFingerprintLabel
+      || (access.license && access.license.machineFingerprintLabel)
       || ''
     );
     const importPaths = licenseGuard && typeof licenseGuard.resolveLocalLicensePaths === 'function'
@@ -788,6 +1164,8 @@ function registerLicenseIpc() {
       version: app.getVersion(),
       generatedAt: new Date().toISOString(),
       machineFingerprint,
+      machineFingerprintSource,
+      machineFingerprintLabel,
       customerId: String(status.customerId || (access.license && access.license.customerId) || ''),
       tier: String(status.tier || plan.tier || 'plus'),
       tierName: String(status.tierName || plan.name || ''),
@@ -916,8 +1294,71 @@ function registerModuleRoutingIpc() {
     if (result.ok) {
       unlockedModuleId = result.moduleId;
       unlockedModuleSecret = String(result.secretKey || (payload && payload.password) || '');
+      getPerfLogger().log('main-auth-unlock-success', {
+        page: getEventSenderPage(_event),
+        moduleId: result.moduleId,
+        moduleName: result.moduleName,
+        passwordLength: String((payload && payload.password) || '').length,
+      });
+    } else {
+      getPerfLogger().log('main-auth-unlock-failure', {
+        page: getEventSenderPage(_event),
+        code: String(result.code || ''),
+        reason: String(result.reason || ''),
+        passwordLength: String((payload && payload.password) || '').length,
+      });
     }
     return result;
+  });
+
+  ipcMain.handle('module-auth:unlock-and-open', async (_event, payload) => {
+    const unlockResult = modulePasswordRouter.verifyPassword(payload && payload.password);
+    if (unlockResult.ok) {
+      unlockedModuleId = unlockResult.moduleId;
+      unlockedModuleSecret = String(unlockResult.secretKey || (payload && payload.password) || '');
+      getPerfLogger().log('main-auth-unlock-success', {
+        page: getEventSenderPage(_event),
+        moduleId: unlockResult.moduleId,
+        moduleName: unlockResult.moduleName,
+        passwordLength: String((payload && payload.password) || '').length,
+      });
+    } else {
+      getPerfLogger().log('main-auth-unlock-failure', {
+        page: getEventSenderPage(_event),
+        code: String(unlockResult.code || ''),
+        reason: String(unlockResult.reason || ''),
+        passwordLength: String((payload && payload.password) || '').length,
+      });
+      return unlockResult;
+    }
+
+    const targetModuleId = String(unlockResult.moduleId || '').trim();
+    if (!targetModuleId || targetModuleId === MODULE_IDS.AUTH) {
+      return {
+        ok: false,
+        phase: 'unlock',
+        reason: '口令未匹配到可进入的业务模块',
+      };
+    }
+
+    const routeResult = await loadModulePage(targetModuleId);
+    if (!routeResult || !routeResult.ok) {
+      return {
+        ok: false,
+        phase: 'route',
+        reason: routeResult && routeResult.reason
+          ? String(routeResult.reason)
+          : '业务页面跳转失败',
+        moduleId: targetModuleId,
+        moduleName: unlockResult && unlockResult.moduleName ? String(unlockResult.moduleName) : '',
+      };
+    }
+
+    return {
+      ok: true,
+      moduleId: targetModuleId,
+      moduleName: unlockResult && unlockResult.moduleName ? String(unlockResult.moduleName) : '',
+    };
   });
 
   ipcMain.handle('module-auth:update-password', (_event, payload) => {
@@ -990,6 +1431,8 @@ function setupAccessControl() {
   return true;
 }
 
+installIpcPerfInstrumentation();
+
 if (relaunchFromTempOnWindows()) {
   process.exit(0);
 }
@@ -997,6 +1440,11 @@ if (relaunchFromTempOnWindows()) {
 // 应用准备就绪
 app.whenReady().then(() => {
   try {
+    getPerfLogger().log('main-session-start', {
+      appVersion: app.getVersion(),
+      platform: process.platform,
+      arch: os.arch(),
+    });
     try {
       const loadResult = loadModulePasswordOverrides();
       if (loadResult.count > 0) {
@@ -1006,6 +1454,7 @@ app.whenReady().then(() => {
       console.error('Failed to load module password overrides:', error);
     }
 
+    registerPerfIpc();
     registerLicenseIpc();
     registerModuleRoutingIpc();
     if (!setupAccessControl()) {
@@ -1057,6 +1506,9 @@ app.on('before-quit', () => {
     licenseGuard.stopMonitoring();
   }
   stopClipboardMonitor();
+  if (perfLogger) {
+    perfLogger.flushSync();
+  }
 });
 
 // 监听应用退出
@@ -1066,12 +1518,24 @@ app.on('quit', () => {
 
 // 捕获未处理的异常
 process.on('uncaughtException', (error) => {
+  if (perfLogger) {
+    perfLogger.log('main-uncaught-exception', {
+      message: error && error.message ? error.message : String(error),
+      stack: error && error.stack ? error.stack : '',
+    });
+    perfLogger.flushSync();
+  }
   console.error('Uncaught Exception:', error);
   showErrorDialog('未处理的异常', error.message);
 });
 
 // 捕获未处理的Promise拒绝
 process.on('unhandledRejection', (reason, promise) => {
+  if (perfLogger) {
+    perfLogger.log('main-unhandled-rejection', {
+      reason,
+    });
+  }
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
   if (isSharpRuntimeLoadError(reason)) {
     console.warn('Sharp runtime load failed; OCR image enhancement will be degraded until dependency/runtime is fixed.');
@@ -1082,6 +1546,12 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // 监听IPC通信错误
 ipcMain.on('error', (event, error) => {
+  if (perfLogger) {
+    perfLogger.log('main-ipc-error', {
+      page: getEventSenderPage(event),
+      error,
+    });
+  }
   console.error('IPC Error:', error);
   showErrorDialog('通信错误', error.message);
 });
