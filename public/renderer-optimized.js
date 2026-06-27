@@ -804,37 +804,43 @@ document.addEventListener('DOMContentLoaded', function() {
             flushClipboardDupLedger({ force: true });
         }
     });
-    scheduleClipboardDupLedgerWarmup();
-    migrateRecognizeLayoutProfile();
-    initAppVersion();
-    initAppAccessStatus();
-    initLicenseStatus();
-    applySavedAttributeGroupOrder();
-    initializeApplication();
-    initMainLayoutResizers();
-    initCustomerSettingsDockResizer();
-    renderRecognizeRegionButtons();
-    renderViewRegionButtons();
-    initRegionPnlPanel();
-    setupRecognizeMessageInput();
-    initRecognizeInputModePreference();
-    initRecognizeIssueActions();
-    initRecognizeLayoutResizer();
-    initRecognizeAttributeDockResizer();
-    initRecognizeAttributePanelToggle();
-    initCustomerSettingsCenter();
-    initRecognizeSideGroups();
-    initClipboardAssistPreference();
-    renderAttributePicker();
-    initAttributePickerScrollAssist();
-    renderCustomAttributeList();
-    initAnchorRuleControls();
-    initAnchorAliasFilterControls();
-    initAnchorStrategyGuide();
-    initLegalNotice();
-    initHedgeReportControls();
-    hookUserManagerSaveState();
-    refreshDashboardStatus();
+    // 诊断计时(6.1.8)：逐个 init 函数计时，dt 大的那个就是首屏卡顿元凶。__m 不改变调用语义。
+    const __m = function (name, fn) {
+        try { return fn(); } finally { try { window.__perfMark && window.__perfMark('init:' + name); } catch (e) {} }
+    };
+    window.__perfMark && window.__perfMark('init:dcl-start');
+    __m('scheduleClipboardDupLedgerWarmup', scheduleClipboardDupLedgerWarmup);
+    __m('migrateRecognizeLayoutProfile', migrateRecognizeLayoutProfile);
+    __m('initAppVersion', initAppVersion);
+    __m('initAppAccessStatus', initAppAccessStatus);
+    __m('initLicenseStatus', initLicenseStatus);
+    __m('applySavedAttributeGroupOrder', applySavedAttributeGroupOrder);
+    __m('initializeApplication', initializeApplication);
+    __m('initMainLayoutResizers', initMainLayoutResizers);
+    __m('initCustomerSettingsDockResizer', initCustomerSettingsDockResizer);
+    __m('renderRecognizeRegionButtons', renderRecognizeRegionButtons);
+    __m('renderViewRegionButtons', renderViewRegionButtons);
+    __m('initRegionPnlPanel', initRegionPnlPanel);
+    __m('setupRecognizeMessageInput', setupRecognizeMessageInput);
+    __m('initRecognizeInputModePreference', initRecognizeInputModePreference);
+    __m('initRecognizeIssueActions', initRecognizeIssueActions);
+    __m('initRecognizeLayoutResizer', initRecognizeLayoutResizer);
+    __m('initRecognizeAttributeDockResizer', initRecognizeAttributeDockResizer);
+    __m('initRecognizeAttributePanelToggle', initRecognizeAttributePanelToggle);
+    __m('initCustomerSettingsCenter', initCustomerSettingsCenter);
+    __m('initRecognizeSideGroups', initRecognizeSideGroups);
+    __m('initClipboardAssistPreference', initClipboardAssistPreference);
+    __m('renderAttributePicker', renderAttributePicker);
+    __m('initAttributePickerScrollAssist', initAttributePickerScrollAssist);
+    __m('renderCustomAttributeList', renderCustomAttributeList);
+    __m('initAnchorRuleControls', initAnchorRuleControls);
+    __m('initAnchorAliasFilterControls', initAnchorAliasFilterControls);
+    __m('initAnchorStrategyGuide', initAnchorStrategyGuide);
+    __m('initLegalNotice', initLegalNotice);
+    __m('initHedgeReportControls', initHedgeReportControls);
+    __m('hookUserManagerSaveState', hookUserManagerSaveState);
+    __m('refreshDashboardStatus', refreshDashboardStatus);
+    window.__perfMark && window.__perfMark('init:dcl-end');
 
     let resizeTimer = null;
     window.addEventListener('resize', () => {

@@ -20,6 +20,13 @@ const {
 const { PerfLogger } = require('./src/services/PerfLogger');
 const { initAutoUpdater } = require('./src/updater/autoUpdater');
 
+// 关闭硬件加速：老 Windows / 集成显卡 / 远程桌面(向日葵/RDP)下 GPU 合成常导致整窗黑屏，
+// 关掉后走软件渲染更稳，并为低内存机器省下一个 GPU 进程。必须在 app ready 之前调用。
+// 排查需要时可用环境变量 MC_ENABLE_GPU=1 临时恢复硬件加速。
+if (process.env.MC_ENABLE_GPU !== '1') {
+  app.disableHardwareAcceleration();
+}
+
 let win;
 let mainController;
 let licenseGuard;
@@ -733,6 +740,8 @@ function createWindow() {
     // 添加窗口最小尺寸
     minWidth: adaptiveBounds.minWidth,
     minHeight: adaptiveBounds.minHeight,
+    // 未绘制时给白底，避免慢机/弱显卡上首屏黑屏看起来像崩溃
+    backgroundColor: '#ffffff',
     // 添加窗口显示状态
     show: false
   });

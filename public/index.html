@@ -4,7 +4,35 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>金瓶梅统计</title>
+    <script>
+      /* 诊断计时(6.1.8)：把 index.html 导航->load 的各阶段耗时写入 perf 日志，
+         用于定位慢机器上首屏加载真正的耗时段。每个 mark 的 dt = 上一 mark 到本 mark 的毫秒数。*/
+      (function () {
+        try {
+          window.__perfLast = null;
+          window.__perfT0 = performance.now();
+          window.__perfMark = function (name) {
+            try {
+              var now = performance.now();
+              var dt = window.__perfLast == null ? 0 : (now - window.__perfLast);
+              window.__perfLast = now;
+              if (window.electronAPI && typeof window.electronAPI.send === 'function') {
+                window.electronAPI.send('perf:log', {
+                  type: 'idxmark:' + name,
+                  dt: Math.round(dt),
+                  sinceT0: Math.round(now - window.__perfT0)
+                });
+              }
+            } catch (e) {}
+          };
+          window.__perfMark('head-before-css');
+          document.addEventListener('DOMContentLoaded', function () { window.__perfMark('event-DOMContentLoaded'); });
+          window.addEventListener('load', function () { window.__perfMark('event-window-load'); });
+        } catch (e) {}
+      })();
+    </script>
     <link rel="stylesheet" href="styles.css">
+    <script>window.__perfMark && window.__perfMark('head-after-css');</script>
 </head>
 <body>
     <div class="top-menu">
@@ -1256,9 +1284,14 @@
         <div id="display"></div>
     </div>
 
+    <script>window.__perfMark && window.__perfMark('scripts-start');</script>
     <script src="./trialManager.js"></script>
+    <script>window.__perfMark && window.__perfMark('after-trialManager');</script>
     <script src="./userManager.js"></script>
+    <script>window.__perfMark && window.__perfMark('after-userManager');</script>
     <script src="./messageProcessor.js"></script>
+    <script>window.__perfMark && window.__perfMark('after-messageProcessor');</script>
     <script src="./renderer-optimized.js"></script>
+    <script>window.__perfMark && window.__perfMark('after-renderer-optimized');</script>
 </body>
 </html>
