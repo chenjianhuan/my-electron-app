@@ -173,8 +173,27 @@ class LicenseGuard {
       this.refreshMachineFingerprintInfo();
       this.ensureMachineFingerprintInfo().catch(() => {});
     }
-    const candidates = this.buildLicenseCandidates();
-    let bestReason = '未检测到授权文件（U盘或离线）';
+    // 先查离线/本地授权（读本地 license.dat，不需要扫 U盘、不开 powershell）。
+    const local = this.evaluateLicenseCandidates(this.buildLocalLicenseCandidates());
+    if (local.authorized) {
+      return local.authorized;
+    }
+    // 仅当没有有效离线授权时，才扫 U盘（缓存+异步）。纯离线授权的客户走不到这里，
+    // 因此根本不会派生 powershell —— 这是“已授权后一直卡”的根治。
+    const usb = this.evaluateLicenseCandidates(this.buildUsbLicenseCandidates());
+    if (usb.authorized) {
+      return usb.authorized;
+    }
+
+    if (!local.foundLicenseFile && !usb.foundLicenseFile) {
+      return this.unauthorizedStatus('未检测到授权文件（U盘或离线）');
+    }
+    return this.unauthorizedStatus(local.bestReason || usb.bestReason || '未检测到有效授权');
+  }
+
+  // 逐个候选评估：返回首个“已授权”状态，或带回最后一次失败原因。判定逻辑与原先一致。
+  evaluateLicenseCandidates(candidates) {
+    let bestReason = '';
     let foundLicenseFile = false;
     for (const candidate of candidates) {
       if (!candidate || !candidate.licensePath) continue;
@@ -186,25 +205,14 @@ class LicenseGuard {
         const verified = this.verifyLicenseFile(fileContent);
         const status = this.evaluatePayload(verified.payload, candidate);
         if (status.authorized) {
-          return status;
+          return { authorized: status, foundLicenseFile, bestReason };
         }
         bestReason = status.reason || bestReason;
       } catch (error) {
         bestReason = `授权文件无效: ${error.message}`;
       }
     }
-
-    if (!foundLicenseFile) {
-      return this.unauthorizedStatus('未检测到授权文件（U盘或离线）');
-    }
-    return this.unauthorizedStatus(bestReason);
-  }
-
-  buildLicenseCandidates() {
-    return [
-      ...this.buildUsbLicenseCandidates(),
-      ...this.buildLocalLicenseCandidates(),
-    ];
+    return { authorized: null, foundLicenseFile, bestReason };
   }
 
   buildUsbLicenseCandidates() {
@@ -481,11 +489,13 @@ class LicenseGuard {
     if (this.cachedRemovableDrives === null) {
       try {
         this.cachedRemovableDrives = this.listWindowsRemovableDrives();
+        this.lastRemovableDrivesScanAt = Date.now();
       } catch (error) {
+        // 扫描失败时不要把缓存写成空（那会让后续只读到“无U盘”，且一次刷新救不回来）；
+        // 保持 null，下次 checkAuthorization 会重新同步扫一次。
         this.lastUsbScanError = error && error.message ? error.message : String(error);
-        this.cachedRemovableDrives = [];
+        return [];
       }
-      this.lastRemovableDrivesScanAt = Date.now();
     } else {
       this.scheduleWindowsRemovableDrivesRefresh();
     }
