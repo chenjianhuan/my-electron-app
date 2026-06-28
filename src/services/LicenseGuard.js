@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFileSync, execFile } = require('child_process');
 const { getMachineFingerprintInfo, getMachineFingerprintInfoAsync, matchMachineFingerprint } = require('./MachineFingerprint');
 const { normalizeTier, normalizeBillingCycle, getPlanDefinition } = require('./PlanCatalog');
 
@@ -11,8 +11,14 @@ const LOCAL_LICENSE_FILE_NAME = '.messagecounter-license.dat';
 const DEFAULT_GRACE_DAYS = 3;
 const ROLLBACK_TOLERANCE_MS = 5 * 60 * 1000;
 const POLL_INTERVAL_MS = 3000;
+const REMOVABLE_DRIVES_REFRESH_MS = 15000;
+const REMOVABLE_DRIVES_SCAN_TIMEOUT_MS = 4000;
 const LICENSE_SOURCE_USB = 'usb';
 const LICENSE_SOURCE_OFFLINE = 'offline';
+const WINDOWS_REMOVABLE_DRIVES_PS = [
+  '$drives = Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DriveType -eq 2 }',
+  '$drives | Select-Object DeviceID,VolumeName,VolumeSerialNumber,Size | ConvertTo-Json -Compress',
+].join('; ');
 
 class LicenseGuard {
   constructor(options) {
@@ -26,6 +32,11 @@ class LicenseGuard {
     this.timer = null;
     this.lastStatus = null;
     this.lastUsbScanError = '';
+    // Windows U盘扫描缓存：首次同步扫一次，之后 3 秒授权轮询只读缓存 + 后台异步刷新，
+    // 杜绝每次轮询同步 spawn powershell 卡住主线程(表现为每隔几秒“无响应”)。
+    this.cachedRemovableDrives = null;
+    this.removableDrivesRefreshInFlight = false;
+    this.lastRemovableDrivesScanAt = 0;
     this.lastTrustedTimePath = path.join(this.app.getPath('userData'), 'license-clock.json');
     // 后台预热：异步把所有硬件来源读一遍，升级到更稳的设备码候选集，不阻塞启动。
     this.ensureMachineFingerprintInfo().catch(() => {});
@@ -199,7 +210,7 @@ class LicenseGuard {
   buildUsbLicenseCandidates() {
     let drives = [];
     try {
-      drives = this.listRemovableDrives();
+      drives = this.getRemovableDrivesCached();
       this.lastUsbScanError = '';
     } catch (error) {
       this.lastUsbScanError = error && error.message ? error.message : String(error);
@@ -460,17 +471,78 @@ class LicenseGuard {
     return this.listLinuxRemovableDrives();
   }
 
+  // Windows：首次同步扫一次（保证开机即可识别 U盘授权），之后只读缓存 + 后台异步刷新（限频），
+  // 绝不在 3 秒授权轮询里同步 spawn powershell（那会让主线程每隔几秒卡住报“无响应”）。
+  // 非 Windows 平台扫描很轻，保持原同步行为不变。
+  getRemovableDrivesCached() {
+    if (process.platform !== 'win32') {
+      return this.listRemovableDrives();
+    }
+    if (this.cachedRemovableDrives === null) {
+      try {
+        this.cachedRemovableDrives = this.listWindowsRemovableDrives();
+      } catch (error) {
+        this.lastUsbScanError = error && error.message ? error.message : String(error);
+        this.cachedRemovableDrives = [];
+      }
+      this.lastRemovableDrivesScanAt = Date.now();
+    } else {
+      this.scheduleWindowsRemovableDrivesRefresh();
+    }
+    return this.cachedRemovableDrives || [];
+  }
+
+  scheduleWindowsRemovableDrivesRefresh() {
+    if (this.removableDrivesRefreshInFlight) return;
+    const now = Date.now();
+    if (this.lastRemovableDrivesScanAt && (now - this.lastRemovableDrivesScanAt) < REMOVABLE_DRIVES_REFRESH_MS) {
+      return;
+    }
+    this.removableDrivesRefreshInFlight = true;
+    this.lastRemovableDrivesScanAt = now;
+    this.listWindowsRemovableDrivesAsync()
+      .then((drives) => {
+        this.cachedRemovableDrives = Array.isArray(drives) ? drives : [];
+        this.lastUsbScanError = '';
+      })
+      .catch((error) => {
+        this.lastUsbScanError = error && error.message ? error.message : String(error);
+      })
+      .finally(() => {
+        this.removableDrivesRefreshInFlight = false;
+      });
+  }
+
+  listWindowsRemovableDrivesAsync() {
+    return new Promise((resolve, reject) => {
+      execFile(
+        'powershell',
+        ['-NoProfile', '-Command', WINDOWS_REMOVABLE_DRIVES_PS],
+        { encoding: 'utf8', timeout: REMOVABLE_DRIVES_SCAN_TIMEOUT_MS },
+        (error, stdout) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          try {
+            resolve(this.parseWindowsRemovableDrives(String(stdout || '').trim()));
+          } catch (parseError) {
+            reject(parseError);
+          }
+        }
+      );
+    });
+  }
+
   listWindowsRemovableDrives() {
-    const ps = [
-      '$drives = Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DriveType -eq 2 }',
-      '$drives | Select-Object DeviceID,VolumeName,VolumeSerialNumber,Size | ConvertTo-Json -Compress',
-    ].join('; ');
-
-    const output = execFileSync('powershell', ['-NoProfile', '-Command', ps], {
+    const output = execFileSync('powershell', ['-NoProfile', '-Command', WINDOWS_REMOVABLE_DRIVES_PS], {
       encoding: 'utf8',
-      timeout: 4000,
+      timeout: REMOVABLE_DRIVES_SCAN_TIMEOUT_MS,
     }).trim();
+    return this.parseWindowsRemovableDrives(output);
+  }
 
+  parseWindowsRemovableDrives(output) {
     if (!output) return [];
     const parsed = JSON.parse(output);
     const rows = Array.isArray(parsed) ? parsed : [parsed];
